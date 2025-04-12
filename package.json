@@ -1,0 +1,25 @@
+{
+  "name": "wavestack",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Cloud-native music streaming platform scaffold.",
+  "scripts": {
+    "dev:frontend": "npm --prefix apps/frontend run dev",
+    "dev:api": "npm --prefix services/graphql-api run start:dev",
+    "test:frontend": "npm --prefix apps/frontend run test",
+    "test:api": "npm --prefix services/graphql-api run test",
+    "test:python": "pytest services/audio-ai-service/tests",
+    "test:dotnet": "dotnet test services/analytics-service/AnalyticsService.Tests/AnalyticsService.Tests.csproj",
+    "test:integration": "node tests/integration/smoke-test.mjs",
+    "coverage:frontend": "npm --prefix apps/frontend run coverage",
+    "coverage:api": "npm --prefix services/graphql-api run test:cov",
+    "coverage:python": "pytest --cov=services/audio-ai-service/app services/audio-ai-service/tests",
+    "coverage:dotnet": "dotnet test services/analytics-service/AnalyticsService.Tests/AnalyticsService.Tests.csproj --collect:\"XPlat Code Coverage\"",
+    "coverage:dashboard": "npm --prefix coverage-dashboard run render"
+  },
+  "workspaces": [
+    "apps/frontend",
+    "services/graphql-api",
+    "coverage-dashboard"
+  ]
+}
