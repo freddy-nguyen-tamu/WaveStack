@@ -1,0 +1,91 @@
+{
+  "vhosts": [
+    {
+      "name": "/"
+    }
+  ],
+  "exchanges": [
+    {
+      "name": "wavestack.audio",
+      "vhost": "/",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "wavestack.notifications",
+      "vhost": "/",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    }
+  ],
+  "queues": [
+    {
+      "name": "audio-processing",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "audio-processed",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "recommendation-updates",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "playlist-share-notifications",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    }
+  ],
+  "bindings": [
+    {
+      "source": "wavestack.audio",
+      "vhost": "/",
+      "destination": "audio-processing",
+      "destination_type": "queue",
+      "routing_key": "audio.uploaded",
+      "arguments": {}
+    },
+    {
+      "source": "wavestack.audio",
+      "vhost": "/",
+      "destination": "audio-processed",
+      "destination_type": "queue",
+      "routing_key": "audio.processed",
+      "arguments": {}
+    },
+    {
+      "source": "wavestack.audio",
+      "vhost": "/",
+      "destination": "recommendation-updates",
+      "destination_type": "queue",
+      "routing_key": "recommendations.update",
+      "arguments": {}
+    },
+    {
+      "source": "wavestack.notifications",
+      "vhost": "/",
+      "destination": "playlist-share-notifications",
+      "destination_type": "queue",
+      "routing_key": "playlist.shared",
+      "arguments": {}
+    }
+  ]
+}
