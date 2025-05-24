@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: graphql-api
+  namespace: wavestack
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: graphql-api
+  template:
+    metadata:
+      labels:
+        app: graphql-api
+    spec:
+      containers:
+        - name: graphql-api
+          image: wavestack.azurecr.io/graphql-api:latest
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: wavestack-config
+            - secretRef:
+                name: wavestack-secrets
+          readinessProbe:
+            httpGet:
+              path: /graphql
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: graphql-api
+  namespace: wavestack
+spec:
+  ports:
+    - port: 3000
+      targetPort: 3000
+  selector:
+    app: graphql-api

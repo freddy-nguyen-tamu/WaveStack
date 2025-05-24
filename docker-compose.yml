@@ -1,0 +1,92 @@
+services:
+  frontend:
+    build:
+      context: ./apps/frontend
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_GRAPHQL_URL: http://localhost:3000/graphql
+    depends_on:
+      - graphql-api
+
+  graphql-api:
+    build:
+      context: ./services/graphql-api
+    ports:
+      - "3000:3000"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: wavestack
+      POSTGRES_USER: wavestack
+      POSTGRES_PASSWORD: wavestack_dev_password
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: wavestack_graph_password
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      AUDIO_SERVICE_URL: http://audio-ai-service:8000
+      ANALYTICS_SERVICE_URL: http://analytics-service:8080
+      SIGNED_URL_SECRET: local-dev-secret
+    depends_on:
+      - postgres
+      - neo4j
+      - rabbitmq
+      - audio-ai-service
+      - analytics-service
+
+  audio-ai-service:
+    build:
+      context: ./services/audio-ai-service
+    ports:
+      - "8000:8000"
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+    depends_on:
+      - rabbitmq
+
+  analytics-service:
+    build:
+      context: ./services/analytics-service
+    ports:
+      - "8080:8080"
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: wavestack
+      POSTGRES_USER: wavestack
+      POSTGRES_PASSWORD: wavestack_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/migrations:/docker-entrypoint-initdb.d:ro
+
+  neo4j:
+    image: neo4j:5
+    environment:
+      NEO4J_AUTH: neo4j/wavestack_graph_password
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j-data:/data
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - ./infra/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+      - ./infra/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    ports:
+      - "10000:10000"
+    command: "azurite-blob --blobHost 0.0.0.0"
+
+volumes:
+  postgres-data:
+  neo4j-data:
