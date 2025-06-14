@@ -1,0 +1,9 @@
+{
+  "name": "@wavestack/coverage-dashboard",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "render": "node render-dashboard.mjs"
+  }
+}

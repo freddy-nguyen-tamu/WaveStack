@@ -1,0 +1,22 @@
+[
+  {
+    "name": "React frontend",
+    "tool": "Vitest",
+    "path": "../apps/frontend/coverage/coverage-summary.json"
+  },
+  {
+    "name": "NestJS GraphQL API",
+    "tool": "Jest",
+    "path": "../services/graphql-api/coverage/coverage-summary.json"
+  },
+  {
+    "name": "Python audio AI service",
+    "tool": "Pytest",
+    "path": "../services/audio-ai-service/coverage.json"
+  },
+  {
+    "name": ".NET analytics service",
+    "tool": "xUnit",
+    "path": "../services/analytics-service/TestResults/coverage.cobertura.xml"
+  }
+]

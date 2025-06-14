@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WaveStack Coverage Dashboard</title>
+  </head>
+  <body>
+    <main>
+      <h1>WaveStack Coverage Dashboard</h1>
+      <p>Run service coverage commands, then run npm --prefix coverage-dashboard run render.</p>
+      <section aria-label="Coverage reports">
+        <table>
+          <thead>
+            <tr>
+              <th>Service</th>
+              <th>Tool</th>
+              <th>Status</th>
+              <th>Report</th>
+            </tr>
+          </thead>
+          <tbody id="coverage-report-rows">
+            <tr>
+              <td>React frontend</td>
+              <td>Vitest</td>
+              <td>Pending</td>
+              <td>apps/frontend/coverage</td>
+            </tr>
+            <tr>
+              <td>NestJS GraphQL API</td>
+              <td>Jest</td>
+              <td>Pending</td>
+              <td>services/graphql-api/coverage</td>
+            </tr>
+            <tr>
+              <td>Python audio AI service</td>
+              <td>Pytest</td>
+              <td>Pending</td>
+              <td>services/audio-ai-service</td>
+            </tr>
+            <tr>
+              <td>.NET analytics service</td>
+              <td>xUnit</td>
+              <td>Pending</td>
+              <td>services/analytics-service/TestResults</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </body>
+</html>
