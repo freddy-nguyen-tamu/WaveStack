@@ -13,6 +13,9 @@ param postgresAdminUser string = 'wavestackadmin'
 @description('PostgreSQL administrator password.')
 param postgresAdminPassword string
 
+@description('Deploy the optional Linux VM used for infrastructure experiments.')
+param deployVm bool = false
+
 @description('Linux VM administrator username.')
 param vmAdminUser string = 'azureuser'
 
@@ -115,8 +118,8 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-02-01' = {
     agentPoolProfiles: [
       {
         name: 'systempool'
-        count: 2
-        vmSize: 'Standard_B2s'
+        count: 1
+        vmSize: 'Standard_D2ads_v6'
         mode: 'System'
       }
     ]
@@ -127,7 +130,7 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-02-01' = {
   }
 }
 
-resource vnet 'Microsoft.Network/virtualNetworks@2023-09-01' = {
+resource vnet 'Microsoft.Network/virtualNetworks@2023-09-01' = if (deployVm) {
   name: vnetName
   location: location
   properties: {
@@ -147,7 +150,7 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-09-01' = {
   }
 }
 
-resource publicIp 'Microsoft.Network/publicIPAddresses@2023-09-01' = {
+resource publicIp 'Microsoft.Network/publicIPAddresses@2023-09-01' = if (deployVm) {
   name: '${vmName}-pip'
   location: location
   sku: {
@@ -158,7 +161,7 @@ resource publicIp 'Microsoft.Network/publicIPAddresses@2023-09-01' = {
   }
 }
 
-resource networkInterface 'Microsoft.Network/networkInterfaces@2023-09-01' = {
+resource networkInterface 'Microsoft.Network/networkInterfaces@2023-09-01' = if (deployVm) {
   name: '${vmName}-nic'
   location: location
   properties: {
@@ -179,7 +182,7 @@ resource networkInterface 'Microsoft.Network/networkInterfaces@2023-09-01' = {
   }
 }
 
-resource vm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
+resource vm 'Microsoft.Compute/virtualMachines@2023-09-01' = if (deployVm) {
   name: vmName
   location: location
   properties: {
@@ -227,4 +230,4 @@ output aksClusterName string = aks.name
 output postgresServerName string = postgres.name
 output storageAccountName string = storage.name
 output keyVaultName string = keyVault.name
-output virtualMachineName string = vm.name
+output virtualMachineName string = deployVm ? vm.name : 'not-deployed'

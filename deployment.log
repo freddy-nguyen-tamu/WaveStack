@@ -1,0 +1,867 @@
+<!-- test locally: -->
+cat > apps/frontend/src/vite-env.d.ts <<'EOF'
+/// <reference types="vite/client" />
+EOF
+
+docker compose build frontend --no-cache
+docker compose up
+
+cp .env.example .env
+docker compose up --build
+docker compose ps
+<!-- you should find:
+      Frontend:          http://localhost:5173
+      GraphQL API:       http://localhost:3000/graphql
+      Audio AI service:  http://localhost:8000/health
+      Analytics service: http://localhost:8080/health
+      RabbitMQ UI:       http://localhost:15672
+      Neo4j UI:          http://localhost:7474 -->
+
+<!-- deploy it: -->
+linux: curl -fsSL 'https://azurecliprod.blob.core.windows.net/$root/deb_install.sh' | sudo bash
+az login
+az account show
+ssh-keygen -t ed25519 -f ~/.ssh/wavestack_azure -C "wavestack-azure-vm"
+export VM_SSH_KEY="$(cat ~/.ssh/wavestack_azure.pub)"
+echo -e "\n# Azure WaveStack environment variables\nexport RG=\"rg-wavestack-dev\"\nexport LOCATION=\"eastus\"\nexport ENV_NAME=\"dev\"\nexport POSTGRES_PASSWORD=\"ChangeThisToARealStrongPassword123!\"\nexport VM_SSH_KEY=\"\$(cat ~/.ssh/wavestack_azure.pub)\"" >> ~/.bashrc
+echo $VM_SSH_KEY   # Should display your public key
+echo $RG           # Should show "rg-wavestack-dev"
+
+sed -i '/export POSTGRES_PASSWORD=/d' ~/.bashrc
+source ~/.bashrc
+read -rsp "Enter a new strong Postgres password: " POSTGRES_PASSWORD
+echo
+export POSTGRES_PASSWORD
+
+az account show --query "{name:name,id:id,tenantId:tenantId}" -o table
+
+for LOC in southcentralus centralus westus2 westus3 eastus2 westus northcentralus; do
+  echo "Testing $LOC..."
+  az deployment group validate \
+    --resource-group "$RG" \
+    --template-file infra/azure/bicep/main.bicep \
+    --parameters \
+      location="$LOC" \
+      environmentName="$ENV_NAME" \
+      postgresAdminPassword="$POSTGRES_PASSWORD" \
+      vmSshPublicKey="$VM_SSH_KEY" \
+    --query "error.message" -o tsv
+done
+
+az group create \
+  --name "$RG" \
+  --location "$LOCATION"
+
+  az deployment group create \
+  --resource-group "$RG" \
+  --template-file infra/azure/bicep/main.bicep \
+  --parameters \
+    environmentName="$ENV_NAME" \
+    postgresAdminPassword="$POSTGRES_PASSWORD" \
+    vmSshPublicKey="$VM_SSH_KEY"
+
+export LOCATION="INSERT-NO-ERROR-REGION"
+
+az group create \
+  --name "$RG" \
+  --location "$LOCATION"
+
+az deployment group create \
+  --resource-group "$RG" \
+  --template-file infra/azure/bicep/main.bicep \
+  --parameters \
+    location="$LOCATION" \
+    environmentName="$ENV_NAME" \
+    postgresAdminPassword="$POSTGRES_PASSWORD" \
+    vmSshPublicKey="$VM_SSH_KEY" \
+    deployVm=false
+
+az group delete \
+  --name "$RG" \
+  --yes \
+  --no-wait
+
+while az group show --name "$RG" >/dev/null 2>&1; do
+  echo "Waiting for $RG to finish deleting..."
+  sleep 20
+done
+
+export LOCATION="INSERT-NO-ERROR-REGION"
+
+az group create \
+  --name "$RG" \
+  --location "$LOCATION"
+
+az deployment group create \
+  --resource-group "$RG" \
+  --template-file infra/azure/bicep/main.bicep \
+  --parameters \
+    location="$LOCATION" \
+    environmentName="$ENV_NAME" \
+    postgresAdminPassword="$POSTGRES_PASSWORD" \
+    vmSshPublicKey="$VM_SSH_KEY" \
+    deployVm=false
+
+export RG="rg-wavestack-dev" \
+LOCATION="southcentralus" \
+VM_NAME="wavestack-dev-vm" \
+ADMIN_USER="azureuser" \
+VM_SIZE="Standard_B2ps_v2" && \
+test -f ~/.ssh/wavestack_azure.pub || ssh-keygen -t ed25519 -f ~/.ssh/wavestack_azure -C "wavestack-azure-vm" -N "" && \
+export VM_SSH_KEY="$(cat ~/.ssh/wavestack_azure.pub)" && \
+az group delete --name "$RG" --yes --no-wait || true && \
+while az group show --name "$RG" >/dev/null 2>&1; do echo "Waiting for old resource group to delete..."; sleep 20; done && \
+az group create --name "$RG" --location "$LOCATION" && \
+az vm create \
+  --resource-group "$RG" \
+  --name "$VM_NAME" \
+  --location "$LOCATION" \
+  --image Ubuntu2204 \
+  --size "$VM_SIZE" \
+  --admin-username "$ADMIN_USER" \
+  --ssh-key-values "$VM_SSH_KEY" \
+  --public-ip-sku Standard && \
+az vm open-port --resource-group "$RG" --name "$VM_NAME" --port 22 --priority 1000 && \
+az vm open-port --resource-group "$RG" --name "$VM_NAME" --port 5173 --priority 1010 && \
+az vm open-port --resource-group "$RG" --name "$VM_NAME" --port 3000 --priority 1020 && \
+az vm open-port --resource-group "$RG" --name "$VM_NAME" --port 8000 --priority 1030 && \
+az vm open-port --resource-group "$RG" --name "$VM_NAME" --port 8080 --priority 1040 && \
+export VM_IP="$(az vm show --resource-group "$RG" --name "$VM_NAME" --show-details --query publicIps -o tsv)" && \
+echo "VM IP: $VM_IP" && \
+until ssh -o StrictHostKeyChecking=no -i ~/.ssh/wavestack_azure "$ADMIN_USER@$VM_IP" "echo SSH ready"; do echo "Waiting for SSH..."; sleep 15; done && \
+ssh -i ~/.ssh/wavestack_azure "$ADMIN_USER@$VM_IP" 'set -e
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git rsync
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/docker.asc >/dev/null
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo usermod -aG docker "$USER"
+' && \
+rsync -az --delete \
+  --exclude ".git" \
+  --exclude "node_modules" \
+  --exclude "dist" \
+  --exclude "build" \
+  --exclude "coverage" \
+  --exclude ".env" \
+  -e "ssh -i ~/.ssh/wavestack_azure" \
+  ./ "$ADMIN_USER@$VM_IP:/home/$ADMIN_USER/WaveStack/" && \
+ssh -i ~/.ssh/wavestack_azure "$ADMIN_USER@$VM_IP" "set -e
+cd ~/WaveStack
+cat > apps/frontend/src/vite-env.d.ts <<'EOF'
+/// <reference types=\"vite/client\" />
+EOF
+cp .env.example .env
+python3 - <<'PY'
+from pathlib import Path
+p = Path('docker-compose.yml')
+s = p.read_text()
+s = s.replace('VITE_GRAPHQL_URL: http://localhost:3000/graphql', 'VITE_GRAPHQL_URL: http://${VM_PUBLIC_IP:-localhost}:3000/graphql')
+p.write_text(s)
+PY
+export VM_PUBLIC_IP='$VM_IP'
+sudo docker compose down || true
+sudo VM_PUBLIC_IP='$VM_IP' docker compose up --build -d
+sudo docker compose ps
+" && \
+echo "" && \
+echo "WaveStack deployed:" && \
+echo "Frontend:          http://$VM_IP:5173" && \
+echo "GraphQL API:       http://$VM_IP:3000/graphql" && \
+echo "Audio AI service:  http://$VM_IP:8000/health" && \
+echo "Analytics service: http://$VM_IP:8080/health"
+
+export RG="rg-wavestack-dev" \
+LOCATION="southcentralus" \
+VM_NAME="wavestack-dev-vm" \
+ADMIN_USER="azureuser" \
+VM_SIZE="Standard_D2s_v6" && \
+export VM_SSH_KEY="$(cat ~/.ssh/wavestack_azure.pub)" && \
+az vm delete --resource-group "$RG" --name "$VM_NAME" --yes || true && \
+az vm create \
+  --resource-group "$RG" \
+  --name "$VM_NAME" \
+  --location "$LOCATION" \
+  --image Ubuntu2204 \
+  --size "$VM_SIZE" \
+  --admin-username "$ADMIN_USER" \
+  --ssh-key-values "$VM_SSH_KEY" \
+  --public-ip-sku Standard && \
+az vm open-port --resource-group "$RG" --name "$VM_NAME" --port 22 --priority 1000 && \
+az vm open-port --resource-group "$RG" --name "$VM_NAME" --port 5173 --priority 1010 && \
+az vm open-port --resource-group "$RG" --name "$VM_NAME" --port 3000 --priority 1020 && \
+az vm open-port --resource-group "$RG" --name "$VM_NAME" --port 8000 --priority 1030 && \
+az vm open-port --resource-group "$RG" --name "$VM_NAME" --port 8080 --priority 1040 && \
+export VM_IP="$(az vm show --resource-group "$RG" --name "$VM_NAME" --show-details --query publicIps -o tsv)" && \
+echo "VM IP: $VM_IP" && \
+until ssh -o StrictHostKeyChecking=no -i ~/.ssh/wavestack_azure "$ADMIN_USER@$VM_IP" "echo SSH ready"; do echo "Waiting for SSH..."; sleep 15; done && \
+ssh -i ~/.ssh/wavestack_azure "$ADMIN_USER@$VM_IP" 'set -e
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git rsync
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/docker.asc >/dev/null
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+' && \
+rsync -az --delete \
+  --exclude ".git" \
+  --exclude "node_modules" \
+  --exclude "dist" \
+  --exclude "build" \
+  --exclude "coverage" \
+  --exclude ".env" \
+  -e "ssh -i ~/.ssh/wavestack_azure" \
+  ./ "$ADMIN_USER@$VM_IP:/home/$ADMIN_USER/WaveStack/" && \
+ssh -i ~/.ssh/wavestack_azure "$ADMIN_USER@$VM_IP" "set -e
+cd ~/WaveStack
+cat > apps/frontend/src/vite-env.d.ts <<'EOF'
+/// <reference types=\"vite/client\" />
+EOF
+cp .env.example .env
+python3 - <<'PY'
+from pathlib import Path
+p = Path('docker-compose.yml')
+s = p.read_text()
+s = s.replace('VITE_GRAPHQL_URL: http://localhost:3000/graphql', 'VITE_GRAPHQL_URL: http://${VM_PUBLIC_IP:-localhost}:3000/graphql')
+p.write_text(s)
+PY
+sudo docker compose down || true
+sudo VM_PUBLIC_IP='$VM_IP' docker compose up --build -d
+sudo docker compose ps
+" && \
+echo "" && \
+echo "WaveStack deployed:" && \
+echo "Frontend:          http://$VM_IP:5173" && \
+echo "GraphQL API:       http://$VM_IP:3000/graphql" && \
+echo "Audio AI service:  http://$VM_IP:8000/health" && \
+echo "Analytics service: http://$VM_IP:8080/health"
+
+export RG="rg-wavestack-dev" \
+LOCATION="southcentralus" \
+VM_NAME="wavestack-dev-vm" \
+ADMIN_USER="azureuser" \
+VM_SIZE="Standard_B2ps_v2" && \
+export VM_SSH_KEY="$(cat ~/.ssh/wavestack_azure.pub)" && \
+export ARM_IMAGE="$(az vm image list \
+  --location "$LOCATION" \
+  --publisher Canonical \
+  --offer 0001-com-ubuntu-server-jammy \
+  --architecture Arm64 \
+  --all \
+  --query "[?contains(sku, '22_04') && contains(sku, 'arm64')]|[-1].urn" \
+  -o tsv)" && \
+echo "Using ARM image: $ARM_IMAGE" && \
+az vm delete --resource-group "$RG" --name "$VM_NAME" --yes || true && \
+az vm create \
+  --resource-group "$RG" \
+  --name "$VM_NAME" \
+  --location "$LOCATION" \
+  --image "$ARM_IMAGE" \
+  --size "$VM_SIZE" \
+  --admin-username "$ADMIN_USER" \
+  --ssh-key-values "$VM_SSH_KEY" \
+  --public-ip-sku Standard && \
+export VM_IP="$(az vm show --resource-group "$RG" --name "$VM_NAME" --show-details --query publicIps -o tsv)" && \
+echo "VM IP: $VM_IP" && \
+until ssh -o StrictHostKeyChecking=no -i ~/.ssh/wavestack_azure "$ADMIN_USER@$VM_IP" "uname -m && echo SSH ready"; do
+  echo "Waiting for SSH..."
+  sleep 15
+done
+
+export RG="rg-wavestack-dev"
+export LOCATION="southcentralus"
+export ADMIN_USER="azureuser"
+export VM_NAME="wavestack-dev-vm"
+export VM_SSH_KEY="$(cat ~/.ssh/wavestack_azure.pub)"
+
+az group show --name "$RG" >/dev/null 2>&1 || \
+az group create --name "$RG" --location "$LOCATION"
+
+python3 - <<'PY'
+import json
+import subprocess
+import sys
+
+location = "southcentralus"
+
+preferred = [
+    "Standard_B2ps_v2",
+    "Standard_B2pls_v2",
+    "Standard_D2ps_v5",
+    "Standard_D2pls_v5",
+    "Standard_D2ads_v6",
+    "Standard_D2as_v6",
+    "Standard_D2s_v6",
+    "Standard_B1s",
+    "Standard_B2s",
+]
+
+raw = subprocess.check_output([
+    "az", "vm", "list-skus",
+    "--location", location,
+    "--resource-type", "virtualMachines",
+    "--all",
+    "-o", "json"
+], text=True)
+
+skus = json.loads(raw)
+
+available = {}
+for sku in skus:
+    name = sku.get("name")
+    restrictions = sku.get("restrictions") or []
+    if not restrictions:
+        caps = {c["name"]: c["value"] for c in sku.get("capabilities", [])}
+        available[name] = caps
+
+for name in preferred:
+    if name in available:
+        caps = available[name]
+        arch = caps.get("CpuArchitectureType", "")
+        vcpus = caps.get("vCPUs", "")
+        mem = caps.get("MemoryGB", "")
+        print(f"{name}|{arch}|{vcpus}|{mem}")
+        sys.exit(0)
+
+small = []
+for name, caps in available.items():
+    try:
+        vcpus = int(float(caps.get("vCPUs", "999")))
+    except ValueError:
+        vcpus = 999
+    if vcpus <= 2:
+        small.append((name, caps.get("CpuArchitectureType", ""), vcpus, caps.get("MemoryGB", "")))
+
+small.sort(key=lambda x: (x[2], x[0]))
+
+if not small:
+    print("NO_WORKING_SKU_FOUND")
+    sys.exit(1)
+
+name, arch, vcpus, mem = small[0]
+print(f"{name}|{arch}|{vcpus}|{mem}")
+PY
+
+export SKU_INFO="$(python3 - <<'PY'
+import json
+import subprocess
+import sys
+
+location = "southcentralus"
+
+preferred = [
+    "Standard_B2ps_v2",
+    "Standard_B2pls_v2",
+    "Standard_D2ps_v5",
+    "Standard_D2pls_v5",
+    "Standard_D2ads_v6",
+    "Standard_D2as_v6",
+    "Standard_D2s_v6",
+    "Standard_B1s",
+    "Standard_B2s",
+]
+
+raw = subprocess.check_output([
+    "az", "vm", "list-skus",
+    "--location", location,
+    "--resource-type", "virtualMachines",
+    "--all",
+    "-o", "json"
+], text=True)
+
+skus = json.loads(raw)
+available = {}
+
+for sku in skus:
+    name = sku.get("name")
+    restrictions = sku.get("restrictions") or []
+    if not restrictions:
+        caps = {c["name"]: c["value"] for c in sku.get("capabilities", [])}
+        available[name] = caps
+
+for name in preferred:
+    if name in available:
+        caps = available[name]
+        print(f"{name}|{caps.get('CpuArchitectureType', 'x64')}")
+        sys.exit(0)
+
+for name, caps in sorted(available.items()):
+    try:
+        vcpus = int(float(caps.get("vCPUs", "999")))
+    except ValueError:
+        vcpus = 999
+    if vcpus <= 2:
+        print(f"{name}|{caps.get('CpuArchitectureType', 'x64')}")
+        sys.exit(0)
+
+raise SystemExit("No usable VM SKU found")
+PY
+)"
+
+export VM_SIZE="${SKU_INFO%%|*}"
+export VM_ARCH="${SKU_INFO##*|}"
+
+if [ "$VM_ARCH" = "Arm64" ]; then
+  export IMAGE_ARCH="Arm64"
+else
+  export IMAGE_ARCH="x64"
+fi
+
+export VM_IMAGE="$(az vm image list \
+  --location "$LOCATION" \
+  --publisher Canonical \
+  --offer 0001-com-ubuntu-server-jammy \
+  --architecture "$IMAGE_ARCH" \
+  --all \
+  --query "[?contains(sku, '22_04')]|[-1].urn" \
+  -o tsv)"
+
+echo "Using VM size: $VM_SIZE"
+echo "Using architecture: $VM_ARCH"
+echo "Using image: $VM_IMAGE"
+
+export RG="rg-wavestack-dev"
+export VM_NAME="wavestack-dev-vm"
+export ADMIN_USER="azureuser"
+export VM_IP="20.225.235.88"
+
+az vm open-port --resource-group "$RG" --name "$VM_NAME" --port 5173 --priority 1010 && \
+az vm open-port --resource-group "$RG" --name "$VM_NAME" --port 3000 --priority 1020 && \
+az vm open-port --resource-group "$RG" --name "$VM_NAME" --port 8000 --priority 1030 && \
+az vm open-port --resource-group "$RG" --name "$VM_NAME" --port 8080 --priority 1040 && \
+ssh -i ~/.ssh/wavestack_azure "$ADMIN_USER@$VM_IP" 'set -e
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git rsync
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/docker.asc >/dev/null
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+' && \
+rsync -az --delete \
+  --exclude ".git" \
+  --exclude "node_modules" \
+  --exclude "dist" \
+  --exclude "build" \
+  --exclude "coverage" \
+  --exclude ".env" \
+  -e "ssh -i ~/.ssh/wavestack_azure" \
+  ./ "$ADMIN_USER@$VM_IP:/home/$ADMIN_USER/WaveStack/" && \
+ssh -i ~/.ssh/wavestack_azure "$ADMIN_USER@$VM_IP" "set -e
+cd ~/WaveStack
+cat > apps/frontend/src/vite-env.d.ts <<'EOF'
+/// <reference types=\"vite/client\" />
+EOF
+cp .env.example .env
+python3 - <<'PY'
+from pathlib import Path
+p = Path('docker-compose.yml')
+s = p.read_text()
+s = s.replace('VITE_GRAPHQL_URL: http://localhost:3000/graphql', 'VITE_GRAPHQL_URL: http://${VM_PUBLIC_IP:-localhost}:3000/graphql')
+p.write_text(s)
+PY
+sudo docker compose down || true
+sudo VM_PUBLIC_IP='$VM_IP' docker compose up --build -d
+sudo docker compose ps
+" && \
+echo "" && \
+echo "WaveStack deployed:" && \
+echo "Frontend:          http://$VM_IP:5173" && \
+echo "GraphQL API:       http://$VM_IP:3000/graphql" && \
+echo "Audio AI service:  http://$VM_IP:8000/health" && \
+echo "Analytics service: http://$VM_IP:8080/health"
+
+fdiehihjrg
+
+export RG="rg-wavestack-dev"
+export VM_NAME="wavestack-dev-vm"
+export ADMIN_USER="azureuser"
+export VM_IP="[INSERT YOUR VM IP HERE]"
+export DOMAIN="[INSERT YOUR DOMAIN HERE]"
+
+az vm open-port --resource-group "$RG" --name "$VM_NAME" --port 80 --priority 1050
+az vm open-port --resource-group "$RG" --name "$VM_NAME" --port 443 --priority 1060
+
+ssh -i ~/.ssh/wavestack_azure "$ADMIN_USER@$VM_IP" "cd ~/WaveStack && cat > Caddyfile <<EOF
+$DOMAIN {
+  reverse_proxy frontend:5173
+}
+
+api.$DOMAIN {
+  reverse_proxy graphql-api:3000
+}
+EOF
+
+python3 - <<'PY'
+from pathlib import Path
+
+p = Path('docker-compose.yml')
+s = p.read_text()
+
+s = s.replace(
+    'VITE_GRAPHQL_URL: http://${VM_PUBLIC_IP:-localhost}:3000/graphql',
+    'VITE_GRAPHQL_URL: https://api.wavestack.duckdns.org/graphql'
+)
+
+if '  caddy:' not in s:
+    s = s.rstrip() + '''
+
+  caddy:
+    image: caddy:2
+    ports:
+      - \"80:80\"
+      - \"443:443\"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - frontend
+      - graphql-api
+'''
+
+if 'caddy-data:' not in s:
+    s = s.replace(
+        'volumes:\\n  postgres-data:\\n  neo4j-data:',
+        'volumes:\\n  postgres-data:\\n  neo4j-data:\\n  caddy-data:\\n  caddy-config:'
+    )
+
+p.write_text(s)
+PY
+
+sudo docker compose up --build -d
+sudo docker compose ps
+"
+
+export RG="rg-wavestack-dev"
+export VM_NAME="wavestack-dev-vm"
+export ADMIN_USER="azureuser"
+export VM_IP="[]"
+export DOMAIN="[]"
+
+rsync -az --delete \
+  --exclude ".git" \
+  --exclude "node_modules" \
+  --exclude "dist" \
+  --exclude "build" \
+  --exclude "coverage" \
+  --exclude ".env" \
+  -e "ssh -i ~/.ssh/wavestack_azure" \
+  ./ "$ADMIN_USER@$VM_IP:/home/$ADMIN_USER/WaveStack/" && \
+
+ssh -i ~/.ssh/wavestack_azure "$ADMIN_USER@$VM_IP" "set -e
+cd ~/WaveStack
+
+cat > Caddyfile <<'EOF'
+wavestack.duckdns.org {
+  reverse_proxy frontend:5173
+}
+
+api.wavestack.duckdns.org {
+  reverse_proxy graphql-api:3000
+}
+EOF
+
+python3 - <<'PY'
+from pathlib import Path
+
+p = Path('docker-compose.yml')
+s = p.read_text()
+
+# Point frontend to HTTPS API domain.
+s = s.replace(
+    'VITE_GRAPHQL_URL: http://localhost:3000/graphql',
+    'VITE_GRAPHQL_URL: https://api.wavestack.duckdns.org/graphql'
+)
+s = s.replace(
+    'VITE_GRAPHQL_URL: http://${VM_PUBLIC_IP:-localhost}:3000/graphql',
+    'VITE_GRAPHQL_URL: https://api.wavestack.duckdns.org/graphql'
+)
+
+# Remove any broken Caddy block accidentally inserted under volumes.
+broken = '''  caddy:
+    image: caddy:2
+    ports:
+      - \"80:80\"
+      - \"443:443\"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - frontend
+      - graphql-api
+'''
+s = s.replace(broken, '')
+
+# Add Caddy service before the top-level volumes section.
+caddy_service = '''
+  caddy:
+    image: caddy:2
+    ports:
+      - \"80:80\"
+      - \"443:443\"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - frontend
+      - graphql-api
+
+'''
+
+if '  caddy:' not in s.split('volumes:')[0]:
+    s = s.replace('\\nvolumes:\\n', '\\n' + caddy_service + 'volumes:\\n')
+
+# Add Caddy volumes correctly under top-level volumes.
+if '  caddy-data:' not in s:
+    s = s.replace('  neo4j-data:\\n', '  neo4j-data:\\n  caddy-data:\\n  caddy-config:\\n')
+
+p.write_text(s)
+PY
+
+cat > apps/frontend/src/vite-env.d.ts <<'EOF'
+/// <reference types=\"vite/client\" />
+EOF
+
+cp .env.example .env
+
+sudo docker compose config >/dev/null
+sudo docker compose down || true
+sudo docker compose up --build -d
+sudo docker compose ps
+"
+
+export ADMIN_USER="azureuser"
+export VM_IP="[]"
+export DOMAIN="[]"
+
+ssh -i ~/.ssh/wavestack_azure "$ADMIN_USER@$VM_IP" "set -e
+cd ~/WaveStack
+
+python3 - <<'PY'
+from pathlib import Path
+
+p = Path('apps/frontend/vite.config.ts')
+s = p.read_text()
+
+if 'allowedHosts' not in s:
+    s = s.replace(
+'''  test: {
+    environment: "jsdom",''',
+'''  preview: {
+    allowedHosts: ["wavestack.duckdns.org"]
+  },
+  test: {
+    environment: "jsdom",'''
+    )
+
+p.write_text(s)
+PY
+
+sudo docker compose down
+sudo docker compose up --build -d frontend caddy
+sudo docker compose ps
+"
+
+ssh -i ~/.ssh/wavestack_azure azureuser@[INSERT IP] "cd ~/WaveStack && sudo docker compose logs graphql-api --tail=100"
+
+export ADMIN_USER="azureuser"
+export VM_IP="[]"
+export DOMAIN="[]"
+
+# 1. Fix Vite allowed host locally
+cat > apps/frontend/vite.config.ts <<'EOF'
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
+  preview: {
+    host: "0.0.0.0",
+    port: 5173,
+    allowedHosts: ["wavestack.duckdns.org"]
+  },
+  test: {
+    environment: "jsdom",
+    setupFiles: "./src/test/setup.ts",
+    coverage: {
+      reporter: ["text", "json-summary", "html"]
+    }
+  }
+});
+EOF
+
+cat > apps/frontend/src/vite-env.d.ts <<'EOF'
+/// <reference types="vite/client" />
+EOF
+
+# 2. Fix GraphQL Dockerfile so it can run either Nest build output path
+python3 - <<'PY'
+from pathlib import Path
+
+p = Path("services/graphql-api/Dockerfile")
+s = p.read_text()
+
+if 'CMD ["node", "dist/main.js"]' in s:
+    s = s.replace(
+        'CMD ["node", "dist/main.js"]',
+        'CMD ["sh", "-c", "if [ -f dist/main.js ]; then node dist/main.js; else node dist/src/main.js; fi"]'
+    )
+elif "node dist/main.js" in s and "dist/src/main.js" not in s:
+    s = s.replace(
+        "node dist/main.js",
+        "if [ -f dist/main.js ]; then node dist/main.js; else node dist/src/main.js; fi"
+    )
+
+p.write_text(s)
+PY
+
+# 3. Upload clean project to VM
+rsync -az --delete \
+  --exclude ".git" \
+  --exclude "node_modules" \
+  --exclude "dist" \
+  --exclude "build" \
+  --exclude "coverage" \
+  --exclude ".env" \
+  -e "ssh -i ~/.ssh/wavestack_azure" \
+  ./ "$ADMIN_USER@$VM_IP:/home/$ADMIN_USER/WaveStack/"
+
+# 4. Patch remote Compose + Caddy cleanly and rebuild
+ssh -i ~/.ssh/wavestack_azure "$ADMIN_USER@$VM_IP" "set -e
+cd ~/WaveStack
+
+cat > Caddyfile <<'EOF'
+wavestack.duckdns.org {
+  reverse_proxy frontend:5173
+}
+
+api.wavestack.duckdns.org {
+  reverse_proxy graphql-api:3000
+}
+EOF
+
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+p = Path('docker-compose.yml')
+s = p.read_text()
+
+s = s.replace(
+    'VITE_GRAPHQL_URL: http://localhost:3000/graphql',
+    'VITE_GRAPHQL_URL: https://api.wavestack.duckdns.org/graphql'
+)
+s = s.replace(
+    'VITE_GRAPHQL_URL: http://${VM_PUBLIC_IP:-localhost}:3000/graphql',
+    'VITE_GRAPHQL_URL: https://api.wavestack.duckdns.org/graphql'
+)
+
+# Remove any old broken caddy blocks.
+s = re.sub(
+    r'\\n  caddy:\\n(?:    .+\\n)+?(?=\\n  [a-zA-Z0-9_-]+:|\\nvolumes:|\\Z)',
+    '\\n',
+    s
+)
+
+caddy_service = '''
+  caddy:
+    image: caddy:2
+    ports:
+      - \"80:80\"
+      - \"443:443\"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - frontend
+      - graphql-api
+
+'''
+
+if '\\nvolumes:\\n' in s:
+    s = s.replace('\\nvolumes:\\n', '\\n' + caddy_service + 'volumes:\\n')
+else:
+    s += '\\n' + caddy_service + 'volumes:\\n'
+
+if '  postgres-data:' not in s:
+    s += '  postgres-data:\\n'
+if '  neo4j-data:' not in s:
+    s += '  neo4j-data:\\n'
+if '  caddy-data:' not in s:
+    s += '  caddy-data:\\n'
+if '  caddy-config:' not in s:
+    s += '  caddy-config:\\n'
+
+p.write_text(s)
+PY
+
+cp .env.example .env
+
+sudo docker compose config >/dev/null
+sudo docker compose down
+sudo docker compose build --no-cache frontend graphql-api
+sudo docker compose up -d
+sudo docker compose ps
+"
+
+echo ""
+echo "Open:"
+echo "https://$DOMAIN"
+echo "https://api.$DOMAIN/graphql"
+
+export ADMIN_USER="azureuser"
+export VM_IP="20.225.235.88"
+
+# Patch frontend Dockerfile locally so runtime image includes Vite config
+python3 - <<'PY'
+from pathlib import Path
+
+p = Path("apps/frontend/Dockerfile")
+s = p.read_text()
+
+needle = "COPY --from=build /app/dist ./dist\nCOPY package*.json ./\n"
+replacement = """COPY --from=build /app/dist ./dist
+COPY --from=build /app/vite.config.ts ./vite.config.ts
+COPY package*.json ./
+"""
+
+if "COPY --from=build /app/vite.config.ts ./vite.config.ts" not in s:
+    s = s.replace(needle, replacement)
+
+p.write_text(s)
+print("Patched apps/frontend/Dockerfile")
+PY
+
+# Upload patched project
+rsync -az --delete \
+  --exclude ".git" \
+  --exclude "node_modules" \
+  --exclude "dist" \
+  --exclude "build" \
+  --exclude "coverage" \
+  --exclude ".env" \
+  -e "ssh -i ~/.ssh/wavestack_azure" \
+  ./ "$ADMIN_USER@$VM_IP:/home/$ADMIN_USER/WaveStack/"
+
+# Rebuild frontend image from scratch and restart
+ssh -i ~/.ssh/wavestack_azure "$ADMIN_USER@$VM_IP" "set -e
+cd ~/WaveStack
+
+grep -n \"allowedHosts\\|wavestack\" apps/frontend/vite.config.ts
+grep -n \"vite.config\" apps/frontend/Dockerfile
+
+sudo docker compose down
+sudo docker compose build --no-cache frontend
+sudo docker compose up -d
+sudo docker compose ps
+"
