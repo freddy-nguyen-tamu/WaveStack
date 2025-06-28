@@ -27,6 +27,9 @@ services:
       AUDIO_SERVICE_URL: http://audio-ai-service:8000
       ANALYTICS_SERVICE_URL: http://analytics-service:8080
       SIGNED_URL_SECRET: local-dev-secret
+      GOOGLE_DRIVE_API_KEY: ${GOOGLE_DRIVE_API_KEY}
+      GOOGLE_DRIVE_FOLDER_IDS: ${GOOGLE_DRIVE_FOLDER_IDS}
+      API_PUBLIC_ORIGIN: ${API_PUBLIC_ORIGIN:-http://localhost:3000}
     depends_on:
       - postgres
       - neo4j

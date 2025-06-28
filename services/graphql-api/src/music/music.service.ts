@@ -2,15 +2,23 @@ import { Injectable } from "@nestjs/common";
 import { Album, Artist, Song } from "./music.models";
 import { SignedUrlService } from "../storage/signed-url.service";
 import { AudioJobsProducer } from "./audio-jobs.producer";
+import { GoogleDriveService } from "./google-drive.service";
 
 @Injectable()
 export class MusicService {
   constructor(
     private readonly signedUrlService: SignedUrlService,
-    private readonly audioJobsProducer: AudioJobsProducer
+    private readonly audioJobsProducer: AudioJobsProducer,
+    private readonly googleDriveService: GoogleDriveService
   ) {}
 
   async listSongs(): Promise<Song[]> {
+    const driveSongs = await this.googleDriveService.listSongs();
+
+    if (driveSongs.length) {
+      return driveSongs;
+    }
+
     return [
       {
         id: "song-1",

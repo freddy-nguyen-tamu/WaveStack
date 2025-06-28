@@ -865,3 +865,274 @@ sudo docker compose build --no-cache frontend
 sudo docker compose up -d
 sudo docker compose ps
 "
+
+# change .env then:
+export ADMIN_USER="azureuser"
+export VM_IP="20.225.235.88"
+export DOMAIN="wavestack.duckdns.org"
+
+cat > services/graphql-api/src/music/google-drive.service.ts <<'EOF'
+import { Injectable, Logger } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { Song } from "./music.models";
+
+type DriveFile = {
+  id: string;
+  name: string;
+  mimeType?: string;
+  size?: string;
+  modifiedTime?: string;
+};
+
+@Injectable()
+export class GoogleDriveService {
+  private readonly logger = new Logger(GoogleDriveService.name);
+
+  constructor(private readonly config: ConfigService) {}
+
+  private get apiKey(): string {
+    return this.config.get<string>("GOOGLE_DRIVE_API_KEY") ?? "";
+  }
+
+  private get folderIds(): string[] {
+    return (this.config.get<string>("GOOGLE_DRIVE_FOLDER_IDS") ?? "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  private get publicApiOrigin(): string {
+    return this.config.get<string>("API_PUBLIC_ORIGIN") ?? "http://localhost:3000";
+  }
+
+  async listSongs(): Promise<Song[]> {
+    if (!this.apiKey || !this.folderIds.length) {
+      this.logger.warn("Google Drive is not configured. Returning no Drive songs.");
+      return [];
+    }
+
+    const files = (
+      await Promise.all(this.folderIds.map((folderId) => this.listMp3FilesInFolder(folderId)))
+    ).flat();
+
+    return files.map((file) => ({
+      id: `drive-${file.id}`,
+      title: this.cleanTitle(file.name),
+      artistName: "Google Drive Library",
+      albumTitle: "Public Drive Folder",
+      durationSeconds: 0,
+      streamUrl: `${this.publicApiOrigin}/drive/stream/${file.id}`,
+      genreNames: ["mp3", "google-drive"]
+    }));
+  }
+
+  private async listMp3FilesInFolder(folderId: string): Promise<DriveFile[]> {
+    const query = [
+      `'${folderId}' in parents`,
+      "trashed = false",
+      "mimeType = 'audio/mpeg'"
+    ].join(" and ");
+
+    const params = new URLSearchParams({
+      key: this.apiKey,
+      q: query,
+      fields: "files(id,name,mimeType,size,modifiedTime)",
+      pageSize: "1000",
+      supportsAllDrives: "true",
+      includeItemsFromAllDrives: "true"
+    });
+
+    const response = await fetch(`https://www.googleapis.com/drive/v3/files?${params.toString()}`);
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Google Drive list failed for folder ${folderId}: ${response.status} ${body}`);
+    }
+
+    const payload = (await response.json()) as { files?: DriveFile[] };
+    return payload.files ?? [];
+  }
+
+  getMediaUrl(fileId: string): string {
+    const params = new URLSearchParams({
+      key: this.apiKey,
+      alt: "media"
+    });
+
+    return `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?${params.toString()}`;
+  }
+
+  private cleanTitle(name: string): string {
+    return name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim();
+  }
+}
+EOF
+
+cat > services/graphql-api/src/music/google-drive.controller.ts <<'EOF'
+import { Controller, Get, Header, Param, Req, Res } from "@nestjs/common";
+import { Request, Response } from "express";
+import { Readable } from "node:stream";
+import { GoogleDriveService } from "./google-drive.service";
+
+@Controller("drive")
+export class GoogleDriveController {
+  constructor(private readonly googleDriveService: GoogleDriveService) {}
+
+  @Get("stream/:fileId")
+  @Header("Accept-Ranges", "bytes")
+  async stream(@Param("fileId") fileId: string, @Req() request: Request, @Res() response: Response) {
+    const headers: Record<string, string> = {};
+
+    if (request.headers.range) {
+      headers.Range = request.headers.range;
+    }
+
+    const upstream = await fetch(this.googleDriveService.getMediaUrl(fileId), { headers });
+
+    response.status(upstream.status);
+    response.setHeader("Content-Type", upstream.headers.get("content-type") ?? "audio/mpeg");
+    response.setHeader("Cache-Control", "public, max-age=3600");
+    response.setHeader("Accept-Ranges", "bytes");
+
+    const contentLength = upstream.headers.get("content-length");
+    const contentRange = upstream.headers.get("content-range");
+
+    if (contentLength) response.setHeader("Content-Length", contentLength);
+    if (contentRange) response.setHeader("Content-Range", contentRange);
+
+    if (!upstream.body) {
+      response.end();
+      return;
+    }
+
+    Readable.fromWeb(upstream.body as any).pipe(response);
+  }
+}
+EOF
+
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+# Patch music.module.ts
+p = Path("services/graphql-api/src/music/music.module.ts")
+s = p.read_text()
+
+if 'GoogleDriveService' not in s:
+    s = s.replace(
+        'import { AudioJobsProducer } from "./audio-jobs.producer";',
+        'import { AudioJobsProducer } from "./audio-jobs.producer";\nimport { GoogleDriveService } from "./google-drive.service";\nimport { GoogleDriveController } from "./google-drive.controller";'
+    )
+
+s = s.replace(
+    'providers: [MusicResolver, MusicService, AudioJobsProducer],',
+    'controllers: [GoogleDriveController],\n  providers: [MusicResolver, MusicService, AudioJobsProducer, GoogleDriveService],'
+)
+
+p.write_text(s)
+
+# Patch music.service.ts
+p = Path("services/graphql-api/src/music/music.service.ts")
+s = p.read_text()
+
+if 'GoogleDriveService' not in s:
+    s = s.replace(
+        'import { AudioJobsProducer } from "./audio-jobs.producer";',
+        'import { AudioJobsProducer } from "./audio-jobs.producer";\nimport { GoogleDriveService } from "./google-drive.service";'
+    )
+
+    s = s.replace(
+        'private readonly audioJobsProducer: AudioJobsProducer\n  ) {}',
+        'private readonly audioJobsProducer: AudioJobsProducer,\n    private readonly googleDriveService: GoogleDriveService\n  ) {}'
+    )
+
+    s = re.sub(
+        r'  async listSongs\(\): Promise<Song\[\]> \{\n    return \[[\s\S]*?\n    \];\n  \}',
+        '''  async listSongs(): Promise<Song[]> {
+    const driveSongs = await this.googleDriveService.listSongs();
+
+    if (driveSongs.length) {
+      return driveSongs;
+    }
+
+    return [
+      {
+        id: "song-1",
+        title: "Cloudline",
+        artistName: "The Latency",
+        albumTitle: "Regions",
+        durationSeconds: 213,
+        streamUrl: this.signedUrlService.createSignedStreamUrl("tracks/song-1/master.m3u8"),
+        genreNames: ["electronic", "ambient"]
+      },
+      {
+        id: "song-2",
+        title: "Packet Chorus",
+        artistName: "Blue Queue",
+        albumTitle: "Async Hearts",
+        durationSeconds: 188,
+        streamUrl: this.signedUrlService.createSignedStreamUrl("tracks/song-2/master.m3u8"),
+        genreNames: ["indie", "pop"]
+      }
+    ];
+  }''',
+        s
+    )
+
+p.write_text(s)
+
+# Patch docker-compose.yml
+p = Path("docker-compose.yml")
+s = p.read_text()
+
+if "GOOGLE_DRIVE_API_KEY" not in s:
+    s = s.replace(
+        "      SIGNED_URL_SECRET: local-dev-secret",
+        """      SIGNED_URL_SECRET: local-dev-secret
+      GOOGLE_DRIVE_API_KEY: ${GOOGLE_DRIVE_API_KEY}
+      GOOGLE_DRIVE_FOLDER_IDS: ${GOOGLE_DRIVE_FOLDER_IDS}
+      API_PUBLIC_ORIGIN: ${API_PUBLIC_ORIGIN:-http://localhost:3000}"""
+    )
+
+p.write_text(s)
+
+# Patch env examples
+for env_file in [Path(".env.example")]:
+    s = env_file.read_text()
+    if "GOOGLE_DRIVE_API_KEY" not in s:
+        s = s.rstrip() + """
+
+# Google Drive public music library
+GOOGLE_DRIVE_API_KEY=REPLACE-ME-WITH-GOOGLE-DRIVE-API-KEY
+GOOGLE_DRIVE_FOLDER_IDS=REPLACE-ME-WITH-FOLDER-ID-1,REPLACE-ME-WITH-FOLDER-ID-2
+API_PUBLIC_ORIGIN=http://localhost:3000
+""" + "\n"
+        env_file.write_text(s)
+PY
+
+rsync -az --delete \
+  --exclude ".git" \
+  --exclude "node_modules" \
+  --exclude "dist" \
+  --exclude "build" \
+  --exclude "coverage" \
+  --exclude ".env" \
+  -e "ssh -i ~/.ssh/wavestack_azure" \
+  ./ "$ADMIN_USER@$VM_IP:/home/$ADMIN_USER/WaveStack/"
+
+scp -i ~/.ssh/wavestack_azure .env "$ADMIN_USER@$VM_IP:/home/$ADMIN_USER/WaveStack/.env"
+
+ssh -i ~/.ssh/wavestack_azure "$ADMIN_USER@$VM_IP" "set -e
+cd ~/WaveStack
+
+grep -n \"GOOGLE_DRIVE\" docker-compose.yml .env
+grep -n \"GoogleDrive\" services/graphql-api/src/music/music.module.ts services/graphql-api/src/music/music.service.ts
+
+sudo docker compose down
+sudo docker compose build --no-cache graphql-api
+sudo docker compose up -d
+sudo docker compose logs graphql-api --tail=120
+"
+curl -s "https://api.wavestack.duckdns.org/graphql" \
+  -H "content-type: application/json" \
+  --data '{"query":"{ songs { id title artistName streamUrl genreNames } }"}'
