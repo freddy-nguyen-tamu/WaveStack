@@ -2,10 +2,12 @@ services:
   frontend:
     build:
       context: ./apps/frontend
+      args:
+        VITE_GRAPHQL_URL: ${VITE_GRAPHQL_URL:-http://localhost:3000/graphql}
     ports:
       - "5173:5173"
     environment:
-      VITE_GRAPHQL_URL: http://localhost:3000/graphql
+      VITE_GRAPHQL_URL: ${VITE_GRAPHQL_URL:-http://localhost:3000/graphql}
     depends_on:
       - graphql-api
 

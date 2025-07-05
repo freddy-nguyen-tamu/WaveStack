@@ -1,0 +1,1 @@
+{"root":["./src/App.test.tsx","./src/App.tsx","./src/api.ts","./src/main.tsx","./src/vite-env.d.ts","./src/features/dashboard/Dashboard.tsx","./src/features/player/Player.tsx","./src/features/playlists/PlaylistPanel.tsx","./src/features/search/SearchPanel.tsx","./src/test/setup.ts"],"version":"5.9.3"}

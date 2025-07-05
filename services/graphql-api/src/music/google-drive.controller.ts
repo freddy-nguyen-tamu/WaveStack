@@ -9,25 +9,43 @@ export class GoogleDriveController {
 
   @Get("stream/:fileId")
   @Header("Accept-Ranges", "bytes")
-  async stream(@Param("fileId") fileId: string, @Req() request: Request, @Res() response: Response) {
+  async stream(
+    @Param("fileId") fileId: string,
+    @Req() request: Request,
+    @Res() response: Response
+  ) {
     const headers: Record<string, string> = {};
 
     if (request.headers.range) {
       headers.Range = request.headers.range;
     }
 
-    const upstream = await fetch(this.googleDriveService.getMediaUrl(fileId), { headers });
+    const upstream = await fetch(this.googleDriveService.getMediaUrl(fileId), {
+      headers
+    });
 
-    response.status(upstream.status);
-    response.setHeader("Content-Type", upstream.headers.get("content-type") ?? "audio/mpeg");
-    response.setHeader("Cache-Control", "public, max-age=3600");
-    response.setHeader("Accept-Ranges", "bytes");
-
+    const contentType = upstream.headers.get("content-type") ?? "audio/mpeg";
     const contentLength = upstream.headers.get("content-length");
     const contentRange = upstream.headers.get("content-range");
 
-    if (contentLength) response.setHeader("Content-Length", contentLength);
-    if (contentRange) response.setHeader("Content-Range", contentRange);
+    response.status(upstream.status);
+    response.setHeader("Content-Type", contentType);
+    response.setHeader("Cache-Control", "public, max-age=3600");
+    response.setHeader("Accept-Ranges", "bytes");
+
+    if (contentLength) {
+      response.setHeader("Content-Length", contentLength);
+    }
+
+    if (contentRange) {
+      response.setHeader("Content-Range", contentRange);
+    }
+
+    if (!upstream.ok) {
+      const body = await upstream.text();
+      response.send(body);
+      return;
+    }
 
     if (!upstream.body) {
       response.end();

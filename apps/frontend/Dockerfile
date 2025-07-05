@@ -4,6 +4,9 @@ COPY package*.json ./
 RUN npm install
 
 FROM deps AS build
+WORKDIR /app
+ARG VITE_GRAPHQL_URL=http://localhost:3000/graphql
+ENV VITE_GRAPHQL_URL=$VITE_GRAPHQL_URL
 COPY . .
 RUN npm run build
 

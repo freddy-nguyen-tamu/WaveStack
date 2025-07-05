@@ -42,22 +42,38 @@ export class MusicService {
   }
 
   async listAlbums(): Promise<Album[]> {
-    return [
-      { id: "album-1", title: "Regions", artistName: "The Latency" },
-      { id: "album-2", title: "Async Hearts", artistName: "Blue Queue" }
-    ];
+    const songs = await this.listSongs();
+    const albums = new Map<string, Album>();
+
+    for (const song of songs) {
+      const id = `${song.artistName}:${song.albumTitle}`;
+      albums.set(id, {
+        id,
+        title: song.albumTitle,
+        artistName: song.artistName
+      });
+    }
+
+    return Array.from(albums.values());
   }
 
   async listArtists(): Promise<Artist[]> {
-    return [
-      { id: "artist-1", name: "The Latency" },
-      { id: "artist-2", name: "Blue Queue" }
-    ];
+    const songs = await this.listSongs();
+    const artists = new Map<string, Artist>();
+
+    for (const song of songs) {
+      artists.set(song.artistName, {
+        id: song.artistName,
+        name: song.artistName
+      });
+    }
+
+    return Array.from(artists.values());
   }
 
   async listFavoriteSongs(): Promise<Song[]> {
     const songs = await this.listSongs();
-    return songs.slice(0, 1);
+    return songs.slice(0, 10);
   }
 
   async requestUploadProcessing(songId: string, blobUrl: string, userId: string): Promise<boolean> {
@@ -66,6 +82,7 @@ export class MusicService {
       blobUrl,
       requestedByUserId: userId
     });
+
     return true;
   }
 }
