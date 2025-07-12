@@ -1,0 +1,57 @@
+name: Deploy to Azure VM
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy WaveStack
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Add VM host key
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "$VM_HOST" >> ~/.ssh/known_hosts
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+
+      - name: Write SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VM_SSH_PRIVATE_KEY }}" > ~/.ssh/wavestack_deploy
+          chmod 600 ~/.ssh/wavestack_deploy
+
+      - name: Upload source to VM
+        run: |
+          rsync -az --delete \
+            --exclude ".git" \
+            --exclude "node_modules" \
+            --exclude "dist" \
+            --exclude "build" \
+            --exclude "coverage" \
+            --exclude ".env" \
+            -e "ssh -i ~/.ssh/wavestack_deploy" \
+            ./ "${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:/home/${{ secrets.VM_USER }}/WaveStack/"
+
+      - name: Rebuild and restart containers
+        run: |
+          ssh -i ~/.ssh/wavestack_deploy "${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}" <<'EOF'
+          set -e
+          cd ~/WaveStack
+
+          test -f .env || {
+            echo "Missing ~/WaveStack/.env on VM"
+            exit 1
+          }
+
+          sudo docker compose config >/dev/null
+          sudo docker compose up --build -d
+          sudo docker compose ps
+          EOF
