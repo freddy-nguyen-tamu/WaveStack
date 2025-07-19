@@ -7,6 +7,25 @@ import { GoogleDriveService } from "./google-drive.service";
 export class GoogleDriveController {
   constructor(private readonly googleDriveService: GoogleDriveService) {}
 
+  @Get("debug")
+  async debug() {
+    const folders = await this.googleDriveService.debugFolders();
+    const files = await this.googleDriveService.listAllDriveMp3Files();
+
+    return {
+      folderCount: folders.length,
+      totalMp3Count: files.length,
+      folders,
+      firstSongs: files.slice(0, 25).map((file) => ({
+        id: file.id,
+        name: file.name,
+        mimeType: file.mimeType,
+        sourceRootFolderId: file.sourceRootFolderId,
+        parentFolderId: file.parentFolderId
+      }))
+    };
+  }
+
   @Get("stream/:fileId")
   @Header("Accept-Ranges", "bytes")
   async stream(
