@@ -283,11 +283,27 @@ export class GoogleDriveService {
 
     return (
       name.endsWith(".mp3") ||
+      name.endsWith(".m4a") ||
+      name.endsWith(".flac") ||
+      name.endsWith(".aac") ||
+      name.endsWith(".ogg") ||
+      name.endsWith(".opus") ||
+      name.endsWith(".wav") ||
       mimeType === "audio/mpeg" ||
       mimeType === "audio/mp3" ||
       mimeType === "audio/x-mpeg" ||
       mimeType === "audio/mpeg3" ||
-      mimeType === "audio/x-mpeg-3"
+      mimeType === "audio/x-mpeg-3" ||
+      mimeType === "audio/mp4" ||
+      mimeType === "audio/m4a" ||
+      mimeType === "audio/x-m4a" ||
+      mimeType === "audio/aac" ||
+      mimeType === "audio/flac" ||
+      mimeType === "audio/x-flac" ||
+      mimeType === "audio/ogg" ||
+      mimeType === "audio/opus" ||
+      mimeType === "audio/wav" ||
+      mimeType === "audio/x-wav"
     );
   }
 
