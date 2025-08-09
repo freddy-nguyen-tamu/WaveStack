@@ -16,18 +16,29 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Add VM host key
+      - name: Validate deployment secrets
         run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -H "$VM_HOST" >> ~/.ssh/known_hosts
-        env:
-          VM_HOST: ${{ secrets.VM_HOST }}
+          test -n "${{ secrets.VM_HOST }}" || { echo "Missing VM_HOST secret"; exit 1; }
+          test -n "${{ secrets.VM_USER }}" || { echo "Missing VM_USER secret"; exit 1; }
+          test -n "${{ secrets.VM_SSH_PRIVATE_KEY_B64 }}" || { echo "Missing VM_SSH_PRIVATE_KEY_B64 secret"; exit 1; }
 
       - name: Write SSH key
         run: |
           mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.VM_SSH_PRIVATE_KEY }}" > ~/.ssh/wavestack_deploy
+          echo "${{ secrets.VM_SSH_PRIVATE_KEY_B64 }}" | base64 -d > ~/.ssh/wavestack_deploy
           chmod 600 ~/.ssh/wavestack_deploy
+          ssh-keygen -y -f ~/.ssh/wavestack_deploy > /dev/null
+
+      - name: Add VM host key
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -T 30 -H "${{ secrets.VM_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Test SSH connection
+        run: |
+          ssh -i ~/.ssh/wavestack_deploy \
+            "${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}" \
+            "echo SSH connection works && whoami && hostname"
 
       - name: Upload source to VM
         run: |
@@ -38,12 +49,13 @@ jobs:
             --exclude "build" \
             --exclude "coverage" \
             --exclude ".env" \
+            --exclude "response.json" \
             -e "ssh -i ~/.ssh/wavestack_deploy" \
             ./ "${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:/home/${{ secrets.VM_USER }}/WaveStack/"
 
       - name: Rebuild and restart containers
         run: |
-          ssh -i ~/.ssh/wavestack_deploy "${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}" <<'EOF'
+          ssh -i ~/.ssh/wavestack_deploy "${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}" <<'REMOTE'
           set -e
           cd ~/WaveStack
 
@@ -55,4 +67,4 @@ jobs:
           sudo docker compose config >/dev/null
           sudo docker compose up --build -d
           sudo docker compose ps
-          EOF
+          REMOTE

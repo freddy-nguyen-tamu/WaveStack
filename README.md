@@ -488,6 +488,10 @@ ssh -i ~/.ssh/wavestack_azure "$ADMIN_USER@$VM_IP" "cd ~/WaveStack && sudo docke
 ssh -i ~/.ssh/wavestack_azure "$ADMIN_USER@$VM_IP" "cd ~/WaveStack && sudo docker compose logs analytics-service --tail=100"
 ```
 
+## GitHub secrets
+Go to /settings/secrets/actions/new and add your VM_HOST (your DNS), VM_USER (echo "$ADMIN_USER"), VM_SSH_PRIVATE_KEY_B64 (base64 -w 0 ~/.ssh/wavestack_azure) and VM_SSH_PRIVATE_KEY (cat ~/.ssh/wavestack_azure). No https://, no http://, no slash, no domain path. Just the IP or hostname.
+
+
 ## Cleanup
 
 Delete the Azure resource group when you no longer need the deployment:
