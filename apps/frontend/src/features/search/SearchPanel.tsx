@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ClientPlaylist, Song } from "../../App";
 
 type SearchPanelProps = {
+  pageKey: string;
   title: string;
   songs: Song[];
   playlists: ClientPlaylist[];
@@ -20,6 +21,7 @@ type SearchPanelProps = {
 const PAGE_SIZE = 30;
 
 export function SearchPanel({
+  pageKey,
   title,
   songs,
   playlists,
@@ -35,6 +37,7 @@ export function SearchPanel({
 }: SearchPanelProps) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
+  const [message, setMessage] = useState("");
 
   const results = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -60,6 +63,12 @@ export function SearchPanel({
   const pagedSongs = results.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
   useEffect(() => {
+    setQuery("");
+    setPage(1);
+    setMessage("");
+  }, [pageKey]);
+
+  useEffect(() => {
     setPage(1);
   }, [query, songs.length]);
 
@@ -68,7 +77,31 @@ export function SearchPanel({
 
     if (name) {
       onCreatePlaylist(name);
+      setMessage(`Created playlist: ${name.trim()}`);
+      return;
     }
+
+    setMessage("Playlist creation cancelled.");
+  }
+
+  function play(song: Song) {
+    onPlay(song);
+    setMessage(`Playing: ${song.title}`);
+  }
+
+  function queue(song: Song) {
+    onQueue(song);
+    setMessage(`Queue action sent for: ${song.title}`);
+  }
+
+  function toggleFavorite(song: Song, isFavorite: boolean) {
+    onToggleFavorite(song);
+    setMessage(isFavorite ? `Removed favorite: ${song.title}` : `Added favorite: ${song.title}`);
+  }
+
+  function add(song: Song) {
+    onAddToPlaylist(selectedPlaylistId, song);
+    setMessage(`Playlist action sent for: ${song.title}`);
   }
 
   return (
@@ -101,24 +134,30 @@ export function SearchPanel({
         </button>
       </div>
 
+      {message ? <p role="status">{message}</p> : null}
+
       <p>
         Showing {pagedSongs.length} of {results.length} song(s). Page {currentPage} of {pageCount}.
       </p>
 
-      <div aria-label="Pagination">
-        <button type="button" onClick={() => setPage(1)} disabled={currentPage === 1}>
-          First
-        </button>
-        <button type="button" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={currentPage === 1}>
-          Previous
-        </button>
-        <button type="button" onClick={() => setPage((value) => Math.min(pageCount, value + 1))} disabled={currentPage === pageCount}>
-          Next
-        </button>
-        <button type="button" onClick={() => setPage(pageCount)} disabled={currentPage === pageCount}>
-          Last
-        </button>
-      </div>
+      {pageCount > 1 ? (
+        <div aria-label="Pagination">
+          <button type="button" onClick={() => setPage(1)} disabled={currentPage === 1}>
+            First
+          </button>
+          <button type="button" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={currentPage === 1}>
+            Previous
+          </button>
+          <button type="button" onClick={() => setPage((value) => Math.min(pageCount, value + 1))} disabled={currentPage === pageCount}>
+            Next
+          </button>
+          <button type="button" onClick={() => setPage(pageCount)} disabled={currentPage === pageCount}>
+            Last
+          </button>
+        </div>
+      ) : (
+        <p>Pagination appears after more than {PAGE_SIZE} matching songs.</p>
+      )}
 
       {pagedSongs.length ? (
         <ul>
@@ -127,19 +166,19 @@ export function SearchPanel({
 
             return (
               <li key={song.id}>
-                <button type="button" onClick={() => onPlay(song)}>
+                <button type="button" onClick={() => play(song)}>
                   <Play aria-hidden="true" /> Play
                 </button>
 
-                <button type="button" onClick={() => onQueue(song)}>
+                <button type="button" onClick={() => queue(song)}>
                   Queue
                 </button>
 
-                <button type="button" onClick={() => onToggleFavorite(song)} aria-pressed={isFavorite}>
+                <button type="button" onClick={() => toggleFavorite(song, isFavorite)} aria-pressed={isFavorite}>
                   <Heart aria-hidden="true" /> {isFavorite ? "Unfavorite" : "Favorite"}
                 </button>
 
-                <button type="button" onClick={() => onAddToPlaylist(selectedPlaylistId, song)}>
+                <button type="button" onClick={() => add(song)}>
                   <ListPlus aria-hidden="true" /> Add to playlist
                 </button>
 

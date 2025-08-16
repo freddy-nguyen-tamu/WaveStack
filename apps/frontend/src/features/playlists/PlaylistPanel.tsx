@@ -35,6 +35,7 @@ export function PlaylistPanel({
 }: PlaylistPanelProps) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
+  const [message, setMessage] = useState("");
 
   const selectedPlaylist = playlists.find((playlist) => playlist.id === selectedPlaylistId);
   const songById = useMemo(() => new Map(songs.map((song) => [song.id, song])), [songs]);
@@ -77,7 +78,58 @@ export function PlaylistPanel({
 
     if (name) {
       onCreatePlaylist(name);
+      setMessage(`Created playlist: ${name.trim()}`);
+      return;
     }
+
+    setMessage("Playlist creation cancelled.");
+  }
+
+  function selectPlaylist(playlist: ClientPlaylist) {
+    onSelectedPlaylistChange(playlist.id);
+    setMessage(`Opened playlist: ${playlist.name}`);
+  }
+
+  function deletePlaylist(playlist: ClientPlaylist) {
+    const shouldDelete = window.confirm(`Delete playlist "${playlist.name}"?`);
+
+    if (!shouldDelete) {
+      setMessage("Playlist delete cancelled.");
+      return;
+    }
+
+    onDeletePlaylist(playlist.id);
+    setMessage(`Deleted playlist: ${playlist.name}`);
+  }
+
+  function add(song: Song) {
+    onAddToPlaylist(selectedPlaylistId, song);
+    setMessage(`Playlist action sent for: ${song.title}`);
+  }
+
+  function remove(song: Song) {
+    if (!selectedPlaylist) {
+      setMessage("No playlist selected.");
+      return;
+    }
+
+    onRemoveFromPlaylist(selectedPlaylist.id, song.id);
+    setMessage(`Removed ${song.title} from ${selectedPlaylist.name}.`);
+  }
+
+  function play(song: Song) {
+    onPlay(song);
+    setMessage(`Playing: ${song.title}`);
+  }
+
+  function queue(song: Song) {
+    onQueue(song);
+    setMessage(`Queue action sent for: ${song.title}`);
+  }
+
+  function toggleFavorite(song: Song, isFavorite: boolean) {
+    onToggleFavorite(song);
+    setMessage(isFavorite ? `Removed favorite: ${song.title}` : `Added favorite: ${song.title}`);
   }
 
   return (
@@ -88,15 +140,17 @@ export function PlaylistPanel({
         <ListPlus aria-hidden="true" /> New playlist
       </button>
 
+      {message ? <p role="status">{message}</p> : null}
+
       {playlists.length ? (
         <ul>
           {playlists.map((playlist) => (
             <li key={playlist.id}>
-              <button type="button" onClick={() => onSelectedPlaylistChange(playlist.id)}>
+              <button type="button" onClick={() => selectPlaylist(playlist)} aria-pressed={playlist.id === selectedPlaylistId}>
                 {playlist.id === selectedPlaylistId ? "Selected: " : "Open: "}
                 {playlist.name} ({playlist.songIds.length})
               </button>
-              <button type="button" onClick={() => onDeletePlaylist(playlist.id)}>
+              <button type="button" onClick={() => deletePlaylist(playlist)}>
                 <Trash2 aria-hidden="true" /> Delete
               </button>
             </li>
@@ -117,16 +171,16 @@ export function PlaylistPanel({
 
                 return (
                   <li key={song.id}>
-                    <button type="button" onClick={() => onPlay(song)}>
+                    <button type="button" onClick={() => play(song)}>
                       <Play aria-hidden="true" /> Play
                     </button>
-                    <button type="button" onClick={() => onQueue(song)}>
+                    <button type="button" onClick={() => queue(song)}>
                       Queue
                     </button>
-                    <button type="button" onClick={() => onToggleFavorite(song)} aria-pressed={isFavorite}>
+                    <button type="button" onClick={() => toggleFavorite(song, isFavorite)} aria-pressed={isFavorite}>
                       <Heart aria-hidden="true" /> {isFavorite ? "Unfavorite" : "Favorite"}
                     </button>
-                    <button type="button" onClick={() => onRemoveFromPlaylist(selectedPlaylist.id, song.id)}>
+                    <button type="button" onClick={() => remove(song)}>
                       <Trash2 aria-hidden="true" /> Remove
                     </button>
                     <strong>{song.title}</strong> - {song.artistName}
@@ -152,28 +206,32 @@ export function PlaylistPanel({
           Showing {pagedSongs.length} of {libraryResults.length} song(s). Page {currentPage} of {pageCount}.
         </p>
 
-        <div aria-label="Pagination">
-          <button type="button" onClick={() => setPage(1)} disabled={currentPage === 1}>
-            First
-          </button>
-          <button type="button" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={currentPage === 1}>
-            Previous
-          </button>
-          <button type="button" onClick={() => setPage((value) => Math.min(pageCount, value + 1))} disabled={currentPage === pageCount}>
-            Next
-          </button>
-          <button type="button" onClick={() => setPage(pageCount)} disabled={currentPage === pageCount}>
-            Last
-          </button>
-        </div>
+        {pageCount > 1 ? (
+          <div aria-label="Pagination">
+            <button type="button" onClick={() => setPage(1)} disabled={currentPage === 1}>
+              First
+            </button>
+            <button type="button" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={currentPage === 1}>
+              Previous
+            </button>
+            <button type="button" onClick={() => setPage((value) => Math.min(pageCount, value + 1))} disabled={currentPage === pageCount}>
+              Next
+            </button>
+            <button type="button" onClick={() => setPage(pageCount)} disabled={currentPage === pageCount}>
+              Last
+            </button>
+          </div>
+        ) : (
+          <p>Pagination appears after more than {PAGE_SIZE} matching songs.</p>
+        )}
 
         <ul>
           {pagedSongs.map((song) => (
             <li key={song.id}>
-              <button type="button" onClick={() => onAddToPlaylist(selectedPlaylistId, song)}>
+              <button type="button" onClick={() => add(song)}>
                 <ListPlus aria-hidden="true" /> Add to playlist
               </button>
-              <button type="button" onClick={() => onPlay(song)}>
+              <button type="button" onClick={() => play(song)}>
                 <Play aria-hidden="true" /> Play
               </button>
               {song.title} - {song.artistName}

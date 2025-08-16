@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@apollo/client";
-import { Library, Search, Heart, Clock, ListMusic } from "lucide-react";
+import { Activity, Clock, Heart, Library, ListMusic, Search } from "lucide-react";
 import { MUSIC_HOME_QUERY } from "./api";
 import { Player } from "./features/player/Player";
 import { PlaylistPanel } from "./features/playlists/PlaylistPanel";
@@ -24,7 +24,7 @@ export type ClientPlaylist = {
   songIds: string[];
 };
 
-type View = "library" | "search" | "favorites" | "recent" | "queue" | "playlists";
+type View = "dashboard" | "library" | "search" | "favorites" | "recent" | "queue" | "playlists";
 
 const fallbackSongs: Song[] = [
   {
@@ -70,7 +70,7 @@ function uniqueSongsById(songs: Song[]): Song[] {
 }
 
 export function App() {
-  const [activeView, setActiveView] = useState<View>("library");
+  const [activeView, setActiveView] = useState<View>("dashboard");
   const [activeSong, setActiveSong] = useState<Song | null>(null);
   const [queue, setQueue] = useState<Song[]>([]);
   const [playSignal, setPlaySignal] = useState(0);
@@ -78,6 +78,8 @@ export function App() {
   const [recentSongIds, setRecentSongIds] = useState<string[]>(() => readStringArray("wavestack:recent"));
   const [playlists, setPlaylists] = useState<ClientPlaylist[]>(readPlaylists);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState("");
+  const [notice, setNotice] = useState("");
+  const [refreshNotice, setRefreshNotice] = useState("");
 
   const { data, loading, error, refetch } = useQuery(MUSIC_HOME_QUERY, {
     fetchPolicy: "cache-and-network"
@@ -150,6 +152,10 @@ export function App() {
 
   const currentSong = activeSong ?? songs[0] ?? fallbackSongs[0];
 
+  function showNotice(message: string) {
+    setNotice(message);
+  }
+
   function rememberRecent(song: Song) {
     setRecentSongIds((items) => [song.id, ...items.filter((id) => id !== song.id)].slice(0, 50));
   }
@@ -165,23 +171,28 @@ export function App() {
       return [song, ...items];
     });
     setPlaySignal((value) => value + 1);
+    showNotice(`Now playing: ${song.title}`);
   }
 
   function queueSong(song: Song) {
-    setQueue((items) => {
-      if (items.some((item) => item.id === song.id)) {
-        return items;
-      }
+    if (queue.some((item) => item.id === song.id)) {
+      showNotice(`${song.title} is already in the queue.`);
+      return;
+    }
 
-      return [...items, song];
-    });
+    setQueue((items) => [...items, song]);
+    showNotice(`Queued: ${song.title}`);
   }
 
   function removeFromQueue(songId: string) {
-    setQueue((items) => items.filter((song) => song.id !== songId));
+    const song = queue.find((item) => item.id === songId);
+    setQueue((items) => items.filter((item) => item.id !== songId));
+    showNotice(song ? `Removed from queue: ${song.title}` : "Removed song from queue.");
   }
 
   function toggleFavorite(song: Song) {
+    const isFavorite = favoriteIds.includes(song.id);
+
     setFavoriteIds((items) => {
       if (items.includes(song.id)) {
         return items.filter((id) => id !== song.id);
@@ -189,12 +200,15 @@ export function App() {
 
       return [song.id, ...items];
     });
+
+    showNotice(isFavorite ? `Removed favorite: ${song.title}` : `Added favorite: ${song.title}`);
   }
 
   function createPlaylist(name: string) {
     const trimmed = name.trim();
 
     if (!trimmed) {
+      showNotice("Playlist name cannot be empty.");
       return;
     }
 
@@ -207,10 +221,13 @@ export function App() {
     setPlaylists((items) => [...items, playlist]);
     setSelectedPlaylistId(playlist.id);
     setActiveView("playlists");
+    showNotice(`Created playlist: ${playlist.name}`);
   }
 
   function deletePlaylist(playlistId: string) {
-    setPlaylists((items) => items.filter((playlist) => playlist.id !== playlistId));
+    const playlist = playlists.find((item) => item.id === playlistId);
+    setPlaylists((items) => items.filter((item) => item.id !== playlistId));
+    showNotice(playlist ? `Deleted playlist: ${playlist.name}` : "Deleted playlist.");
   }
 
   function addToPlaylist(playlistId: string, song: Song) {
@@ -218,51 +235,96 @@ export function App() {
       const name = window.prompt("Name your new playlist", "My Playlist");
 
       if (!name) {
+        showNotice("Add to playlist cancelled.");
+        return;
+      }
+
+      const trimmed = name.trim();
+
+      if (!trimmed) {
+        showNotice("Playlist name cannot be empty.");
         return;
       }
 
       const playlist: ClientPlaylist = {
         id: `playlist-${Date.now()}`,
-        name,
+        name: trimmed,
         songIds: [song.id]
       };
 
       setPlaylists((items) => [...items, playlist]);
       setSelectedPlaylistId(playlist.id);
       setActiveView("playlists");
+      showNotice(`Created ${playlist.name} and added ${song.title}.`);
+      return;
+    }
+
+    const playlist = playlists.find((item) => item.id === playlistId);
+
+    if (!playlist) {
+      showNotice("Select or create a playlist first.");
+      return;
+    }
+
+    if (playlist.songIds.includes(song.id)) {
+      showNotice(`${song.title} is already in ${playlist.name}.`);
       return;
     }
 
     setPlaylists((items) =>
-      items.map((playlist) => {
-        if (playlist.id !== playlistId || playlist.songIds.includes(song.id)) {
-          return playlist;
+      items.map((item) => {
+        if (item.id !== playlistId) {
+          return item;
         }
 
         return {
-          ...playlist,
-          songIds: [...playlist.songIds, song.id]
+          ...item,
+          songIds: [...item.songIds, song.id]
         };
       })
     );
+
+    showNotice(`Added ${song.title} to ${playlist.name}.`);
   }
 
   function removeFromPlaylist(playlistId: string, songId: string) {
+    const playlist = playlists.find((item) => item.id === playlistId);
+    const song = songById.get(songId);
+
     setPlaylists((items) =>
-      items.map((playlist) => {
-        if (playlist.id !== playlistId) {
-          return playlist;
+      items.map((item) => {
+        if (item.id !== playlistId) {
+          return item;
         }
 
         return {
-          ...playlist,
-          songIds: playlist.songIds.filter((id) => id !== songId)
+          ...item,
+          songIds: item.songIds.filter((id) => id !== songId)
         };
       })
     );
+
+    showNotice(
+      playlist && song
+        ? `Removed ${song.title} from ${playlist.name}.`
+        : "Removed song from playlist."
+    );
+  }
+
+  async function refreshDrive() {
+    setRefreshNotice("Refreshing Drive library...");
+
+    try {
+      await refetch();
+      setRefreshNotice("Drive library refreshed.");
+    } catch (refreshError) {
+      const message = refreshError instanceof Error ? refreshError.message : "Unknown refresh error.";
+      setRefreshNotice(`Refresh failed: ${message}`);
+    }
   }
 
   const viewTitle: Record<View, string> = {
+    dashboard: "Dashboard",
     library: "Library",
     search: "Search",
     favorites: "Favorites",
@@ -279,6 +341,77 @@ export function App() {
         ? queue
         : songs;
 
+  function changeView(view: View) {
+    setActiveView(view);
+    setNotice(`Opened ${viewTitle[view]}.`);
+  }
+
+  function renderActivePage() {
+    if (activeView === "dashboard") {
+      return (
+        <section aria-label="Dashboard">
+          <Dashboard
+            loading={loading}
+            songs={songs}
+            favorites={favoriteSongs}
+            recentlyPlayed={recentSongs}
+            onPlay={playSong}
+          />
+        </section>
+      );
+    }
+
+    if (activeView === "playlists") {
+      return (
+        <section aria-label="Playlists">
+          <PlaylistPanel
+            songs={songs}
+            playlists={playlists}
+            selectedPlaylistId={selectedPlaylistId}
+            favoriteIds={favoriteIds}
+            onSelectedPlaylistChange={setSelectedPlaylistId}
+            onCreatePlaylist={createPlaylist}
+            onDeletePlaylist={deletePlaylist}
+            onAddToPlaylist={addToPlaylist}
+            onRemoveFromPlaylist={removeFromPlaylist}
+            onPlay={playSong}
+            onQueue={queueSong}
+            onToggleFavorite={toggleFavorite}
+          />
+        </section>
+      );
+    }
+
+    return (
+      <section aria-label={viewTitle[activeView]}>
+        <SearchPanel
+          key={activeView}
+          pageKey={activeView}
+          title={viewTitle[activeView]}
+          songs={visibleSongs}
+          playlists={playlists}
+          selectedPlaylistId={selectedPlaylistId}
+          favoriteIds={favoriteIds}
+          emptyMessage={
+            activeView === "favorites"
+              ? "No favorite songs yet. Click Favorite on a song first."
+              : activeView === "recent"
+                ? "No recently played songs yet. Click Play on a song first."
+                : activeView === "queue"
+                  ? "Your queue is empty. Click Queue on songs first."
+                  : "No songs found."
+          }
+          onSelectedPlaylistChange={setSelectedPlaylistId}
+          onCreatePlaylist={createPlaylist}
+          onAddToPlaylist={addToPlaylist}
+          onPlay={playSong}
+          onQueue={queueSong}
+          onToggleFavorite={toggleFavorite}
+        />
+      </section>
+    );
+  }
+
   return (
     <main>
       <header>
@@ -286,29 +419,35 @@ export function App() {
         <p>Cloud-native music streaming platform</p>
 
         <nav aria-label="Primary">
-          <button type="button" onClick={() => setActiveView("library")} aria-pressed={activeView === "library"}>
+          <button type="button" onClick={() => changeView("dashboard")} aria-pressed={activeView === "dashboard"}>
+            <Activity aria-hidden="true" /> Dashboard
+          </button>
+          <button type="button" onClick={() => changeView("library")} aria-pressed={activeView === "library"}>
             <Library aria-hidden="true" /> Library
           </button>
-          <button type="button" onClick={() => setActiveView("search")} aria-pressed={activeView === "search"}>
+          <button type="button" onClick={() => changeView("search")} aria-pressed={activeView === "search"}>
             <Search aria-hidden="true" /> Search
           </button>
-          <button type="button" onClick={() => setActiveView("favorites")} aria-pressed={activeView === "favorites"}>
+          <button type="button" onClick={() => changeView("favorites")} aria-pressed={activeView === "favorites"}>
             <Heart aria-hidden="true" /> Favorites ({favoriteSongs.length})
           </button>
-          <button type="button" onClick={() => setActiveView("recent")} aria-pressed={activeView === "recent"}>
+          <button type="button" onClick={() => changeView("recent")} aria-pressed={activeView === "recent"}>
             <Clock aria-hidden="true" /> Recent ({recentSongs.length})
           </button>
-          <button type="button" onClick={() => setActiveView("queue")} aria-pressed={activeView === "queue"}>
+          <button type="button" onClick={() => changeView("queue")} aria-pressed={activeView === "queue"}>
             <ListMusic aria-hidden="true" /> Queue ({queue.length})
           </button>
-          <button type="button" onClick={() => setActiveView("playlists")} aria-pressed={activeView === "playlists"}>
+          <button type="button" onClick={() => changeView("playlists")} aria-pressed={activeView === "playlists"}>
             Playlists ({playlists.length})
           </button>
-          <button type="button" onClick={() => void refetch()}>
-            Refresh Drive
+          <button type="button" onClick={() => void refreshDrive()} disabled={loading}>
+            {loading ? "Refreshing..." : "Refresh Drive"}
           </button>
         </nav>
       </header>
+
+      {notice ? <p role="status">{notice}</p> : null}
+      {refreshNotice ? <p role="status">{refreshNotice}</p> : null}
 
       {error ? (
         <section role="alert">
@@ -328,65 +467,17 @@ export function App() {
           onActiveSongChange={(song) => {
             setActiveSong(song);
             rememberRecent(song);
+            showNotice(`Selected: ${song.title}`);
           }}
           onQueueRemove={removeFromQueue}
-          onQueueClear={() => setQueue([])}
+          onQueueClear={() => {
+            setQueue([]);
+            showNotice("Queue cleared.");
+          }}
         />
       </section>
 
-      <section aria-label="Dashboard">
-        <Dashboard
-          loading={loading}
-          songs={songs}
-          favorites={favoriteSongs}
-          recentlyPlayed={recentSongs}
-          onPlay={playSong}
-        />
-      </section>
-
-      {activeView === "playlists" ? (
-        <section aria-label="Playlists">
-          <PlaylistPanel
-            songs={songs}
-            playlists={playlists}
-            selectedPlaylistId={selectedPlaylistId}
-            favoriteIds={favoriteIds}
-            onSelectedPlaylistChange={setSelectedPlaylistId}
-            onCreatePlaylist={createPlaylist}
-            onDeletePlaylist={deletePlaylist}
-            onAddToPlaylist={addToPlaylist}
-            onRemoveFromPlaylist={removeFromPlaylist}
-            onPlay={playSong}
-            onQueue={queueSong}
-            onToggleFavorite={toggleFavorite}
-          />
-        </section>
-      ) : (
-        <section aria-label={viewTitle[activeView]}>
-          <SearchPanel
-            title={viewTitle[activeView]}
-            songs={visibleSongs}
-            playlists={playlists}
-            selectedPlaylistId={selectedPlaylistId}
-            favoriteIds={favoriteIds}
-            emptyMessage={
-              activeView === "favorites"
-                ? "No favorite songs yet."
-                : activeView === "recent"
-                  ? "No recently played songs yet."
-                  : activeView === "queue"
-                    ? "Your queue is empty."
-                    : "No songs found."
-            }
-            onSelectedPlaylistChange={setSelectedPlaylistId}
-            onCreatePlaylist={createPlaylist}
-            onAddToPlaylist={addToPlaylist}
-            onPlay={playSong}
-            onQueue={queueSong}
-            onToggleFavorite={toggleFavorite}
-          />
-        </section>
-      )}
+      {renderActivePage()}
     </main>
   );
 }
