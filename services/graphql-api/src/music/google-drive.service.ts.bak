@@ -25,11 +25,6 @@ type DriveListResponse = {
   nextPageToken?: string;
 };
 
-type ParsedSongName = {
-  artistName: string;
-  title: string;
-};
-
 export type DriveFolderDebug = {
   folderId: string;
   status: "ok" | "error";
@@ -72,21 +67,17 @@ export class GoogleDriveService {
   async listSongs(): Promise<Song[]> {
     const files = await this.listAllDriveMp3Files();
 
-    return files.map((file) => {
-      const parsed = this.parseSongName(file.name);
-
-      return {
-        id: `drive-${file.id}`,
-        title: parsed.title,
-        artistName: parsed.artistName,
-        albumTitle: file.sourceRootFolderId
-          ? `Drive Folder ${file.sourceRootFolderId}`
-          : "Public Drive Folder",
-        durationSeconds: 0,
-        streamUrl: `${this.publicApiOrigin}/drive/stream/${file.id}`,
-        genreNames: ["audio", "google-drive"]
-      };
-    });
+    return files.map((file) => ({
+      id: `drive-${file.id}`,
+      title: this.cleanTitle(file.name),
+      artistName: "Google Drive Library",
+      albumTitle: file.sourceRootFolderId
+        ? `Drive Folder ${file.sourceRootFolderId}`
+        : "Public Drive Folder",
+      durationSeconds: 0,
+      streamUrl: `${this.publicApiOrigin}/drive/stream/${file.id}`,
+      genreNames: ["mp3", "google-drive"]
+    }));
   }
 
   async listAllDriveMp3Files(): Promise<DriveFile[]> {
@@ -108,7 +99,7 @@ export class GoogleDriveService {
         });
 
         this.logger.log(
-          `Google Drive root ${folderId}: loaded ${files.length} audio file(s).`
+          `Google Drive root ${folderId}: loaded ${files.length} MP3 file(s).`
         );
 
         allFiles.push(...files);
@@ -123,7 +114,7 @@ export class GoogleDriveService {
     ).sort((a, b) => a.name.localeCompare(b.name));
 
     this.logger.log(
-      `Google Drive total: ${unique.length} unique audio file(s) from ${this.folderIds.length} root folder(s).`
+      `Google Drive total: ${unique.length} unique MP3 file(s) from ${this.folderIds.length} root folder(s).`
     );
 
     return unique;
@@ -135,7 +126,7 @@ export class GoogleDriveService {
     for (const folderId of this.folderIds) {
       try {
         const children = await this.listChildren(folderId);
-        const mp3Files = children.filter((file) => this.isAudioFile(file));
+        const mp3Files = children.filter((file) => this.isMp3File(file));
         const folders = children.filter((file) => file.mimeType === GOOGLE_FOLDER_MIME);
         const shortcuts = children.filter((file) => file.mimeType === GOOGLE_SHORTCUT_MIME);
 
@@ -179,7 +170,7 @@ export class GoogleDriveService {
     visitedFolders.add(folderId);
 
     const children = await this.listChildren(folderId);
-    const audioFiles: DriveFile[] = [];
+    const mp3Files: DriveFile[] = [];
 
     for (const child of children) {
       const effectiveId = child.shortcutDetails?.targetId ?? child.id;
@@ -192,7 +183,7 @@ export class GoogleDriveService {
           visitedFolders
         });
 
-        audioFiles.push(...nestedFiles);
+        mp3Files.push(...nestedFiles);
         continue;
       }
 
@@ -205,15 +196,15 @@ export class GoogleDriveService {
           sourceRootFolderId: rootFolderId
         };
 
-        if (this.isAudioFile(resolvedShortcut)) {
-          audioFiles.push(resolvedShortcut);
+        if (this.isMp3File(resolvedShortcut)) {
+          mp3Files.push(resolvedShortcut);
         }
 
         continue;
       }
 
-      if (this.isAudioFile(child)) {
-        audioFiles.push({
+      if (this.isMp3File(child)) {
+        mp3Files.push({
           ...child,
           parentFolderId: folderId,
           sourceRootFolderId: rootFolderId
@@ -221,7 +212,7 @@ export class GoogleDriveService {
       }
     }
 
-    return audioFiles;
+    return mp3Files;
   }
 
   private async listChildren(folderId: string): Promise<DriveFile[]> {
@@ -282,7 +273,7 @@ export class GoogleDriveService {
     return `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?${params.toString()}`;
   }
 
-  private isAudioFile(file: DriveFile): boolean {
+  private isMp3File(file: DriveFile): boolean {
     const name = (file.name ?? "").toLowerCase();
     const mimeType = (file.mimeType ?? "").toLowerCase();
 
@@ -316,43 +307,7 @@ export class GoogleDriveService {
     );
   }
 
-  private parseSongName(fileName: string): ParsedSongName {
-    const cleaned = this.cleanFileBaseName(fileName);
-
-    const parts = cleaned
-      .split(/\s+(?:-|–|—)\s+/)
-      .map((part) => part.trim())
-      .filter(Boolean);
-
-    if (parts.length >= 2) {
-      const artistName = this.cleanDisplayText(parts[0]) || "Unknown Artist";
-      const title = this.cleanDisplayText(parts.slice(1).join(" - ")) || cleaned;
-
-      return {
-        artistName,
-        title
-      };
-    }
-
-    return {
-      artistName: "Unknown Artist",
-      title: this.cleanDisplayText(cleaned) || "Untitled Track"
-    };
-  }
-
-  private cleanFileBaseName(name: string): string {
-    return name
-      .replace(/\.[^.]+$/, "")
-      .replace(/[_]+/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
-
-  private cleanDisplayText(value: string): string {
-    return value
-      .replace(/\[[A-Za-z0-9_-]{8,}\]$/g, "")
-      .replace(/\((official\s*)?(audio|video|lyrics?|visualizer|HD|HQ)\)$/i, "")
-      .replace(/\s+/g, " ")
-      .trim();
+  private cleanTitle(name: string): string {
+    return name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim();
   }
 }

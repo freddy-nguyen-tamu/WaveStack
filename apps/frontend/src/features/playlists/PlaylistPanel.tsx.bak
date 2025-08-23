@@ -1,7 +1,6 @@
 import { Heart, ListPlus, Play, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { ClientPlaylist, Song } from "../../App";
-import { formatSongDisplayName } from "../../song-format";
 
 type PlaylistPanelProps = {
   songs: Song[];
@@ -59,7 +58,7 @@ export function PlaylistPanel({
     }
 
     return songs.filter((song) =>
-      [song.title, song.artistName, song.albumTitle, formatSongDisplayName(song), ...song.genreNames]
+      [song.title, song.artistName, song.albumTitle, ...song.genreNames]
         .join(" ")
         .toLowerCase()
         .includes(needle)
@@ -105,7 +104,7 @@ export function PlaylistPanel({
 
   function add(song: Song) {
     onAddToPlaylist(selectedPlaylistId, song);
-    setMessage(`Playlist action sent for: ${formatSongDisplayName(song)}`);
+    setMessage(`Playlist action sent for: ${song.title}`);
   }
 
   function remove(song: Song) {
@@ -115,26 +114,22 @@ export function PlaylistPanel({
     }
 
     onRemoveFromPlaylist(selectedPlaylist.id, song.id);
-    setMessage(`Removed ${formatSongDisplayName(song)} from ${selectedPlaylist.name}.`);
+    setMessage(`Removed ${song.title} from ${selectedPlaylist.name}.`);
   }
 
   function play(song: Song) {
     onPlay(song);
-    setMessage(`Playing: ${formatSongDisplayName(song)}`);
+    setMessage(`Playing: ${song.title}`);
   }
 
   function queue(song: Song) {
     onQueue(song);
-    setMessage(`Queue action sent for: ${formatSongDisplayName(song)}`);
+    setMessage(`Queue action sent for: ${song.title}`);
   }
 
   function toggleFavorite(song: Song, isFavorite: boolean) {
     onToggleFavorite(song);
-    setMessage(
-      isFavorite
-        ? `Removed favorite: ${formatSongDisplayName(song)}`
-        : `Added favorite: ${formatSongDisplayName(song)}`
-    );
+    setMessage(isFavorite ? `Removed favorite: ${song.title}` : `Added favorite: ${song.title}`);
   }
 
   return (
@@ -188,7 +183,7 @@ export function PlaylistPanel({
                     <button type="button" onClick={() => remove(song)}>
                       <Trash2 aria-hidden="true" /> Remove
                     </button>
-                    <strong>{formatSongDisplayName(song)}</strong>
+                    <strong>{song.title}</strong> - {song.artistName}
                   </li>
                 );
               })}
@@ -239,7 +234,7 @@ export function PlaylistPanel({
               <button type="button" onClick={() => play(song)}>
                 <Play aria-hidden="true" /> Play
               </button>
-              {formatSongDisplayName(song)}
+              {song.title} - {song.artistName}
             </li>
           ))}
         </ul>

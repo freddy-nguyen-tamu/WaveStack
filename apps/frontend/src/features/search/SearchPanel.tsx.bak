@@ -1,7 +1,6 @@
 import { Heart, ListPlus, Play, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { ClientPlaylist, Song } from "../../App";
-import { formatSongDisplayName } from "../../song-format";
 
 type SearchPanelProps = {
   pageKey: string;
@@ -52,7 +51,6 @@ export function SearchPanel({
         song.title,
         song.artistName,
         song.albumTitle,
-        formatSongDisplayName(song),
         ...song.genreNames
       ].join(" ").toLowerCase();
 
@@ -88,26 +86,22 @@ export function SearchPanel({
 
   function play(song: Song) {
     onPlay(song);
-    setMessage(`Playing: ${formatSongDisplayName(song)}`);
+    setMessage(`Playing: ${song.title}`);
   }
 
   function queue(song: Song) {
     onQueue(song);
-    setMessage(`Queue action sent for: ${formatSongDisplayName(song)}`);
+    setMessage(`Queue action sent for: ${song.title}`);
   }
 
   function toggleFavorite(song: Song, isFavorite: boolean) {
     onToggleFavorite(song);
-    setMessage(
-      isFavorite
-        ? `Removed favorite: ${formatSongDisplayName(song)}`
-        : `Added favorite: ${formatSongDisplayName(song)}`
-    );
+    setMessage(isFavorite ? `Removed favorite: ${song.title}` : `Added favorite: ${song.title}`);
   }
 
   function add(song: Song) {
     onAddToPlaylist(selectedPlaylistId, song);
-    setMessage(`Playlist action sent for: ${formatSongDisplayName(song)}`);
+    setMessage(`Playlist action sent for: ${song.title}`);
   }
 
   return (
@@ -188,7 +182,7 @@ export function SearchPanel({
                   <ListPlus aria-hidden="true" /> Add to playlist
                 </button>
 
-                <strong>{formatSongDisplayName(song)}</strong> - {song.albumTitle}
+                <strong>{song.title}</strong> - {song.artistName} - {song.albumTitle}
               </li>
             );
           })}
