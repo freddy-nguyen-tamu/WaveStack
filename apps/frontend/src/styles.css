@@ -306,3 +306,87 @@ li {
     height: 13.5rem;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Fixed mini-player page-clearance fix                               */
+/* ------------------------------------------------------------------ */
+/*
+  The mini player is position: fixed, so it does not take up normal page
+  layout space. Reserve enough scrollable bottom space so the final card,
+  button, list item, or message can always scroll above the mini player.
+*/
+:root {
+  --mini-player-desktop-height: 6.25rem;
+  --mini-player-mobile-height: 13.5rem;
+  --mini-player-safe-gap: 2rem;
+  --page-bottom-clearance: calc(
+    var(--mini-player-desktop-height) +
+    var(--mini-player-safe-gap) +
+    env(safe-area-inset-bottom, 0px)
+  );
+}
+
+html {
+  scroll-padding-bottom: var(--page-bottom-clearance);
+}
+
+body {
+  min-height: 100dvh;
+}
+
+/*
+  Fallback behavior:
+  Always reserve the bottom clearance so browsers without :has() support
+  still never hide content behind the fixed mini player.
+*/
+main {
+  padding-bottom: var(--page-bottom-clearance);
+}
+
+/*
+  Modern behavior:
+  On browsers with :has(), only reserve the large bottom clearance after
+  the mini player exists. Before playback starts, keep the normal page
+  bottom spacing.
+*/
+@supports selector(body:has(.mini-player)) {
+  main {
+    padding-bottom: 2rem;
+  }
+
+  body:has(.mini-player) main {
+    padding-bottom: var(--page-bottom-clearance);
+  }
+}
+
+/*
+  The old spacer was rendered inside Player, before the active page content.
+  It can create a gap in the middle of the page while still failing to
+  protect the real page bottom. The document-level padding above replaces it.
+*/
+.bottom-player-spacer {
+  display: none;
+  height: 0;
+}
+
+/*
+  Keep the mini player above mobile safe areas. The page clearance already
+  accounts for this safe area, so the bottom content still remains visible.
+*/
+.mini-player {
+  padding-bottom: calc(0.9rem + env(safe-area-inset-bottom, 0px));
+}
+
+@media (max-width: 860px) {
+  :root {
+    --page-bottom-clearance: calc(
+      var(--mini-player-mobile-height) +
+      var(--mini-player-safe-gap) +
+      env(safe-area-inset-bottom, 0px)
+    );
+  }
+
+  html {
+    scroll-padding-bottom: var(--page-bottom-clearance);
+  }
+}

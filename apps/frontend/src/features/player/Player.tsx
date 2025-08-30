@@ -330,10 +330,7 @@ export function Player({
       </article>
 
       {hasPlaybackHistory ? (
-        <>
-          <div className="bottom-player-spacer" aria-hidden="true" />
-
-          <aside className="mini-player" aria-label="Now playing">
+        <aside className="mini-player" aria-label="Now playing">
             <div className="mini-player__track">
               <div className="mini-player__cover" aria-hidden="true">
                 {coverInitial}
@@ -400,8 +397,7 @@ export function Player({
                 aria-label="Volume"
               />
             </div>
-          </aside>
-        </>
+        </aside>
       ) : null}
     </>
   );
