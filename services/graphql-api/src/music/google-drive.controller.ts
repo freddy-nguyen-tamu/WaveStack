@@ -9,7 +9,10 @@ export class GoogleDriveController {
 
   @Get("debug")
   async debug() {
-    const folders = await this.googleDriveService.debugFolders();
+    const folderIds = this.googleDriveService.folderIds;
+    const folders = await Promise.all(
+      folderIds.map((id) => this.googleDriveService.getFolderDebug(id))
+    );
     const files = await this.googleDriveService.listAllDriveMp3Files();
 
     return {

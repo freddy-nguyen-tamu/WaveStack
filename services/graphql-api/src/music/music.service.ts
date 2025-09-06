@@ -27,7 +27,9 @@ export class MusicService {
         albumTitle: "Regions",
         durationSeconds: 213,
         streamUrl: this.signedUrlService.createSignedStreamUrl("tracks/song-1/master.m3u8"),
-        genreNames: ["electronic", "ambient"]
+        genreNames: ["electronic", "ambient"],
+        thumbnailUrl: "https://images.unsplash.com/photo-1493246507139-91e8fad9978e?auto=format&fit=crop&w=900&q=80",
+        lyrics: "Instrumental demo track."
       },
       {
         id: "song-2",
@@ -36,7 +38,9 @@ export class MusicService {
         albumTitle: "Async Hearts",
         durationSeconds: 188,
         streamUrl: this.signedUrlService.createSignedStreamUrl("tracks/song-2/master.m3u8"),
-        genreNames: ["indie", "pop"]
+        genreNames: ["indie", "pop"],
+        thumbnailUrl: "https://images.unsplash.com/photo-1511379938547-c1f69419868d?auto=format&fit=crop&w=900&q=80",
+        lyrics: "Demo lyrics placeholder."
       }
     ];
   }

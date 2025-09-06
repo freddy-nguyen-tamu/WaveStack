@@ -11,7 +11,7 @@ import {
   Volume2
 } from "lucide-react";
 import type { Song } from "../../App";
-import { formatSeconds, formatSongDisplayName } from "../../song-format";
+import { formatSeconds, formatSongDisplayName, hasThumbnail } from "../../song-format";
 
 type PlayerProps = {
   activeSong: Song;
@@ -244,7 +244,7 @@ export function Player({
   return (
     <>
       <article className="player-card">
-        <h2>{displayName}</h2>
+        <h2>{formatSongDisplayName(activeSong)}</h2>
         <p>{activeSong.albumTitle}</p>
 
         <audio
@@ -333,7 +333,11 @@ export function Player({
         <aside className="mini-player" aria-label="Now playing">
             <div className="mini-player__track">
               <div className="mini-player__cover" aria-hidden="true">
-                {coverInitial}
+                {hasThumbnail(activeSong) ? (
+                  <img src={activeSong.thumbnailUrl} alt="" />
+                ) : (
+                  coverInitial
+                )}
               </div>
 
               <div className="mini-player__meta">

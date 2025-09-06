@@ -15,6 +15,14 @@ export const MUSIC_HOME_QUERY = gql`
       durationSeconds
       streamUrl
       genreNames
+      score
+      thumbnailUrl
+      lyrics
+      webViewLink
+      mimeType
+      modifiedTime
+      sizeBytes
+      sourceRootFolderId
     }
     playlists {
       id
@@ -25,12 +33,35 @@ export const MUSIC_HOME_QUERY = gql`
       id
       title
       artistName
+      albumTitle
+      durationSeconds
+      streamUrl
+      genreNames
+      score
+      thumbnailUrl
+      lyrics
+      webViewLink
+      mimeType
+      modifiedTime
+      sizeBytes
+      sourceRootFolderId
     }
     recommendations {
       id
       title
       artistName
+      albumTitle
+      durationSeconds
+      streamUrl
+      genreNames
       score
+      thumbnailUrl
+      lyrics
+      webViewLink
+      mimeType
+      modifiedTime
+      sizeBytes
+      sourceRootFolderId
     }
   }
 `;

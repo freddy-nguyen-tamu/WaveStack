@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@apollo/client";
 import { Activity, Clock, Heart, Library, ListMusic, Search } from "lucide-react";
+import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { MUSIC_HOME_QUERY } from "./api";
 import { Player } from "./features/player/Player";
 import { PlaylistPanel } from "./features/playlists/PlaylistPanel";
 import { SearchPanel } from "./features/search/SearchPanel";
 import { Dashboard } from "./features/dashboard/Dashboard";
+import { formatSongDisplayName } from "./song-format";
 
 export type Song = {
   id: string;
@@ -16,6 +18,13 @@ export type Song = {
   streamUrl: string;
   genreNames: string[];
   score?: number;
+  thumbnailUrl?: string;
+  lyrics?: string;
+  webViewLink?: string;
+  mimeType?: string;
+  modifiedTime?: string;
+  sizeBytes?: number;
+  sourceRootFolderId?: string;
 };
 
 export type ClientPlaylist = {
@@ -23,8 +32,6 @@ export type ClientPlaylist = {
   name: string;
   songIds: string[];
 };
-
-type View = "dashboard" | "library" | "search" | "favorites" | "recent" | "queue" | "playlists";
 
 const fallbackSongs: Song[] = [
   {
@@ -34,7 +41,9 @@ const fallbackSongs: Song[] = [
     albumTitle: "Regions",
     durationSeconds: 213,
     streamUrl: "/demo/cloudline.mp3",
-    genreNames: ["electronic", "ambient"]
+    genreNames: ["electronic", "ambient"],
+    thumbnailUrl: "https://images.unsplash.com/photo-1493246507139-91e8fad9978e?auto=format&fit=crop&w=900&q=80",
+    lyrics: "Instrumental demo track."
   },
   {
     id: "demo-2",
@@ -43,7 +52,9 @@ const fallbackSongs: Song[] = [
     albumTitle: "Async Hearts",
     durationSeconds: 188,
     streamUrl: "/demo/packet-chorus.mp3",
-    genreNames: ["indie", "pop"]
+    genreNames: ["indie", "pop"],
+    thumbnailUrl: "https://images.unsplash.com/photo-1511379938547-c1f69419868d?auto=format&fit=crop&w=900&q=80",
+    lyrics: "Demo lyrics placeholder."
   }
 ];
 
@@ -70,7 +81,6 @@ function uniqueSongsById(songs: Song[]): Song[] {
 }
 
 export function App() {
-  const [activeView, setActiveView] = useState<View>("dashboard");
   const [activeSong, setActiveSong] = useState<Song | null>(null);
   const [queue, setQueue] = useState<Song[]>([]);
   const [playSignal, setPlaySignal] = useState(0);
@@ -90,9 +100,7 @@ export function App() {
     [data]
   );
 
-  const songById = useMemo(() => {
-    return new Map(songs.map((song) => [song.id, song]));
-  }, [songs]);
+  const songById = useMemo(() => new Map(songs.map((song) => [song.id, song])), [songs]);
 
   const favoriteSongs = useMemo(() => {
     return favoriteIds
@@ -163,6 +171,7 @@ export function App() {
   function playSong(song: Song) {
     setActiveSong(song);
     rememberRecent(song);
+
     setQueue((items) => {
       if (items.some((item) => item.id === song.id)) {
         return items;
@@ -170,24 +179,25 @@ export function App() {
 
       return [song, ...items];
     });
+
     setPlaySignal((value) => value + 1);
-    showNotice(`Now playing: ${song.title}`);
+    showNotice(`Now playing: ${formatSongDisplayName(song)}`);
   }
 
   function queueSong(song: Song) {
     if (queue.some((item) => item.id === song.id)) {
-      showNotice(`${song.title} is already in the queue.`);
+      showNotice(`${formatSongDisplayName(song)} is already in the queue.`);
       return;
     }
 
     setQueue((items) => [...items, song]);
-    showNotice(`Queued: ${song.title}`);
+    showNotice(`Queued: ${formatSongDisplayName(song)}`);
   }
 
   function removeFromQueue(songId: string) {
     const song = queue.find((item) => item.id === songId);
     setQueue((items) => items.filter((item) => item.id !== songId));
-    showNotice(song ? `Removed from queue: ${song.title}` : "Removed song from queue.");
+    showNotice(song ? `Removed from queue: ${formatSongDisplayName(song)}` : "Removed song from queue.");
   }
 
   function toggleFavorite(song: Song) {
@@ -201,7 +211,11 @@ export function App() {
       return [song.id, ...items];
     });
 
-    showNotice(isFavorite ? `Removed favorite: ${song.title}` : `Added favorite: ${song.title}`);
+    showNotice(
+      isFavorite
+        ? `Removed favorite: ${formatSongDisplayName(song)}`
+        : `Added favorite: ${formatSongDisplayName(song)}`
+    );
   }
 
   function createPlaylist(name: string) {
@@ -220,7 +234,6 @@ export function App() {
 
     setPlaylists((items) => [...items, playlist]);
     setSelectedPlaylistId(playlist.id);
-    setActiveView("playlists");
     showNotice(`Created playlist: ${playlist.name}`);
   }
 
@@ -254,8 +267,7 @@ export function App() {
 
       setPlaylists((items) => [...items, playlist]);
       setSelectedPlaylistId(playlist.id);
-      setActiveView("playlists");
-      showNotice(`Created ${playlist.name} and added ${song.title}.`);
+      showNotice(`Created ${playlist.name} and added ${formatSongDisplayName(song)}.`);
       return;
     }
 
@@ -267,7 +279,7 @@ export function App() {
     }
 
     if (playlist.songIds.includes(song.id)) {
-      showNotice(`${song.title} is already in ${playlist.name}.`);
+      showNotice(`${formatSongDisplayName(song)} is already in ${playlist.name}.`);
       return;
     }
 
@@ -284,7 +296,7 @@ export function App() {
       })
     );
 
-    showNotice(`Added ${song.title} to ${playlist.name}.`);
+    showNotice(`Added ${formatSongDisplayName(song)} to ${playlist.name}.`);
   }
 
   function removeFromPlaylist(playlistId: string, songId: string) {
@@ -306,7 +318,7 @@ export function App() {
 
     showNotice(
       playlist && song
-        ? `Removed ${song.title} from ${playlist.name}.`
+        ? `Removed ${formatSongDisplayName(song)} from ${playlist.name}.`
         : "Removed song from playlist."
     );
   }
@@ -323,84 +335,18 @@ export function App() {
     }
   }
 
-  const viewTitle: Record<View, string> = {
-    dashboard: "Dashboard",
-    library: "Library",
-    search: "Search",
-    favorites: "Favorites",
-    recent: "Recently Played",
-    queue: "Queue",
-    playlists: "Playlists"
-  };
-
-  const visibleSongs = activeView === "favorites"
-    ? favoriteSongs
-    : activeView === "recent"
-      ? recentSongs
-      : activeView === "queue"
-        ? queue
-        : songs;
-
-  function changeView(view: View) {
-    setActiveView(view);
-    setNotice(`Opened ${viewTitle[view]}.`);
-  }
-
-  function renderActivePage() {
-    if (activeView === "dashboard") {
-      return (
-        <section aria-label="Dashboard">
-          <Dashboard
-            loading={loading}
-            songs={songs}
-            favorites={favoriteSongs}
-            recentlyPlayed={recentSongs}
-            onPlay={playSong}
-          />
-        </section>
-      );
-    }
-
-    if (activeView === "playlists") {
-      return (
-        <section aria-label="Playlists">
-          <PlaylistPanel
-            songs={songs}
-            playlists={playlists}
-            selectedPlaylistId={selectedPlaylistId}
-            favoriteIds={favoriteIds}
-            onSelectedPlaylistChange={setSelectedPlaylistId}
-            onCreatePlaylist={createPlaylist}
-            onDeletePlaylist={deletePlaylist}
-            onAddToPlaylist={addToPlaylist}
-            onRemoveFromPlaylist={removeFromPlaylist}
-            onPlay={playSong}
-            onQueue={queueSong}
-            onToggleFavorite={toggleFavorite}
-          />
-        </section>
-      );
-    }
-
+  function renderSongsPage(title: string, pageSongs: Song[], emptyMessage: string) {
     return (
-      <section aria-label={viewTitle[activeView]}>
+      <section aria-label={title}>
         <SearchPanel
-          key={activeView}
-          pageKey={activeView}
-          title={viewTitle[activeView]}
-          songs={visibleSongs}
+          key={title}
+          pageKey={title}
+          title={title}
+          songs={pageSongs}
           playlists={playlists}
           selectedPlaylistId={selectedPlaylistId}
           favoriteIds={favoriteIds}
-          emptyMessage={
-            activeView === "favorites"
-              ? "No favorite songs yet. Click Favorite on a song first."
-              : activeView === "recent"
-                ? "No recently played songs yet. Click Play on a song first."
-                : activeView === "queue"
-                  ? "Your queue is empty. Click Queue on songs first."
-                  : "No songs found."
-          }
+          emptyMessage={emptyMessage}
           onSelectedPlaylistChange={setSelectedPlaylistId}
           onCreatePlaylist={createPlaylist}
           onAddToPlaylist={addToPlaylist}
@@ -419,27 +365,27 @@ export function App() {
         <p>Cloud-native music streaming platform</p>
 
         <nav aria-label="Primary">
-          <button type="button" onClick={() => changeView("dashboard")} aria-pressed={activeView === "dashboard"}>
+          <NavLink to="/dashboard">
             <Activity aria-hidden="true" /> Dashboard
-          </button>
-          <button type="button" onClick={() => changeView("library")} aria-pressed={activeView === "library"}>
+          </NavLink>
+          <NavLink to="/library">
             <Library aria-hidden="true" /> Library
-          </button>
-          <button type="button" onClick={() => changeView("search")} aria-pressed={activeView === "search"}>
+          </NavLink>
+          <NavLink to="/search">
             <Search aria-hidden="true" /> Search
-          </button>
-          <button type="button" onClick={() => changeView("favorites")} aria-pressed={activeView === "favorites"}>
+          </NavLink>
+          <NavLink to="/favorites">
             <Heart aria-hidden="true" /> Favorites ({favoriteSongs.length})
-          </button>
-          <button type="button" onClick={() => changeView("recent")} aria-pressed={activeView === "recent"}>
+          </NavLink>
+          <NavLink to="/recent">
             <Clock aria-hidden="true" /> Recent ({recentSongs.length})
-          </button>
-          <button type="button" onClick={() => changeView("queue")} aria-pressed={activeView === "queue"}>
+          </NavLink>
+          <NavLink to="/queue">
             <ListMusic aria-hidden="true" /> Queue ({queue.length})
-          </button>
-          <button type="button" onClick={() => changeView("playlists")} aria-pressed={activeView === "playlists"}>
+          </NavLink>
+          <NavLink to="/playlists">
             Playlists ({playlists.length})
-          </button>
+          </NavLink>
           <button type="button" onClick={() => void refreshDrive()} disabled={loading}>
             {loading ? "Refreshing..." : "Refresh Drive"}
           </button>
@@ -467,7 +413,7 @@ export function App() {
           onActiveSongChange={(song) => {
             setActiveSong(song);
             rememberRecent(song);
-            showNotice(`Selected: ${song.title}`);
+            showNotice(`Selected: ${formatSongDisplayName(song)}`);
           }}
           onQueueRemove={removeFromQueue}
           onQueueClear={() => {
@@ -477,7 +423,67 @@ export function App() {
         />
       </section>
 
-      {renderActivePage()}
+      <Routes>
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route
+          path="/dashboard"
+          element={
+            <section aria-label="Dashboard">
+              <Dashboard
+                loading={loading}
+                songs={songs}
+                favorites={favoriteSongs}
+                recentlyPlayed={recentSongs}
+                onPlay={playSong}
+              />
+            </section>
+          }
+        />
+        <Route
+          path="/library"
+          element={renderSongsPage("Library", songs, "No songs found.")}
+        />
+        <Route
+          path="/search"
+          element={renderSongsPage("Search", songs, "No songs found.")}
+        />
+        <Route
+          path="/favorites"
+          element={renderSongsPage("Favorites", favoriteSongs, "No favorite songs yet. Click Favorite on a song first.")}
+        />
+        <Route
+          path="/recent"
+          element={renderSongsPage("Recently Played", recentSongs, "No recently played songs yet. Click Play on a song first.")}
+        />
+        <Route
+          path="/queue"
+          element={renderSongsPage("Queue", queue, "Your queue is empty. Click Queue on songs first.")}
+        />
+        <Route
+          path="/playlists"
+          element={
+            <section aria-label="Playlists">
+              <PlaylistPanel
+                songs={songs}
+                playlists={playlists}
+                selectedPlaylistId={selectedPlaylistId}
+                favoriteIds={favoriteIds}
+                onSelectedPlaylistChange={setSelectedPlaylistId}
+                onCreatePlaylist={createPlaylist}
+                onDeletePlaylist={deletePlaylist}
+                onAddToPlaylist={addToPlaylist}
+                onRemoveFromPlaylist={removeFromPlaylist}
+                onPlay={playSong}
+                onQueue={queueSong}
+                onToggleFavorite={toggleFavorite}
+              />
+            </section>
+          }
+        />
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      </Routes>
+
+      <div className="bottom-player-spacer" aria-hidden="true" />
     </main>
   );
 }

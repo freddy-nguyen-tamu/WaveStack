@@ -25,6 +25,27 @@ export class Song {
 
   @Field(() => Float, { nullable: true })
   score?: number;
+
+  @Field({ nullable: true })
+  thumbnailUrl?: string;
+
+  @Field({ nullable: true })
+  lyrics?: string;
+
+  @Field({ nullable: true })
+  webViewLink?: string;
+
+  @Field({ nullable: true })
+  mimeType?: string;
+
+  @Field({ nullable: true })
+  modifiedTime?: string;
+
+  @Field(() => Int, { nullable: true })
+  sizeBytes?: number;
+
+  @Field({ nullable: true })
+  sourceRootFolderId?: string;
 }
 
 @ObjectType()

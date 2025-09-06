@@ -7,7 +7,7 @@ type DriveShortcutDetails = {
   targetMimeType?: string;
 };
 
-type DriveFile = {
+export type DriveFile = {
   id: string;
   name: string;
   mimeType?: string;
@@ -15,6 +15,10 @@ type DriveFile = {
   modifiedTime?: string;
   resourceKey?: string;
   webViewLink?: string;
+  thumbnailLink?: string;
+  description?: string;
+  properties?: Record<string, string>;
+  appProperties?: Record<string, string>;
   shortcutDetails?: DriveShortcutDetails;
   parentFolderId?: string;
   sourceRootFolderId?: string;
@@ -54,7 +58,7 @@ export class GoogleDriveService {
     return this.config.get<string>("GOOGLE_DRIVE_API_KEY") ?? "";
   }
 
-  private get folderIds(): string[] {
+  get folderIds(): string[] {
     return Array.from(
       new Set(
         (this.config.get<string>("GOOGLE_DRIVE_FOLDER_IDS") ?? "")
@@ -74,17 +78,50 @@ export class GoogleDriveService {
 
     return files.map((file) => {
       const parsed = this.parseSongName(file.name);
+      const properties = {
+        ...(file.properties ?? {}),
+        ...(file.appProperties ?? {})
+      };
+
+      const thumbnailUrl =
+        this.cleanOptional(properties.thumbnailUrl) ??
+        this.cleanOptional(properties.thumbnail) ??
+        this.cleanOptional(properties.coverUrl) ??
+        this.cleanOptional(properties.cover) ??
+        this.cleanOptional(file.thumbnailLink);
+
+      const lyrics =
+        this.cleanOptional(properties.lyrics) ??
+        this.cleanOptional(properties.Lyrics) ??
+        this.cleanOptional(file.description) ??
+        "";
+
+      const durationSeconds = Number(properties.durationSeconds ?? properties.duration ?? 0);
 
       return {
         id: `drive-${file.id}`,
-        title: parsed.title,
-        artistName: parsed.artistName,
-        albumTitle: file.sourceRootFolderId
-          ? `Drive Folder ${file.sourceRootFolderId}`
-          : "Public Drive Folder",
-        durationSeconds: 0,
+        title: this.cleanOptional(properties.title) ?? parsed.title,
+        artistName:
+          this.cleanOptional(properties.artistName) ??
+          this.cleanOptional(properties.artist) ??
+          this.cleanOptional(properties.authorName) ??
+          this.cleanOptional(properties.author) ??
+          parsed.artistName,
+        albumTitle: this.cleanOptional(properties.albumTitle)
+          ?? this.cleanOptional(properties.album)
+          ?? (file.sourceRootFolderId
+            ? `Drive Folder ${file.sourceRootFolderId}`
+            : "Public Drive Folder"),
+        durationSeconds: Number.isFinite(durationSeconds) ? durationSeconds : 0,
         streamUrl: `${this.publicApiOrigin}/drive/stream/${file.id}`,
-        genreNames: ["audio", "google-drive"]
+        genreNames: this.parseGenres(properties.genreNames ?? properties.genres),
+        thumbnailUrl,
+        lyrics,
+        webViewLink: file.webViewLink,
+        mimeType: file.mimeType,
+        modifiedTime: file.modifiedTime,
+        sizeBytes: file.size ? Number(file.size) : undefined,
+        sourceRootFolderId: file.sourceRootFolderId
       };
     });
   }
@@ -107,10 +144,7 @@ export class GoogleDriveService {
           visitedFolders
         });
 
-        this.logger.log(
-          `Google Drive root ${folderId}: loaded ${files.length} audio file(s).`
-        );
-
+        this.logger.log(`Google Drive root ${folderId}: loaded ${files.length} audio file(s).`);
         allFiles.push(...files);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -118,113 +152,88 @@ export class GoogleDriveService {
       }
     }
 
-    const unique = Array.from(
-      new Map(allFiles.map((file) => [file.id, file])).values()
-    ).sort((a, b) => a.name.localeCompare(b.name));
-
-    this.logger.log(
-      `Google Drive total: ${unique.length} unique audio file(s) from ${this.folderIds.length} root folder(s).`
-    );
-
-    return unique;
+    return allFiles;
   }
 
-  async debugFolders(): Promise<DriveFolderDebug[]> {
-    const results: DriveFolderDebug[] = [];
+  async getFolderDebug(folderId: string): Promise<DriveFolderDebug> {
+    try {
+      const children = await this.listFolderChildren(folderId);
+      const mp3Files = children.filter((file) => this.isAudioFile(file));
+      const folders = children.filter((file) => file.mimeType === GOOGLE_FOLDER_MIME);
+      const shortcuts = children.filter((file) => file.mimeType === GOOGLE_SHORTCUT_MIME);
 
-    for (const folderId of this.folderIds) {
-      try {
-        const children = await this.listChildren(folderId);
-        const mp3Files = children.filter((file) => this.isAudioFile(file));
-        const folders = children.filter((file) => file.mimeType === GOOGLE_FOLDER_MIME);
-        const shortcuts = children.filter((file) => file.mimeType === GOOGLE_SHORTCUT_MIME);
-
-        results.push({
-          folderId,
-          status: "ok",
-          childCount: children.length,
-          mp3Count: mp3Files.length,
-          folderCount: folders.length,
-          shortcutCount: shortcuts.length,
-          sampleNames: children.slice(0, 20).map((file) => `${file.name} | ${file.mimeType ?? "unknown"}`)
-        });
-      } catch (error) {
-        results.push({
-          folderId,
-          status: "error",
-          childCount: 0,
-          mp3Count: 0,
-          folderCount: 0,
-          shortcutCount: 0,
-          error: error instanceof Error ? error.message : String(error),
-          sampleNames: []
-        });
-      }
+      return {
+        folderId,
+        status: "ok",
+        childCount: children.length,
+        mp3Count: mp3Files.length,
+        folderCount: folders.length,
+        shortcutCount: shortcuts.length,
+        sampleNames: children.slice(0, 20).map((file) => file.name)
+      };
+    } catch (error) {
+      return {
+        folderId,
+        status: "error",
+        childCount: 0,
+        mp3Count: 0,
+        folderCount: 0,
+        shortcutCount: 0,
+        error: error instanceof Error ? error.message : String(error),
+        sampleNames: []
+      };
     }
-
-    return results;
   }
 
-  private async listMp3FilesInFolderRecursive(input: {
+  private async listMp3FilesInFolderRecursive({
+    rootFolderId,
+    folderId,
+    visitedFolders
+  }: {
     rootFolderId: string;
     folderId: string;
     visitedFolders: Set<string>;
   }): Promise<DriveFile[]> {
-    const { rootFolderId, folderId, visitedFolders } = input;
-
     if (visitedFolders.has(folderId)) {
       return [];
     }
 
     visitedFolders.add(folderId);
 
-    const children = await this.listChildren(folderId);
+    const children = await this.listFolderChildren(folderId);
     const audioFiles: DriveFile[] = [];
 
     for (const child of children) {
-      const effectiveId = child.shortcutDetails?.targetId ?? child.id;
-      const effectiveMimeType = child.shortcutDetails?.targetMimeType ?? child.mimeType;
-
-      if (effectiveMimeType === GOOGLE_FOLDER_MIME || child.mimeType === GOOGLE_FOLDER_MIME) {
-        const nestedFiles = await this.listMp3FilesInFolderRecursive({
-          rootFolderId,
-          folderId: effectiveId,
-          visitedFolders
-        });
-
-        audioFiles.push(...nestedFiles);
-        continue;
-      }
-
-      if (child.mimeType === GOOGLE_SHORTCUT_MIME && child.shortcutDetails?.targetId) {
-        const resolvedShortcut: DriveFile = {
-          ...child,
-          id: effectiveId,
-          mimeType: effectiveMimeType,
-          parentFolderId: folderId,
-          sourceRootFolderId: rootFolderId
-        };
-
-        if (this.isAudioFile(resolvedShortcut)) {
-          audioFiles.push(resolvedShortcut);
-        }
-
-        continue;
-      }
-
       if (this.isAudioFile(child)) {
         audioFiles.push({
           ...child,
-          parentFolderId: folderId,
-          sourceRootFolderId: rootFolderId
+          sourceRootFolderId: rootFolderId,
+          parentFolderId: folderId
         });
+        continue;
+      }
+
+      const targetFolderId =
+        child.mimeType === GOOGLE_SHORTCUT_MIME &&
+        child.shortcutDetails?.targetMimeType === GOOGLE_FOLDER_MIME
+          ? child.shortcutDetails.targetId
+          : undefined;
+
+      if (child.mimeType === GOOGLE_FOLDER_MIME || targetFolderId) {
+        const nestedFolderId = targetFolderId ?? child.id;
+        const nested = await this.listMp3FilesInFolderRecursive({
+          rootFolderId,
+          folderId: nestedFolderId,
+          visitedFolders
+        });
+        audioFiles.push(...nested);
       }
     }
 
     return audioFiles;
   }
 
-  private async listChildren(folderId: string): Promise<DriveFile[]> {
+  private async listFolderChildren(folderId: string): Promise<DriveFile[]> {
     const files: DriveFile[] = [];
     let pageToken: string | undefined;
 
@@ -232,23 +241,9 @@ export class GoogleDriveService {
       const params = new URLSearchParams({
         key: this.apiKey,
         q: `'${folderId}' in parents and trashed = false`,
-        fields: [
-          "nextPageToken",
-          "files(" +
-            [
-              "id",
-              "name",
-              "mimeType",
-              "size",
-              "modifiedTime",
-              "resourceKey",
-              "webViewLink",
-              "shortcutDetails(targetId,targetMimeType)"
-            ].join(",") +
-            ")"
-        ].join(","),
+        fields:
+          "nextPageToken,files(id,name,mimeType,size,modifiedTime,resourceKey,webViewLink,thumbnailLink,description,properties,appProperties,shortcutDetails)",
         pageSize: "1000",
-        orderBy: "folder,name_natural",
         supportsAllDrives: "true",
         includeItemsFromAllDrives: "true"
       });
@@ -257,12 +252,10 @@ export class GoogleDriveService {
         params.set("pageToken", pageToken);
       }
 
-      const url = `https://www.googleapis.com/drive/v3/files?${params.toString()}`;
-      const response = await fetch(url);
+      const response = await fetch(`https://www.googleapis.com/drive/v3/files?${params.toString()}`);
 
       if (!response.ok) {
-        const body = await response.text();
-        throw new Error(`folder ${folderId} list failed: ${response.status} ${body}`);
+        throw new Error(`Google Drive list failed with ${response.status}`);
       }
 
       const payload = (await response.json()) as DriveListResponse;
@@ -325,12 +318,9 @@ export class GoogleDriveService {
       .filter(Boolean);
 
     if (parts.length >= 2) {
-      const artistName = this.cleanDisplayText(parts[0]) || "Unknown Artist";
-      const title = this.cleanDisplayText(parts.slice(1).join(" - ")) || cleaned;
-
       return {
-        artistName,
-        title
+        artistName: this.cleanDisplayText(parts[0]) || "Unknown Artist",
+        title: this.cleanDisplayText(parts.slice(1).join(" - ")) || cleaned
       };
     }
 
@@ -338,6 +328,15 @@ export class GoogleDriveService {
       artistName: "Unknown Artist",
       title: this.cleanDisplayText(cleaned) || "Untitled Track"
     };
+  }
+
+  private parseGenres(value: string | undefined): string[] {
+    const parsed = this.cleanOptional(value)
+      ?.split(/[,\n|]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    return parsed?.length ? parsed : ["audio", "google-drive"];
   }
 
   private cleanFileBaseName(name: string): string {
@@ -354,5 +353,10 @@ export class GoogleDriveService {
       .replace(/\((official\s*)?(audio|video|lyrics?|visualizer|HD|HQ)\)$/i, "")
       .replace(/\s+/g, " ")
       .trim();
+  }
+
+  private cleanOptional(value: string | undefined): string | undefined {
+    const cleaned = String(value ?? "").trim();
+    return cleaned ? cleaned : undefined;
   }
 }
