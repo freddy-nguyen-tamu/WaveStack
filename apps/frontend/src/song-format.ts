@@ -40,22 +40,41 @@ export function hasThumbnail(song: Pick<Song, "thumbnailUrl">): boolean {
   return Boolean(song.thumbnailUrl?.trim());
 }
 
-export function getSongCardSize(song: Pick<Song, "durationSeconds">, index: number): "small" | "medium" | "large" | "wide" {
-  const duration = song.durationSeconds || 0;
+/*
+  Stronger duration weighting for dashboard cards.
 
-  if (duration >= 420) {
-    return "large";
+  The old logic only returned four broad classes, so a 3-minute song and a
+  6-minute song often looked too similar. This returns a continuous rem height.
+
+  The exponent makes long songs visually much larger:
+  - shortest songs stay near 12rem
+  - median songs land around 18rem-22rem
+  - long songs can reach 34rem
+*/
+export function getSongCardHeightRem(
+  song: Pick<Song, "durationSeconds">,
+  allSongs: Array<Pick<Song, "durationSeconds">>
+): number {
+  const duration = Math.max(1, song.durationSeconds || 0);
+  const durations = allSongs
+    .map((item) => item.durationSeconds || 0)
+    .filter((value) => Number.isFinite(value) && value > 0);
+
+  if (!durations.length) {
+    return 16;
   }
 
-  if (duration >= 300) {
-    return index % 3 === 0 ? "wide" : "large";
+  const minDuration = Math.min(...durations);
+  const maxDuration = Math.max(...durations);
+
+  if (maxDuration <= minDuration) {
+    return 18;
   }
 
-  if (duration >= 180) {
-    return "medium";
-  }
+  const normalized = (duration - minDuration) / (maxDuration - minDuration);
+  const weighted = Math.pow(Math.max(0, Math.min(1, normalized)), 1.55);
 
-  return index % 4 === 0 ? "wide" : "small";
+  return Math.round((12 + weighted * 22) * 10) / 10;
 }
 
 function normalizeLabelPart(value: string | null | undefined, fallback: string): string {

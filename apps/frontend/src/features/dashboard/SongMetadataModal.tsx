@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { useEffect } from "react";
+import { createPortal } from "react-dom";
 import type { Song } from "../../App";
 import { formatBytes, formatSeconds, formatSongDisplayName, hasThumbnail } from "../../song-format";
 
@@ -51,7 +52,7 @@ export function SongMetadataModal({ song, onClose, onPlay }: SongMetadataModalPr
     ["Source root folder", song.sourceRootFolderId || "Unknown"]
   ];
 
-  return (
+  return createPortal(
     <div className="song-modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section
         className="song-modal"
@@ -76,6 +77,7 @@ export function SongMetadataModal({ song, onClose, onPlay }: SongMetadataModalPr
 
         <div className="song-modal__content">
           <p className="eyebrow">Song metadata</p>
+
           <h2 id="song-modal-title">{song.title}</h2>
           <h3>{song.artistName}</h3>
 
@@ -101,6 +103,7 @@ export function SongMetadataModal({ song, onClose, onPlay }: SongMetadataModalPr
           </section>
         </div>
       </section>
-    </div>
+    </div>,
+    document.body
   );
 }

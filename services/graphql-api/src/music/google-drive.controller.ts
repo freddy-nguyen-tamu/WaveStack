@@ -24,9 +24,42 @@ export class GoogleDriveController {
         name: file.name,
         mimeType: file.mimeType,
         sourceRootFolderId: file.sourceRootFolderId,
-        parentFolderId: file.parentFolderId
+        parentFolderId: file.parentFolderId,
+        thumbnailFileId: file.thumbnailFileId,
+        thumbnailUrl: file.thumbnailFileId
+          ? this.googleDriveService.getProxiedThumbnailUrl(file.thumbnailFileId)
+          : null
       }))
     };
+  }
+
+  @Get("thumbnail/:fileId")
+  async thumbnail(@Param("fileId") fileId: string, @Res() response: Response) {
+    const upstream = await fetch(this.googleDriveService.getMediaUrl(fileId));
+
+    const contentType = upstream.headers.get("content-type") ?? "image/jpeg";
+    const contentLength = upstream.headers.get("content-length");
+
+    response.status(upstream.status);
+    response.setHeader("Content-Type", contentType);
+    response.setHeader("Cache-Control", "public, max-age=86400");
+
+    if (contentLength) {
+      response.setHeader("Content-Length", contentLength);
+    }
+
+    if (!upstream.ok) {
+      const body = await upstream.text();
+      response.send(body);
+      return;
+    }
+
+    if (!upstream.body) {
+      response.end();
+      return;
+    }
+
+    Readable.fromWeb(upstream.body as any).pipe(response);
   }
 
   @Get("stream/:fileId")
