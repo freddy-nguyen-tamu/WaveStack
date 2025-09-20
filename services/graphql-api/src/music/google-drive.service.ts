@@ -7,7 +7,13 @@ type DriveShortcutDetails = {
   targetMimeType?: string;
 };
 
-export type DriveFile = {
+type DriveMediaMetadata = {
+  durationMillis?: string;
+  width?: number;
+  height?: number;
+};
+
+type DriveFile = {
   id: string;
   name: string;
   mimeType?: string;
@@ -16,13 +22,13 @@ export type DriveFile = {
   resourceKey?: string;
   webViewLink?: string;
   thumbnailLink?: string;
-  description?: string;
   properties?: Record<string, string>;
   appProperties?: Record<string, string>;
+  imageMediaMetadata?: DriveMediaMetadata;
+  videoMediaMetadata?: DriveMediaMetadata;
   shortcutDetails?: DriveShortcutDetails;
   parentFolderId?: string;
   sourceRootFolderId?: string;
-  thumbnailFileId?: string;
 };
 
 type DriveListResponse = {
@@ -40,7 +46,6 @@ export type DriveFolderDebug = {
   status: "ok" | "error";
   childCount: number;
   mp3Count: number;
-  imageCount: number;
   folderCount: number;
   shortcutCount: number;
   error?: string;
@@ -50,9 +55,20 @@ export type DriveFolderDebug = {
 const GOOGLE_FOLDER_MIME = "application/vnd.google-apps.folder";
 const GOOGLE_SHORTCUT_MIME = "application/vnd.google-apps.shortcut";
 
+const COVER_FILE_NAMES = new Set([
+  "cover",
+  "folder",
+  "album",
+  "artwork",
+  "thumbnail",
+  "thumb",
+  "front"
+]);
+
 @Injectable()
 export class GoogleDriveService {
   private readonly logger = new Logger(GoogleDriveService.name);
+  private readonly imageById = new Map<string, DriveFile>();
 
   constructor(private readonly config: ConfigService) {}
 
@@ -76,34 +92,44 @@ export class GoogleDriveService {
   }
 
   async listSongs(): Promise<Song[]> {
-    const files = await this.listAllDriveMp3Files();
+    const files = await this.listAllDriveMediaFiles();
+    const audioFiles = files.filter((file) => this.isAudioFile(file));
+    const imageFiles = files.filter((file) => this.isImageFile(file));
 
-    return files.map((file) => {
+    this.imageById.clear();
+    imageFiles.forEach((file) => this.imageById.set(file.id, file));
+
+    const imageByFolder = this.groupImagesByFolder(imageFiles);
+
+    return audioFiles.map((file) => {
       const parsed = this.parseSongName(file.name);
       const properties = {
         ...(file.properties ?? {}),
         ...(file.appProperties ?? {})
       };
 
-      const thumbnailFileId =
-        this.cleanOptional(properties.thumbnailFileId) ??
-        this.cleanOptional(properties.coverFileId) ??
-        file.thumbnailFileId;
+      const explicitThumbnail =
+        this.cleanOptional(properties.thumbnailUrl) ??
+        this.cleanOptional(properties.thumbnail) ??
+        this.cleanOptional(properties.coverUrl) ??
+        this.cleanOptional(properties.cover) ??
+        this.cleanOptional(properties.imageUrl) ??
+        this.cleanOptional(properties.artworkUrl) ??
+        this.cleanOptional(file.thumbnailLink);
 
-      const thumbnailUrl =
-        this.toRenderableThumbnailUrl(this.cleanOptional(properties.thumbnailUrl)) ??
-        this.toRenderableThumbnailUrl(this.cleanOptional(properties.thumbnail)) ??
-        this.toRenderableThumbnailUrl(this.cleanOptional(properties.coverUrl)) ??
-        this.toRenderableThumbnailUrl(this.cleanOptional(properties.cover)) ??
-        (thumbnailFileId ? this.getProxiedThumbnailUrl(thumbnailFileId) : undefined);
+      const matchedCoverFile = this.findBestCoverImage(file, imageByFolder);
+
+      const thumbnailUrl = explicitThumbnail ??
+        (matchedCoverFile ? `${this.publicApiOrigin}/drive/thumbnail/${matchedCoverFile.id}` : undefined);
 
       const lyrics =
         this.cleanOptional(properties.lyrics) ??
         this.cleanOptional(properties.Lyrics) ??
-        this.cleanOptional(file.description) ??
+        this.cleanOptional(properties.description) ??
         "";
 
-      const durationSeconds = Number(properties.durationSeconds ?? properties.duration ?? 0);
+      const durationSeconds = this.getDurationSeconds(file, properties);
+      const sizeBytes = this.parseSizeBytes(file.size);
 
       return {
         id: `drive-${file.id}`,
@@ -117,10 +143,8 @@ export class GoogleDriveService {
         albumTitle:
           this.cleanOptional(properties.albumTitle) ??
           this.cleanOptional(properties.album) ??
-          (file.sourceRootFolderId
-            ? `Drive Folder ${file.sourceRootFolderId}`
-            : "Public Drive Folder"),
-        durationSeconds: Number.isFinite(durationSeconds) ? durationSeconds : 0,
+          (file.sourceRootFolderId ? `Drive Folder ${file.sourceRootFolderId}` : "Public Drive Folder"),
+        durationSeconds,
         streamUrl: `${this.publicApiOrigin}/drive/stream/${file.id}`,
         genreNames: this.parseGenres(properties.genreNames ?? properties.genres),
         thumbnailUrl,
@@ -128,13 +152,13 @@ export class GoogleDriveService {
         webViewLink: file.webViewLink,
         mimeType: file.mimeType,
         modifiedTime: file.modifiedTime,
-        sizeBytes: file.size ? Number(file.size) : undefined,
+        sizeBytes,
         sourceRootFolderId: file.sourceRootFolderId
       };
     });
   }
 
-  async listAllDriveMp3Files(): Promise<DriveFile[]> {
+  async listAllDriveMediaFiles(): Promise<DriveFile[]> {
     if (!this.apiKey || !this.folderIds.length) {
       this.logger.warn("Google Drive is not configured. Returning no Drive songs.");
       return [];
@@ -146,13 +170,16 @@ export class GoogleDriveService {
       const visitedFolders = new Set<string>();
 
       try {
-        const files = await this.listAudioFilesInFolderRecursive({
+        const files = await this.listMediaFilesInFolderRecursive({
           rootFolderId: folderId,
           folderId,
           visitedFolders
         });
 
-        this.logger.log(`Google Drive root ${folderId}: loaded ${files.length} audio file(s).`);
+        this.logger.log(
+          `Google Drive root ${folderId}: loaded ${files.length} media file(s).`
+        );
+
         allFiles.push(...files);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -160,109 +187,152 @@ export class GoogleDriveService {
       }
     }
 
-    return allFiles;
+    const unique = Array.from(
+      new Map(allFiles.map((file) => [file.id, file])).values()
+    ).sort((a, b) => a.name.localeCompare(b.name));
+
+    this.logger.log(
+      `Google Drive total: ${unique.length} unique media file(s) from ${this.folderIds.length} root folder(s).`
+    );
+
+    return unique;
   }
 
-  async getFolderDebug(folderId: string): Promise<DriveFolderDebug> {
-    try {
-      const children = await this.listFolderChildren(folderId);
-      const audioFiles = children.filter((file) => this.isAudioFile(file));
-      const imageFiles = children.filter((file) => this.isImageFile(file));
-      const folders = children.filter((file) => file.mimeType === GOOGLE_FOLDER_MIME);
-      const shortcuts = children.filter((file) => file.mimeType === GOOGLE_SHORTCUT_MIME);
+  // Keep this old method name in case controllers/debug code still call it.
+  async listAllDriveMp3Files(): Promise<DriveFile[]> {
+    return (await this.listAllDriveMediaFiles()).filter((file) => this.isAudioFile(file));
+  }
 
-      return {
-        folderId,
-        status: "ok",
-        childCount: children.length,
-        mp3Count: audioFiles.length,
-        imageCount: imageFiles.length,
-        folderCount: folders.length,
-        shortcutCount: shortcuts.length,
-        sampleNames: children.slice(0, 20).map((file) => file.name)
-      };
-    } catch (error) {
-      return {
-        folderId,
-        status: "error",
-        childCount: 0,
-        mp3Count: 0,
-        imageCount: 0,
-        folderCount: 0,
-        shortcutCount: 0,
-        error: error instanceof Error ? error.message : String(error),
-        sampleNames: []
-      };
+  async debugFolders(): Promise<DriveFolderDebug[]> {
+    const results: DriveFolderDebug[] = [];
+
+    for (const folderId of this.folderIds) {
+      try {
+        const children = await this.listChildren(folderId);
+        const mp3Files = children.filter((file) => this.isAudioFile(file));
+        const folders = children.filter((file) => file.mimeType === GOOGLE_FOLDER_MIME);
+        const shortcuts = children.filter((file) => file.mimeType === GOOGLE_SHORTCUT_MIME);
+
+        results.push({
+          folderId,
+          status: "ok",
+          childCount: children.length,
+          mp3Count: mp3Files.length,
+          folderCount: folders.length,
+          shortcutCount: shortcuts.length,
+          sampleNames: children.slice(0, 20).map((file) => `${file.name} | ${file.mimeType ?? "unknown"}`)
+        });
+      } catch (error) {
+        results.push({
+          folderId,
+          status: "error",
+          childCount: 0,
+          mp3Count: 0,
+          folderCount: 0,
+          shortcutCount: 0,
+          error: error instanceof Error ? error.message : String(error),
+          sampleNames: []
+        });
+      }
     }
+
+    return results;
+  }
+
+  async getImageMediaUrl(fileId: string): Promise<string | undefined> {
+    const cached = this.imageById.get(fileId);
+
+    if (cached && this.isImageFile(cached)) {
+      return this.getMediaUrl(fileId);
+    }
+
+    const file = await this.getFile(fileId);
+
+    if (!file || !this.isImageFile(file)) {
+      return undefined;
+    }
+
+    this.imageById.set(fileId, file);
+    return this.getMediaUrl(fileId);
   }
 
   getMediaUrl(fileId: string): string {
     const params = new URLSearchParams({
       key: this.apiKey,
-      alt: "media",
-      supportsAllDrives: "true"
+      alt: "media"
     });
 
     return `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?${params.toString()}`;
   }
 
-  getProxiedThumbnailUrl(fileId: string): string {
-    return `${this.publicApiOrigin}/drive/thumbnail/${encodeURIComponent(fileId)}`;
-  }
-
-  private async listAudioFilesInFolderRecursive({
-    rootFolderId,
-    folderId,
-    visitedFolders
-  }: {
+  private async listMediaFilesInFolderRecursive(input: {
     rootFolderId: string;
     folderId: string;
     visitedFolders: Set<string>;
   }): Promise<DriveFile[]> {
-    if (visitedFolders.has(folderId)) {
+    if (input.visitedFolders.has(input.folderId)) {
       return [];
     }
 
-    visitedFolders.add(folderId);
+    input.visitedFolders.add(input.folderId);
 
-    const children = await this.listFolderChildren(folderId);
-    const imageFiles = children.filter((file) => this.isImageFile(file));
-    const audioFiles: DriveFile[] = [];
+    const children = await this.listChildren(input.folderId);
+    const mediaFiles: DriveFile[] = [];
 
     for (const child of children) {
-      if (this.isAudioFile(child)) {
-        const matchedThumbnail = this.findThumbnailFileForAudio(child, imageFiles);
+      if (child.mimeType === GOOGLE_SHORTCUT_MIME && child.shortcutDetails?.targetId) {
+        const target = await this.getFile(child.shortcutDetails.targetId);
 
-        audioFiles.push({
-          ...child,
-          thumbnailFileId: matchedThumbnail?.id,
-          sourceRootFolderId: rootFolderId,
-          parentFolderId: folderId
-        });
+        if (!target) {
+          continue;
+        }
+
+        if (target.mimeType === GOOGLE_FOLDER_MIME) {
+          mediaFiles.push(
+            ...(await this.listMediaFilesInFolderRecursive({
+              rootFolderId: input.rootFolderId,
+              folderId: target.id,
+              visitedFolders: input.visitedFolders
+            }))
+          );
+          continue;
+        }
+
+        if (this.isMediaFile(target)) {
+          mediaFiles.push({
+            ...target,
+            parentFolderId: input.folderId,
+            sourceRootFolderId: input.rootFolderId
+          });
+        }
+
         continue;
       }
 
-      const targetFolderId =
-        child.mimeType === GOOGLE_SHORTCUT_MIME &&
-        child.shortcutDetails?.targetMimeType === GOOGLE_FOLDER_MIME
-          ? child.shortcutDetails.targetId
-          : undefined;
+      if (child.mimeType === GOOGLE_FOLDER_MIME) {
+        mediaFiles.push(
+          ...(await this.listMediaFilesInFolderRecursive({
+            rootFolderId: input.rootFolderId,
+            folderId: child.id,
+            visitedFolders: input.visitedFolders
+          }))
+        );
+        continue;
+      }
 
-      if (child.mimeType === GOOGLE_FOLDER_MIME || targetFolderId) {
-        const nestedFolderId = targetFolderId ?? child.id;
-        const nested = await this.listAudioFilesInFolderRecursive({
-          rootFolderId,
-          folderId: nestedFolderId,
-          visitedFolders
+      if (this.isMediaFile(child)) {
+        mediaFiles.push({
+          ...child,
+          parentFolderId: input.folderId,
+          sourceRootFolderId: input.rootFolderId
         });
-        audioFiles.push(...nested);
       }
     }
 
-    return audioFiles;
+    return mediaFiles;
   }
 
-  private async listFolderChildren(folderId: string): Promise<DriveFile[]> {
+  private async listChildren(folderId: string): Promise<DriveFile[]> {
     const files: DriveFile[] = [];
     let pageToken: string | undefined;
 
@@ -271,7 +341,7 @@ export class GoogleDriveService {
         key: this.apiKey,
         q: `'${folderId}' in parents and trashed = false`,
         fields:
-          "nextPageToken,files(id,name,mimeType,size,modifiedTime,resourceKey,webViewLink,thumbnailLink,description,properties,appProperties,shortcutDetails)",
+          "nextPageToken,files(id,name,mimeType,size,modifiedTime,resourceKey,webViewLink,thumbnailLink,properties,appProperties,imageMediaMetadata(width,height),videoMediaMetadata(durationMillis),shortcutDetails(targetId,targetMimeType))",
         pageSize: "1000",
         supportsAllDrives: "true",
         includeItemsFromAllDrives: "true"
@@ -284,7 +354,7 @@ export class GoogleDriveService {
       const response = await fetch(`https://www.googleapis.com/drive/v3/files?${params.toString()}`);
 
       if (!response.ok) {
-        throw new Error(`Google Drive list failed with ${response.status}`);
+        throw new Error(`Drive list failed with ${response.status}: ${await response.text()}`);
       }
 
       const payload = (await response.json()) as DriveListResponse;
@@ -295,70 +365,26 @@ export class GoogleDriveService {
     return files;
   }
 
-  private toRenderableThumbnailUrl(value: string | undefined): string | undefined {
-    const cleaned = this.cleanOptional(value);
+  private async getFile(fileId: string): Promise<DriveFile | undefined> {
+    const params = new URLSearchParams({
+      key: this.apiKey,
+      fields:
+        "id,name,mimeType,size,modifiedTime,resourceKey,webViewLink,thumbnailLink,properties,appProperties,imageMediaMetadata(width,height),videoMediaMetadata(durationMillis),shortcutDetails(targetId,targetMimeType)",
+      supportsAllDrives: "true"
+    });
 
-    if (!cleaned) {
+    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?${params.toString()}`);
+
+    if (!response.ok) {
+      this.logger.warn(`Drive get file ${fileId} failed with ${response.status}.`);
       return undefined;
     }
 
-    const driveFileId = this.extractGoogleDriveFileId(cleaned);
-
-    if (driveFileId) {
-      return this.getProxiedThumbnailUrl(driveFileId);
-    }
-
-    return cleaned;
+    return (await response.json()) as DriveFile;
   }
 
-  private extractGoogleDriveFileId(value: string): string | undefined {
-    const trimmed = value.trim();
-
-    if (/^[A-Za-z0-9_-]{20,}$/.test(trimmed)) {
-      return trimmed;
-    }
-
-    const filePathMatch = trimmed.match(/\/file\/d\/([A-Za-z0-9_-]+)/);
-    if (filePathMatch?.[1]) {
-      return filePathMatch[1];
-    }
-
-    const queryIdMatch = trimmed.match(/[?&]id=([A-Za-z0-9_-]+)/);
-    if (queryIdMatch?.[1]) {
-      return queryIdMatch[1];
-    }
-
-    return undefined;
-  }
-
-  private findThumbnailFileForAudio(audioFile: DriveFile, imageFiles: DriveFile[]): DriveFile | undefined {
-    if (!imageFiles.length) {
-      return undefined;
-    }
-
-    const audioBase = this.normalizeComparableBaseName(audioFile.name);
-
-    const exactMatch = imageFiles.find((image) => {
-      return this.normalizeComparableBaseName(image.name) === audioBase;
-    });
-
-    if (exactMatch) {
-      return exactMatch;
-    }
-
-    const looseMatch = imageFiles.find((image) => {
-      const imageBase = this.normalizeComparableBaseName(image.name);
-      return imageBase.includes(audioBase) || audioBase.includes(imageBase);
-    });
-
-    if (looseMatch) {
-      return looseMatch;
-    }
-
-    return imageFiles.find((image) => {
-      const imageBase = this.normalizeComparableBaseName(image.name);
-      return ["cover", "folder", "album", "thumbnail", "artwork", "front"].includes(imageBase);
-    });
+  private isMediaFile(file: DriveFile): boolean {
+    return this.isAudioFile(file) || this.isImageFile(file);
   }
 
   private isAudioFile(file: DriveFile): boolean {
@@ -409,8 +435,109 @@ export class GoogleDriveService {
       name.endsWith(".jpeg") ||
       name.endsWith(".png") ||
       name.endsWith(".webp") ||
-      name.endsWith(".gif")
+      name.endsWith(".gif") ||
+      name.endsWith(".avif")
     );
+  }
+
+  private groupImagesByFolder(imageFiles: DriveFile[]): Map<string, DriveFile[]> {
+    const imagesByFolder = new Map<string, DriveFile[]>();
+
+    for (const image of imageFiles) {
+      const folderId = image.parentFolderId ?? image.sourceRootFolderId ?? "root";
+      const existing = imagesByFolder.get(folderId) ?? [];
+      existing.push(image);
+      imagesByFolder.set(folderId, existing);
+    }
+
+    for (const [folderId, images] of imagesByFolder.entries()) {
+      imagesByFolder.set(
+        folderId,
+        images.sort((a, b) => this.coverRank(a) - this.coverRank(b) || a.name.localeCompare(b.name))
+      );
+    }
+
+    return imagesByFolder;
+  }
+
+  private findBestCoverImage(audioFile: DriveFile, imagesByFolder: Map<string, DriveFile[]>): DriveFile | undefined {
+    const folderId = audioFile.parentFolderId ?? audioFile.sourceRootFolderId ?? "root";
+    const images = imagesByFolder.get(folderId) ?? [];
+
+    if (!images.length) {
+      return undefined;
+    }
+
+    const audioBase = this.cleanFileBaseName(audioFile.name).toLowerCase();
+
+    const exactMatch = images.find((image) => this.cleanFileBaseName(image.name).toLowerCase() === audioBase);
+    if (exactMatch) {
+      return exactMatch;
+    }
+
+    const coverNameMatch = images.find((image) => COVER_FILE_NAMES.has(this.cleanFileBaseName(image.name).toLowerCase()));
+    if (coverNameMatch) {
+      return coverNameMatch;
+    }
+
+    return images[0];
+  }
+
+  private coverRank(file: DriveFile): number {
+    const base = this.cleanFileBaseName(file.name).toLowerCase();
+
+    if (base === "cover") return 0;
+    if (base === "folder") return 1;
+    if (base === "album") return 2;
+    if (base === "artwork") return 3;
+    if (base === "thumbnail" || base === "thumb") return 4;
+
+    return 10;
+  }
+
+  private getDurationSeconds(file: DriveFile, properties: Record<string, string>): number {
+    const explicitSeconds = this.parsePositiveNumber(
+      properties.durationSeconds ??
+        properties.duration_seconds ??
+        properties.duration ??
+        properties.lengthSeconds ??
+        properties.length
+    );
+
+    if (explicitSeconds) {
+      return Math.round(explicitSeconds);
+    }
+
+    const explicitMillis = this.parsePositiveNumber(
+      properties.durationMillis ??
+        properties.duration_ms ??
+        file.videoMediaMetadata?.durationMillis
+    );
+
+    if (explicitMillis) {
+      return Math.round(explicitMillis / 1000);
+    }
+
+    const sizeBytes = this.parseSizeBytes(file.size);
+
+    if (sizeBytes) {
+      // Approximate audio length from file size so dashboard layout still has real
+      // variety when Drive does not expose audio metadata. 160 kbps is a common
+      // MP3 bitrate: 160,000 bits/sec = 20,000 bytes/sec.
+      return Math.max(30, Math.round(sizeBytes / 20000));
+    }
+
+    return 0;
+  }
+
+  private parseSizeBytes(value: string | undefined): number | undefined {
+    const parsed = Number(value ?? 0);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  }
+
+  private parsePositiveNumber(value: string | number | undefined): number | undefined {
+    const parsed = Number(value ?? 0);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
   }
 
   private parseSongName(fileName: string): ParsedSongName {
@@ -448,15 +575,6 @@ export class GoogleDriveService {
       .replace(/\.[^.]+$/, "")
       .replace(/[_]+/g, " ")
       .replace(/\s+/g, " ")
-      .trim();
-  }
-
-  private normalizeComparableBaseName(name: string): string {
-    return this.cleanFileBaseName(name)
-      .toLowerCase()
-      .replace(/\[[A-Za-z0-9_-]{8,}\]$/g, "")
-      .replace(/\((official\s*)?(audio|video|lyrics?|visualizer|hd|hq)\)$/i, "")
-      .replace(/[^a-z0-9]+/g, " ")
       .trim();
   }
 

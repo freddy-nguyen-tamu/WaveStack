@@ -442,6 +442,14 @@ main {
   object-fit: cover;
 }
 
+/* ------------------------------------------------------------------ */
+/* Dashboard song wall, real Drive thumbnails, and metadata modal       */
+/* ------------------------------------------------------------------ */
+
+body.modal-open {
+  overflow: hidden;
+}
+
 .dashboard-page {
   display: grid;
   gap: 1.25rem;
@@ -489,309 +497,35 @@ main {
 
 .song-masonry {
   column-count: 4;
-  column-gap: 1rem;
+  column-gap: 1.1rem;
 }
 
 .song-tile {
   position: relative;
   display: inline-block;
   width: 100%;
-  min-height: 14rem;
-  margin: 0 0 1rem;
+  margin: 0 0 1.1rem;
   overflow: hidden;
-  border: 0;
   border-radius: 1.25rem;
-  padding: 0;
   background: #111827;
-  color: #f8fafc;
-  text-align: left;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.28);
   break-inside: avoid;
-}
-
-.song-tile:hover {
-  transform: translateY(-3px);
 }
 
 .song-tile--small {
-  height: 13rem;
+  height: 12rem;
 }
 
 .song-tile--medium {
-  height: 17rem;
+  height: 18rem;
 }
 
 .song-tile--large {
-  height: 23rem;
+  height: 25rem;
 }
 
-.song-tile--wide {
-  height: 15rem;
-}
-
-.song-tile__media,
-.song-tile__media img,
-.song-tile__fallback {
-  position: absolute;
-  inset: 0;
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-
-.song-tile__media img {
-  object-fit: cover;
-}
-
-.song-tile__fallback {
-  display: grid;
-  place-items: center;
-  background:
-    radial-gradient(circle at top left, rgba(96, 165, 250, 0.75), transparent 16rem),
-    linear-gradient(135deg, rgba(30, 41, 59, 1), rgba(88, 28, 135, 0.9));
-  font-size: 5rem;
-  font-weight: 900;
-}
-
-.song-tile__overlay {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  align-items: end;
-  padding: 4rem 1rem 1rem;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.86), transparent);
-}
-
-.song-tile__overlay strong,
-.song-tile__overlay small {
-  display: block;
-}
-
-.song-tile__overlay strong {
-  font-size: 1rem;
-}
-
-.song-tile__overlay small,
-.song-tile__duration {
-  color: #d1d5db;
-}
-
-.song-tile__quick-play {
-  position: absolute;
-  top: 0.75rem;
-  right: 0.75rem;
-  display: grid;
-  width: 2.4rem;
-  height: 2.4rem;
-  place-items: center;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.62);
-  color: #fff;
-  opacity: 0;
-  transform: translateY(-0.25rem);
-  transition:
-    opacity 160ms ease,
-    transform 160ms ease;
-}
-
-.song-tile:hover .song-tile__quick-play,
-.song-tile:focus-visible .song-tile__quick-play {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.song-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 90;
-  display: grid;
-  place-items: center;
-  padding: 1.5rem;
-  background: rgba(0, 0, 0, 0.72);
-}
-
-.song-modal {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(16rem, 0.85fr) minmax(18rem, 1.15fr);
-  width: min(980px, 100%);
-  max-height: min(760px, calc(100vh - 3rem));
-  overflow: auto;
-  border: 1px solid rgba(148, 163, 184, 0.26);
-  border-radius: 1.5rem;
-  background: rgba(2, 6, 23, 0.98);
-  box-shadow: 0 32px 100px rgba(0, 0, 0, 0.62);
-}
-
-.song-modal__close {
-  position: sticky;
-  top: 0.75rem;
-  left: 0.75rem;
-  z-index: 2;
-  width: 2.5rem;
-  height: 2.5rem;
-  margin: 0.75rem;
-  padding: 0;
-  border: 0;
-  background: rgba(0, 0, 0, 0.64);
-}
-
-.song-modal__hero {
-  position: sticky;
-  top: 0;
-  min-height: 28rem;
-  background: #111827;
-}
-
-.song-modal__hero img,
-.song-modal__fallback {
-  width: 100%;
-  height: 100%;
-  min-height: 28rem;
-  object-fit: cover;
-}
-
-.song-modal__fallback {
-  display: grid;
-  place-items: center;
-  background:
-    radial-gradient(circle at top left, rgba(96, 165, 250, 0.75), transparent 18rem),
-    linear-gradient(135deg, rgba(30, 41, 59, 1), rgba(88, 28, 135, 0.9));
-  font-size: 7rem;
-  font-weight: 900;
-}
-
-.song-modal__content {
-  display: grid;
-  align-content: start;
-  gap: 1rem;
-  padding: 2rem;
-}
-
-.song-modal__content h2 {
-  margin: 0;
-  font-size: clamp(2rem, 5vw, 4rem);
-  line-height: 0.95;
-}
-
-.song-modal__content h3 {
-  margin: 0;
-  color: #cbd5e1;
-  font-size: 1.25rem;
-}
-
-.song-modal__lyrics {
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 1rem;
-  padding: 1rem;
-  background: rgba(15, 23, 42, 0.72);
-}
-
-.song-modal__lyrics p {
-  white-space: pre-wrap;
-}
-
-.metadata-grid {
-  display: grid;
-  gap: 0.6rem;
-}
-
-.metadata-grid div {
-  display: grid;
-  grid-template-columns: minmax(8rem, 0.34fr) minmax(0, 1fr);
-  gap: 1rem;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.15);
-  padding-bottom: 0.6rem;
-}
-
-.metadata-grid dt {
-  color: #93c5fd;
-  font-weight: 800;
-}
-
-.metadata-grid dd {
-  min-width: 0;
-  margin: 0;
-  overflow-wrap: anywhere;
-  color: #e5e7eb;
-}
-
-@media (max-width: 1100px) {
-  .song-masonry {
-    column-count: 3;
-  }
-}
-
-@media (max-width: 860px) {
-  :root {
-    --mini-player-reserved-space: 15rem;
-  }
-
-  .dashboard-page__header {
-    display: grid;
-  }
-
-  .dashboard-stats {
-    grid-template-columns: 1fr;
-  }
-
-  .song-masonry {
-    column-count: 2;
-  }
-
-  .song-modal {
-    grid-template-columns: 1fr;
-  }
-
-  .song-modal__hero {
-    position: relative;
-    min-height: 18rem;
-  }
-
-  .song-modal__hero img,
-  .song-modal__fallback {
-    min-height: 18rem;
-  }
-}
-
-@media (max-width: 560px) {
-  .song-masonry {
-    column-count: 1;
-  }
-
-  .metadata-grid div {
-    grid-template-columns: 1fr;
-    gap: 0.25rem;
-  }
-}
-
-/* ------------------------------------------------------------------ */
-/* Dashboard thumbnail wall and reliable metadata modal fixes          */
-/* ------------------------------------------------------------------ */
-
-.song-masonry {
-  column-count: 4;
-  column-gap: 1rem;
-}
-
-.song-tile {
-  position: relative;
-  display: inline-block;
-  width: 100%;
-  height: var(--tile-height, 16rem);
-  min-height: 12rem;
-  max-height: 34rem;
-  margin: 0 0 1rem;
-  overflow: hidden;
-  border-radius: 1.25rem;
-  background: #111827;
-  color: #f8fafc;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.28);
-  break-inside: avoid;
+.song-tile--hero {
+  height: 33rem;
 }
 
 .song-tile__open {
@@ -800,17 +534,15 @@ main {
   display: block;
   width: 100%;
   height: 100%;
-  overflow: hidden;
   border: 0;
-  border-radius: inherit;
+  border-radius: 0;
   padding: 0;
   background: transparent;
-  color: inherit;
+  color: #f8fafc;
   text-align: left;
 }
 
-.song-tile__open:hover,
-.song-tile__open:focus-visible {
+.song-tile__open:hover {
   transform: none;
   border-color: transparent;
   background: transparent;
@@ -840,6 +572,7 @@ main {
   background:
     radial-gradient(circle at top left, rgba(96, 165, 250, 0.75), transparent 16rem),
     linear-gradient(135deg, rgba(30, 41, 59, 1), rgba(88, 28, 135, 0.9));
+  color: rgba(255, 255, 255, 0.86);
   font-size: 5rem;
   font-weight: 900;
 }
@@ -853,8 +586,8 @@ main {
   justify-content: space-between;
   gap: 1rem;
   align-items: end;
-  padding: 4rem 1rem 1rem;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.86), transparent);
+  padding: 5rem 1rem 1rem;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.9), transparent);
 }
 
 .song-tile__overlay strong,
@@ -863,7 +596,9 @@ main {
 }
 
 .song-tile__overlay strong {
+  color: #fff;
   font-size: 1rem;
+  line-height: 1.18;
 }
 
 .song-tile__overlay small,
@@ -871,19 +606,18 @@ main {
   color: #d1d5db;
 }
 
-.song-tile__quick-play {
+.song-tile__duration {
+  white-space: nowrap;
+}
+
+.song-tile__play {
   position: absolute;
   top: 0.75rem;
   right: 0.75rem;
   z-index: 2;
-  display: grid;
-  width: 2.4rem;
-  height: 2.4rem;
-  place-items: center;
+  min-width: 4rem;
   border: 0;
-  border-radius: 999px;
-  padding: 0;
-  background: rgba(0, 0, 0, 0.62);
+  background: rgba(0, 0, 0, 0.68);
   color: #fff;
   opacity: 0;
   transform: translateY(-0.25rem);
@@ -892,30 +626,20 @@ main {
     transform 160ms ease;
 }
 
-.song-tile:hover .song-tile__quick-play,
-.song-tile:focus-within .song-tile__quick-play {
+.song-tile:hover .song-tile__play,
+.song-tile:focus-within .song-tile__play {
   opacity: 1;
   transform: translateY(0);
 }
 
-.song-tile__quick-play:hover,
-.song-tile__quick-play:focus-visible {
-  background: rgba(0, 0, 0, 0.82);
-  transform: scale(1.05);
-}
-
-/*
-  The modal is now portaled to document.body, so use a very high z-index.
-  This guarantees it sits above the fixed mini player and page content.
-*/
 .song-modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 9999;
+  z-index: 1000;
   display: grid;
   place-items: center;
   padding: 1.5rem;
-  background: rgba(0, 0, 0, 0.72);
+  background: rgba(0, 0, 0, 0.76);
 }
 
 .song-modal {
@@ -932,16 +656,15 @@ main {
 }
 
 .song-modal__close {
-  position: sticky;
+  position: absolute;
   top: 0.75rem;
   left: 0.75rem;
-  z-index: 2;
+  z-index: 4;
   width: 2.5rem;
   height: 2.5rem;
-  margin: 0.75rem;
   padding: 0;
   border: 0;
-  background: rgba(0, 0, 0, 0.64);
+  background: rgba(0, 0, 0, 0.68);
 }
 
 .song-modal__hero {
@@ -965,6 +688,7 @@ main {
   background:
     radial-gradient(circle at top left, rgba(96, 165, 250, 0.75), transparent 18rem),
     linear-gradient(135deg, rgba(30, 41, 59, 1), rgba(88, 28, 135, 0.9));
+  color: rgba(255, 255, 255, 0.86);
   font-size: 7rem;
   font-weight: 900;
 }
@@ -993,6 +717,10 @@ main {
   border-radius: 1rem;
   padding: 1rem;
   background: rgba(15, 23, 42, 0.72);
+}
+
+.song-modal__lyrics h4 {
+  margin-top: 0;
 }
 
 .song-modal__lyrics p {
@@ -1024,8 +752,8 @@ main {
   color: #e5e7eb;
 }
 
-body.modal-open {
-  overflow: hidden;
+.metadata-grid a {
+  color: #93c5fd;
 }
 
 @media (max-width: 1100px) {
@@ -1035,6 +763,14 @@ body.modal-open {
 }
 
 @media (max-width: 860px) {
+  .dashboard-page__header {
+    display: grid;
+  }
+
+  .dashboard-stats {
+    grid-template-columns: 1fr;
+  }
+
   .song-masonry {
     column-count: 2;
   }

@@ -1,59 +1,24 @@
-import { X } from "lucide-react";
-import { useEffect } from "react";
 import { createPortal } from "react-dom";
+import { X } from "lucide-react";
 import type { Song } from "../../App";
 import { formatBytes, formatSeconds, formatSongDisplayName, hasThumbnail } from "../../song-format";
 
 type SongMetadataModalProps = {
-  song: Song | null;
+  song: Song;
   onClose: () => void;
-  onPlay: (song: Song) => void;
 };
 
-export function SongMetadataModal({ song, onClose, onPlay }: SongMetadataModalProps) {
-  useEffect(() => {
-    if (!song) {
-      return;
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        onClose();
-      }
-    }
-
-    document.addEventListener("keydown", handleKeyDown);
-    document.body.classList.add("modal-open");
-
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      document.body.classList.remove("modal-open");
-    };
-  }, [song, onClose]);
-
-  if (!song) {
-    return null;
-  }
-
-  const allMetadata: Array<[string, string]> = [
-    ["ID", song.id],
-    ["Title", song.title],
-    ["Artist / author", song.artistName],
-    ["Album", song.albumTitle],
-    ["Duration", formatSeconds(song.durationSeconds)],
-    ["Genres", song.genreNames.join(", ") || "None"],
-    ["Score", song.score === undefined ? "None" : String(song.score)],
-    ["Thumbnail URL", song.thumbnailUrl || "None"],
-    ["Stream URL", song.streamUrl],
-    ["Google Drive page", song.webViewLink || "None"],
-    ["MIME type", song.mimeType || "Unknown"],
-    ["Modified time", song.modifiedTime || "Unknown"],
-    ["Size", formatBytes(song.sizeBytes)],
-    ["Source root folder", song.sourceRootFolderId || "Unknown"]
-  ];
-
-  return createPortal(
-    <div className="song-modal-backdrop" role="presentation" onMouseDown={onClose}>
+export function SongMetadataModal({ song, onClose }: SongMetadataModalProps) {
+  const modal = (
+    <div
+      className="song-modal-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
       <section
         className="song-modal"
         role="dialog"
@@ -61,49 +26,98 @@ export function SongMetadataModal({ song, onClose, onPlay }: SongMetadataModalPr
         aria-labelledby="song-modal-title"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <button className="song-modal__close" type="button" onClick={onClose} aria-label="Close song details">
+        <button className="song-modal__close" type="button" onClick={onClose} aria-label="Close song metadata">
           <X aria-hidden="true" />
         </button>
 
-        <div className="song-modal__hero">
+        <div className="song-modal__hero" aria-hidden="true">
           {hasThumbnail(song) ? (
             <img src={song.thumbnailUrl} alt="" />
           ) : (
-            <div className="song-modal__fallback" aria-hidden="true">
+            <div className="song-modal__fallback">
               {song.artistName?.trim()?.charAt(0)?.toUpperCase() || "\u266A"}
             </div>
           )}
         </div>
 
         <div className="song-modal__content">
-          <p className="eyebrow">Song metadata</p>
-
-          <h2 id="song-modal-title">{song.title}</h2>
-          <h3>{song.artistName}</h3>
+          <div>
+            <p className="eyebrow">Song metadata</p>
+            <h2 id="song-modal-title">{song.title}</h2>
+            <h3>{song.artistName}</h3>
+          </div>
 
           <section className="song-modal__lyrics" aria-label="Lyrics">
             <h4>Lyrics</h4>
-            <p>{song.lyrics?.trim() || "No lyrics attribute is available for this song yet."}</p>
+            <p>{song.lyrics?.trim() || "No lyrics attribute was provided for this Drive file."}</p>
           </section>
 
-          <button type="button" onClick={() => onPlay(song)}>
-            Play {formatSongDisplayName(song)}
-          </button>
-
-          <section aria-label="All metadata">
-            <h4>All metadata</h4>
-            <dl className="metadata-grid">
-              {allMetadata.map(([label, value]) => (
-                <div key={label}>
-                  <dt>{label}</dt>
-                  <dd>{value}</dd>
-                </div>
-              ))}
-            </dl>
-          </section>
+          <dl className="metadata-grid">
+            <div>
+              <dt>Display name</dt>
+              <dd>{formatSongDisplayName(song)}</dd>
+            </div>
+            <div>
+              <dt>Title</dt>
+              <dd>{song.title}</dd>
+            </div>
+            <div>
+              <dt>Artist / author</dt>
+              <dd>{song.artistName}</dd>
+            </div>
+            <div>
+              <dt>Album / source</dt>
+              <dd>{song.albumTitle}</dd>
+            </div>
+            <div>
+              <dt>Duration</dt>
+              <dd>{formatSeconds(song.durationSeconds)} ({song.durationSeconds || 0} seconds)</dd>
+            </div>
+            <div>
+              <dt>Genres</dt>
+              <dd>{song.genreNames.length ? song.genreNames.join(", ") : "None"}</dd>
+            </div>
+            <div>
+              <dt>Thumbnail URL</dt>
+              <dd>{song.thumbnailUrl || "None"}</dd>
+            </div>
+            <div>
+              <dt>File size</dt>
+              <dd>{formatBytes(song.sizeBytes)}</dd>
+            </div>
+            <div>
+              <dt>MIME type</dt>
+              <dd>{song.mimeType || "Unknown"}</dd>
+            </div>
+            <div>
+              <dt>Modified</dt>
+              <dd>{song.modifiedTime || "Unknown"}</dd>
+            </div>
+            <div>
+              <dt>Source folder</dt>
+              <dd>{song.sourceRootFolderId || "Unknown"}</dd>
+            </div>
+            <div>
+              <dt>Stream URL</dt>
+              <dd>{song.streamUrl}</dd>
+            </div>
+            <div>
+              <dt>Drive link</dt>
+              <dd>
+                {song.webViewLink ? (
+                  <a href={song.webViewLink} target="_blank" rel="noreferrer">
+                    Open in Google Drive
+                  </a>
+                ) : (
+                  "None"
+                )}
+              </dd>
+            </div>
+          </dl>
         </div>
       </section>
-    </div>,
-    document.body
+    </div>
   );
+
+  return createPortal(modal, document.body);
 }

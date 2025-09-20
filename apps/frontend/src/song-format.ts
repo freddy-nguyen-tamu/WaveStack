@@ -1,5 +1,7 @@
 import type { Song } from "./App";
 
+export type SongCardSize = "small" | "medium" | "large" | "hero";
+
 export function formatSongDisplayName(song: Pick<Song, "artistName" | "title">): string {
   const artist = normalizeLabelPart(song.artistName, "Unknown Artist");
   const title = normalizeLabelPart(song.title, "Untitled Track");
@@ -40,41 +42,34 @@ export function hasThumbnail(song: Pick<Song, "thumbnailUrl">): boolean {
   return Boolean(song.thumbnailUrl?.trim());
 }
 
-/*
-  Stronger duration weighting for dashboard cards.
+export function getSongCardSize(song: Pick<Song, "durationSeconds" | "sizeBytes">, index: number): SongCardSize {
+  const duration = getWeightedDuration(song);
 
-  The old logic only returned four broad classes, so a 3-minute song and a
-  6-minute song often looked too similar. This returns a continuous rem height.
-
-  The exponent makes long songs visually much larger:
-  - shortest songs stay near 12rem
-  - median songs land around 18rem-22rem
-  - long songs can reach 34rem
-*/
-export function getSongCardHeightRem(
-  song: Pick<Song, "durationSeconds">,
-  allSongs: Array<Pick<Song, "durationSeconds">>
-): number {
-  const duration = Math.max(1, song.durationSeconds || 0);
-  const durations = allSongs
-    .map((item) => item.durationSeconds || 0)
-    .filter((value) => Number.isFinite(value) && value > 0);
-
-  if (!durations.length) {
-    return 16;
+  if (duration >= 390) {
+    return "hero";
   }
 
-  const minDuration = Math.min(...durations);
-  const maxDuration = Math.max(...durations);
-
-  if (maxDuration <= minDuration) {
-    return 18;
+  if (duration >= 270) {
+    return "large";
   }
 
-  const normalized = (duration - minDuration) / (maxDuration - minDuration);
-  const weighted = Math.pow(Math.max(0, Math.min(1, normalized)), 1.55);
+  if (duration >= 160) {
+    return "medium";
+  }
 
-  return Math.round((12 + weighted * 22) * 10) / 10;
+  return index % 5 === 0 ? "medium" : "small";
+}
+
+export function getWeightedDuration(song: Pick<Song, "durationSeconds" | "sizeBytes">): number {
+  if (Number.isFinite(song.durationSeconds) && song.durationSeconds > 0) {
+    return song.durationSeconds;
+  }
+
+  if (song.sizeBytes && Number.isFinite(song.sizeBytes) && song.sizeBytes > 0) {
+    return Math.max(30, Math.round(song.sizeBytes / 20000));
+  }
+
+  return 0;
 }
 
 function normalizeLabelPart(value: string | null | undefined, fallback: string): string {

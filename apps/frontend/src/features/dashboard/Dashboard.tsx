@@ -1,12 +1,7 @@
-import { Activity, Heart, Play, TrendingUp } from "lucide-react";
-import { type CSSProperties, useMemo, useState } from "react";
+import { Activity, Heart, TrendingUp } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import type { Song } from "../../App";
-import {
-  formatSeconds,
-  formatSongDisplayName,
-  getSongCardHeightRem,
-  hasThumbnail
-} from "../../song-format";
+import { formatSeconds, getSongCardSize, getWeightedDuration, hasThumbnail } from "../../song-format";
 import { SongMetadataModal } from "./SongMetadataModal";
 
 type DashboardProps = {
@@ -17,25 +12,41 @@ type DashboardProps = {
   onPlay: (song: Song) => void;
 };
 
-type SongTileStyle = CSSProperties & {
-  "--tile-height"?: string;
-};
-
 export function Dashboard({ loading, songs, favorites, recentlyPlayed, onPlay }: DashboardProps) {
   const [selectedSong, setSelectedSong] = useState<Song | null>(null);
 
   const suggestions = useMemo(() => {
     return [...songs].sort((a, b) => {
-      /*
-        Give duration a much bigger impact than before. Score still matters,
-        but the wall should visibly communicate song length through size.
-      */
-      const aScore = (a.score ?? 0) * 10 + Math.pow(a.durationSeconds || 1, 1.18);
-      const bScore = (b.score ?? 0) * 10 + Math.pow(b.durationSeconds || 1, 1.18);
+      const aDuration = getWeightedDuration(a);
+      const bDuration = getWeightedDuration(b);
+      const aScore = (a.score ?? 0) * 1000 + aDuration * 0.5;
+      const bScore = (b.score ?? 0) * 1000 + bDuration * 0.5;
 
       return bScore - aScore;
     });
   }, [songs]);
+
+  useEffect(() => {
+    if (!selectedSong) {
+      document.body.classList.remove("modal-open");
+      return;
+    }
+
+    document.body.classList.add("modal-open");
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setSelectedSong(null);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.classList.remove("modal-open");
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [selectedSong]);
 
   return (
     <article className="dashboard-page">
@@ -44,8 +55,9 @@ export function Dashboard({ loading, songs, favorites, recentlyPlayed, onPlay }:
           <p className="eyebrow">Dashboard</p>
           <h2>Suggested songs</h2>
           <p>
-            A visual recommendation wall. Longer songs appear noticeably larger,
-            and every card opens full metadata.
+            A visual recommendation wall. Real Drive songs are sized by their
+            duration, with file size used as a fallback when Drive does not
+            expose exact audio duration.
           </p>
         </div>
 
@@ -72,18 +84,16 @@ export function Dashboard({ loading, songs, favorites, recentlyPlayed, onPlay }:
 
       {suggestions.length ? (
         <section className="song-masonry" aria-label="Suggested songs">
-          {suggestions.map((song) => {
-            const tileStyle: SongTileStyle = {
-              "--tile-height": `${getSongCardHeightRem(song, suggestions)}rem`
-            };
+          {suggestions.map((song, index) => {
+            const size = getSongCardSize(song, index);
 
             return (
-              <article className="song-tile" key={song.id} style={tileStyle}>
+              <article className={`song-tile song-tile--${size}`} key={song.id}>
                 <button
                   className="song-tile__open"
                   type="button"
                   onClick={() => setSelectedSong(song)}
-                  aria-label={`Open metadata for ${formatSongDisplayName(song)}`}
+                  aria-label={`Open metadata for ${song.artistName} - ${song.title}`}
                 >
                   <span className="song-tile__media">
                     {hasThumbnail(song) ? (
@@ -105,26 +115,24 @@ export function Dashboard({ loading, songs, favorites, recentlyPlayed, onPlay }:
                 </button>
 
                 <button
-                  className="song-tile__quick-play"
+                  className="song-tile__play"
                   type="button"
                   onClick={() => onPlay(song)}
-                  aria-label={`Play ${formatSongDisplayName(song)}`}
+                  aria-label={`Play ${song.artistName} - ${song.title}`}
                 >
-                  <Play aria-hidden="true" />
+                  Play
                 </button>
               </article>
             );
           })}
         </section>
       ) : (
-        <p>No song suggestions are available yet.</p>
+        <p>No song suggestions available.</p>
       )}
 
-      <SongMetadataModal
-        song={selectedSong}
-        onClose={() => setSelectedSong(null)}
-        onPlay={onPlay}
-      />
+      {selectedSong ? (
+        <SongMetadataModal song={selectedSong} onClose={() => setSelectedSong(null)} />
+      ) : null}
     </article>
   );
 }

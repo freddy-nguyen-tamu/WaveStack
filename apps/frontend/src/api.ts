@@ -5,24 +5,32 @@ export const apolloClient = new ApolloClient({
   cache: new InMemoryCache()
 });
 
+const SONG_FIELDS = gql`
+  fragment SongFields on Song {
+    id
+    title
+    artistName
+    albumTitle
+    durationSeconds
+    streamUrl
+    genreNames
+    score
+    thumbnailUrl
+    lyrics
+    webViewLink
+    mimeType
+    modifiedTime
+    sizeBytes
+    sourceRootFolderId
+  }
+`;
+
 export const MUSIC_HOME_QUERY = gql`
+  ${SONG_FIELDS}
+
   query MusicHome {
     songs {
-      id
-      title
-      artistName
-      albumTitle
-      durationSeconds
-      streamUrl
-      genreNames
-      score
-      thumbnailUrl
-      lyrics
-      webViewLink
-      mimeType
-      modifiedTime
-      sizeBytes
-      sourceRootFolderId
+      ...SongFields
     }
     playlists {
       id
@@ -30,38 +38,10 @@ export const MUSIC_HOME_QUERY = gql`
       songCount
     }
     recentlyPlayed {
-      id
-      title
-      artistName
-      albumTitle
-      durationSeconds
-      streamUrl
-      genreNames
-      score
-      thumbnailUrl
-      lyrics
-      webViewLink
-      mimeType
-      modifiedTime
-      sizeBytes
-      sourceRootFolderId
+      ...SongFields
     }
     recommendations {
-      id
-      title
-      artistName
-      albumTitle
-      durationSeconds
-      streamUrl
-      genreNames
-      score
-      thumbnailUrl
-      lyrics
-      webViewLink
-      mimeType
-      modifiedTime
-      sizeBytes
-      sourceRootFolderId
+      ...SongFields
     }
   }
 `;
