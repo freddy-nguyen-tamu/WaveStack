@@ -11,7 +11,8 @@ import {
   Volume2
 } from "lucide-react";
 import type { Song } from "../../App";
-import { formatSeconds, formatSongDisplayName, hasThumbnail } from "../../song-format";
+import { formatSeconds, formatSongDisplayName } from "../../song-format";
+import { SongArtwork } from "../../components/SongArtwork";
 
 type PlayerProps = {
   activeSong: Song;
@@ -50,7 +51,6 @@ export function Player({
   const displayName = formatSongDisplayName(activeSong);
   const safeDuration = duration || activeSong.durationSeconds || 0;
   const progressPercent = safeDuration > 0 ? Math.min(100, (currentTime / safeDuration) * 100) : 0;
-  const coverInitial = activeSong.artistName?.trim()?.charAt(0)?.toUpperCase() || "\u266A";
 
   useEffect(() => {
     if (!audioRef.current) return;
@@ -332,13 +332,12 @@ export function Player({
       {hasPlaybackHistory ? (
         <aside className="mini-player" aria-label="Now playing">
             <div className="mini-player__track">
-              <div className="mini-player__cover" aria-hidden="true">
-                {hasThumbnail(activeSong) ? (
-                  <img src={activeSong.thumbnailUrl} alt="" />
-                ) : (
-                  coverInitial
-                )}
-              </div>
+              <SongArtwork
+                song={activeSong}
+                wrapClassName="mini-player__cover"
+                fallbackClassName="mini-player__cover-fallback"
+                loading="eager"
+              />
 
               <div className="mini-player__meta">
                 <strong title={displayName}>{displayName}</strong>

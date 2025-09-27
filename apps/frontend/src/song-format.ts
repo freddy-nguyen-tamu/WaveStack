@@ -42,22 +42,41 @@ export function hasThumbnail(song: Pick<Song, "thumbnailUrl">): boolean {
   return Boolean(song.thumbnailUrl?.trim());
 }
 
-export function getSongCardSize(song: Pick<Song, "durationSeconds" | "sizeBytes">, index: number): SongCardSize {
-  const duration = getWeightedDuration(song);
+export function getSongCardSize(
+  song: Pick<Song, "durationSeconds" | "sizeBytes" | "id">,
+  index: number
+): SongCardSize {
+  const weight = getWeightedSongLength(song);
 
-  if (duration >= 390) {
+  if (weight >= 520) {
     return "hero";
   }
 
-  if (duration >= 270) {
+  if (weight >= 330) {
     return "large";
   }
 
-  if (duration >= 160) {
+  if (weight >= 165) {
     return "medium";
   }
 
-  return index % 5 === 0 ? "medium" : "small";
+  return stableSongNumber(song.id) % 7 === 0 || index % 11 === 0 ? "medium" : "small";
+}
+
+export function getWeightedSongLength(
+  song: Pick<Song, "durationSeconds" | "sizeBytes" | "id">
+): number {
+  if (Number.isFinite(song.durationSeconds) && song.durationSeconds > 0) {
+    return song.durationSeconds;
+  }
+
+  if (song.sizeBytes && Number.isFinite(song.sizeBytes) && song.sizeBytes > 0) {
+    const estimatedSeconds = song.sizeBytes / 24000;
+    const stableBoost = stableSongNumber(song.id) % 55;
+    return Math.max(45, estimatedSeconds + stableBoost);
+  }
+
+  return 45 + (stableSongNumber(song.id) % 90);
 }
 
 export function getWeightedDuration(song: Pick<Song, "durationSeconds" | "sizeBytes">): number {
@@ -70,6 +89,16 @@ export function getWeightedDuration(song: Pick<Song, "durationSeconds" | "sizeBy
   }
 
   return 0;
+}
+
+function stableSongNumber(value: string): number {
+  let hash = 0;
+
+  for (const char of value) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+
+  return hash;
 }
 
 function normalizeLabelPart(value: string | null | undefined, fallback: string): string {

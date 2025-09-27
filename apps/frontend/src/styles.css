@@ -800,3 +800,31 @@ body.modal-open {
     gap: 0.25rem;
   }
 }
+
+/* Real embedded song artwork fallback handling */
+.song-tile__media,
+.song-modal__hero,
+.mini-player__cover {
+  overflow: hidden;
+}
+
+.song-tile__media > img,
+.song-modal__hero > img,
+.mini-player__cover > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.mini-player__cover-fallback {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  background:
+    linear-gradient(135deg, rgba(96, 165, 250, 0.85), rgba(168, 85, 247, 0.85)),
+    #111827;
+  color: #fff;
+  font-size: 2rem;
+  font-weight: 800;
+}

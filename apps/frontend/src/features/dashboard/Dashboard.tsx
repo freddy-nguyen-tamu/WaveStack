@@ -1,7 +1,8 @@
 import { Activity, Heart, TrendingUp } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { Song } from "../../App";
-import { formatSeconds, getSongCardSize, getWeightedDuration, hasThumbnail } from "../../song-format";
+import { formatSeconds, getSongCardSize, getWeightedSongLength } from "../../song-format";
+import { SongArtwork } from "../../components/SongArtwork";
 import { SongMetadataModal } from "./SongMetadataModal";
 
 type DashboardProps = {
@@ -17,8 +18,8 @@ export function Dashboard({ loading, songs, favorites, recentlyPlayed, onPlay }:
 
   const suggestions = useMemo(() => {
     return [...songs].sort((a, b) => {
-      const aDuration = getWeightedDuration(a);
-      const bDuration = getWeightedDuration(b);
+      const aDuration = getWeightedSongLength(a);
+      const bDuration = getWeightedSongLength(b);
       const aScore = (a.score ?? 0) * 1000 + aDuration * 0.5;
       const bScore = (b.score ?? 0) * 1000 + bDuration * 0.5;
 
@@ -95,15 +96,11 @@ export function Dashboard({ loading, songs, favorites, recentlyPlayed, onPlay }:
                   onClick={() => setSelectedSong(song)}
                   aria-label={`Open metadata for ${song.artistName} - ${song.title}`}
                 >
-                  <span className="song-tile__media">
-                    {hasThumbnail(song) ? (
-                      <img src={song.thumbnailUrl} alt="" loading="lazy" />
-                    ) : (
-                      <span className="song-tile__fallback" aria-hidden="true">
-                        {song.artistName?.trim()?.charAt(0)?.toUpperCase() || "\u266A"}
-                      </span>
-                    )}
-                  </span>
+                  <SongArtwork
+                    song={song}
+                    wrapClassName="song-tile__media"
+                    fallbackClassName="song-tile__fallback"
+                  />
 
                   <span className="song-tile__overlay">
                     <span>

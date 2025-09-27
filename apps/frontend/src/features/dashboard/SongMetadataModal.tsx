@@ -1,7 +1,8 @@
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import type { Song } from "../../App";
-import { formatBytes, formatSeconds, formatSongDisplayName, hasThumbnail } from "../../song-format";
+import { formatBytes, formatSeconds, formatSongDisplayName } from "../../song-format";
+import { SongArtwork } from "../../components/SongArtwork";
 
 type SongMetadataModalProps = {
   song: Song;
@@ -30,15 +31,12 @@ export function SongMetadataModal({ song, onClose }: SongMetadataModalProps) {
           <X aria-hidden="true" />
         </button>
 
-        <div className="song-modal__hero" aria-hidden="true">
-          {hasThumbnail(song) ? (
-            <img src={song.thumbnailUrl} alt="" />
-          ) : (
-            <div className="song-modal__fallback">
-              {song.artistName?.trim()?.charAt(0)?.toUpperCase() || "\u266A"}
-            </div>
-          )}
-        </div>
+        <SongArtwork
+          song={song}
+          wrapClassName="song-modal__hero"
+          fallbackClassName="song-modal__fallback"
+          loading="eager"
+        />
 
         <div className="song-modal__content">
           <div>

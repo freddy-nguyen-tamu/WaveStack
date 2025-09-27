@@ -87,8 +87,12 @@ export class GoogleDriveService {
     );
   }
 
-  private get publicApiOrigin(): string {
+  get publicApiOriginForUrls(): string {
     return this.config.get<string>("API_PUBLIC_ORIGIN") ?? "http://localhost:3000";
+  }
+
+  private get publicApiOrigin(): string {
+    return this.publicApiOriginForUrls;
   }
 
   async listSongs(): Promise<Song[]> {
@@ -108,19 +112,7 @@ export class GoogleDriveService {
         ...(file.appProperties ?? {})
       };
 
-      const explicitThumbnail =
-        this.cleanOptional(properties.thumbnailUrl) ??
-        this.cleanOptional(properties.thumbnail) ??
-        this.cleanOptional(properties.coverUrl) ??
-        this.cleanOptional(properties.cover) ??
-        this.cleanOptional(properties.imageUrl) ??
-        this.cleanOptional(properties.artworkUrl) ??
-        this.cleanOptional(file.thumbnailLink);
-
-      const matchedCoverFile = this.findBestCoverImage(file, imageByFolder);
-
-      const thumbnailUrl = explicitThumbnail ??
-        (matchedCoverFile ? `${this.publicApiOrigin}/drive/thumbnail/${matchedCoverFile.id}` : undefined);
+      const thumbnailUrl = `${this.publicApiOrigin}/drive/artwork/${file.id}`;
 
       const lyrics =
         this.cleanOptional(properties.lyrics) ??
