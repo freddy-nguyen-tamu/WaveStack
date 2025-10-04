@@ -99,11 +99,13 @@ export class GoogleDriveService {
     const files = await this.listAllDriveMediaFiles();
     const audioFiles = files.filter((file) => this.isAudioFile(file));
     const imageFiles = files.filter((file) => this.isImageFile(file));
+    const textFiles = files.filter((file) => this.isTextOrLyricFile(file));
 
     this.imageById.clear();
     imageFiles.forEach((file) => this.imageById.set(file.id, file));
 
     const imageByFolder = this.groupImagesByFolder(imageFiles);
+    const lyricSidecarMap = await this.buildLyricSidecarMap(audioFiles, textFiles);
 
     return audioFiles.map((file) => {
       const parsed = this.parseSongName(file.name);
@@ -117,6 +119,7 @@ export class GoogleDriveService {
       const lyrics =
         this.cleanOptional(properties.lyrics) ??
         this.cleanOptional(properties.Lyrics) ??
+        lyricSidecarMap.get(file.id) ??
         this.cleanOptional(properties.description) ??
         "";
 
@@ -411,6 +414,69 @@ export class GoogleDriveService {
       mimeType === "audio/wav" ||
       mimeType === "audio/x-wav"
     );
+  }
+
+  private isTextOrLyricFile(file: DriveFile): boolean {
+    const name = (file.name ?? "").toLowerCase();
+    const mimeType = (file.mimeType ?? "").toLowerCase();
+
+    return (
+      name.endsWith(".lrc") ||
+      name.endsWith(".txt") ||
+      mimeType === "text/plain" ||
+      mimeType === "text/lrc"
+    );
+  }
+
+  private async buildLyricSidecarMap(
+    audioFiles: DriveFile[],
+    textFiles: DriveFile[]
+  ): Promise<Map<string, string>> {
+    const map = new Map<string, string>();
+
+    for (const audioFile of audioFiles) {
+      const audioBase = this.cleanFileBaseName(audioFile.name).toLowerCase();
+      const audioFolder = audioFile.parentFolderId ?? audioFile.sourceRootFolderId ?? "root";
+
+      const matching = textFiles.filter((textFile) => {
+        const textBase = this.cleanFileBaseName(textFile.name).toLowerCase();
+        const textFolder = textFile.parentFolderId ?? textFile.sourceRootFolderId ?? "root";
+        return textBase === audioBase && textFolder === audioFolder;
+      });
+
+      if (matching.length > 0) {
+        const content = await this.fetchTextContent(matching[0].id);
+        if (content) {
+          map.set(audioFile.id, content);
+        }
+      }
+    }
+
+    return map;
+  }
+
+  private async fetchTextContent(fileId: string): Promise<string | undefined> {
+    const params = new URLSearchParams({
+      key: this.apiKey,
+      alt: "media"
+    });
+
+    const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?${params.toString()}`;
+
+    try {
+      const response = await fetch(url);
+
+      if (!response.ok) {
+        this.logger.warn(`Drive text file ${fileId} fetch failed with ${response.status}.`);
+        return undefined;
+      }
+
+      const text = await response.text();
+      return text.trim() || undefined;
+    } catch (error) {
+      this.logger.warn(`Drive text file ${fileId} fetch error: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    }
   }
 
   private isImageFile(file: DriveFile): boolean {

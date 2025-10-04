@@ -7,7 +7,6 @@ import {
   PlusCircle,
   SkipBack,
   SkipForward,
-  Trash2,
   Volume2
 } from "lucide-react";
 import type { Song } from "../../App";
@@ -22,8 +21,6 @@ type PlayerProps = {
   onToggleFavorite: () => void;
   onQueueChange: (songs: Song[]) => void;
   onActiveSongChange: (song: Song) => void;
-  onQueueRemove: (songId: string) => void;
-  onQueueClear: () => void;
 };
 
 export function Player({
@@ -33,9 +30,7 @@ export function Player({
   isFavorite,
   onToggleFavorite,
   onQueueChange,
-  onActiveSongChange,
-  onQueueRemove,
-  onQueueClear
+  onActiveSongChange
 }: PlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
@@ -197,23 +192,6 @@ export function Player({
     setMessage(`Returned to: ${formatSongDisplayName(previousSong)}`);
   }
 
-  function selectQueuedSong(song: Song) {
-    setHasPlaybackHistory(true);
-    setPendingAutoplay(true);
-    onActiveSongChange(song);
-    setMessage(`Selected from queue: ${formatSongDisplayName(song)}`);
-  }
-
-  function clearQueue() {
-    onQueueClear();
-    setMessage("Queue cleared.");
-  }
-
-  function removeQueuedSong(song: Song) {
-    onQueueRemove(song.id);
-    setMessage(`Removed from queue: ${formatSongDisplayName(song)}`);
-  }
-
   function favorite() {
     onToggleFavorite();
     setMessage(isFavorite ? `Removed favorite: ${displayName}` : `Added favorite: ${displayName}`);
@@ -303,30 +281,6 @@ export function Player({
           </label>
         </div>
 
-        <section aria-label="Queue controls">
-          <h3>Queue</h3>
-          <button type="button" onClick={clearQueue} disabled={!queue.length}>
-            Clear queue
-          </button>
-
-          {queue.length ? (
-            <ol aria-label="Queue">
-              {queue.map((song) => (
-                <li key={song.id}>
-                  <button type="button" onClick={() => selectQueuedSong(song)} aria-pressed={song.id === activeSong.id}>
-                    {song.id === activeSong.id ? "Now playing: " : "Play: "}
-                    {formatSongDisplayName(song)}
-                  </button>
-                  <button type="button" onClick={() => removeQueuedSong(song)} aria-label={`Remove ${formatSongDisplayName(song)} from queue`}>
-                    <Trash2 aria-hidden="true" /> Remove
-                  </button>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <p>The queue is empty.</p>
-          )}
-        </section>
       </article>
 
       {hasPlaybackHistory ? (

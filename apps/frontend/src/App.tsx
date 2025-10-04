@@ -1,12 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@apollo/client";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery } from "@apollo/client";
 import { Activity, Clock, Heart, Library, ListMusic, Search } from "lucide-react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { MUSIC_HOME_QUERY } from "./api";
+import {
+  LISTENING_HABIT_SUMMARY_QUERY,
+  MUSIC_HOME_QUERY,
+  RECOMMENDED_SONGS_QUERY,
+  RECORD_LISTEN_MUTATION
+} from "./api";
 import { Player } from "./features/player/Player";
 import { PlaylistPanel } from "./features/playlists/PlaylistPanel";
 import { SearchPanel } from "./features/search/SearchPanel";
 import { Dashboard } from "./features/dashboard/Dashboard";
+import { AuthPanel } from "./features/auth/AuthPanel";
+import { QueueDrawer } from "./features/queue/QueueDrawer";
 import { formatSongDisplayName } from "./song-format";
 
 export type Song = {
@@ -25,6 +32,23 @@ export type Song = {
   modifiedTime?: string;
   sizeBytes?: number;
   sourceRootFolderId?: string;
+};
+
+export type AuthUser = {
+  id: string;
+  email: string;
+  displayName: string;
+};
+
+export type RecommendResult = {
+  song: Song;
+  reason: string;
+};
+
+export type HabitSummaryEntry = {
+  label: string;
+  count: number;
+  totalDurationSeconds: number;
 };
 
 export type ClientPlaylist = {
@@ -90,6 +114,21 @@ export function App() {
   const [selectedPlaylistId, setSelectedPlaylistId] = useState("");
   const [notice, setNotice] = useState("");
   const [refreshNotice, setRefreshNotice] = useState("");
+  const [queueDrawerOpen, setQueueDrawerOpen] = useState(false);
+
+  const [authUser, setAuthUser] = useState<AuthUser | null>(() => {
+    try {
+      const stored = window.localStorage.getItem("wavestack:auth-user");
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [recommendedData, setRecommendedData] = useState<RecommendResult[] | null>(null);
+  const [habitSummaries, setHabitSummaries] = useState<Record<string, HabitSummaryEntry[]>>({});
+  const [recordListen] = useMutation(RECORD_LISTEN_MUTATION);
+  const lastListenRef = useRef("");
 
   const { data, loading, error, refetch } = useQuery(MUSIC_HOME_QUERY, {
     fetchPolicy: "cache-and-network"
@@ -141,14 +180,6 @@ export function App() {
       return;
     }
 
-    setQueue((items) => {
-      if (items.length && items.every((item) => songById.has(item.id))) {
-        return items;
-      }
-
-      return songs.slice(0, 30);
-    });
-
     setActiveSong((currentSong) => {
       if (currentSong && songById.has(currentSong.id)) {
         return currentSong;
@@ -159,6 +190,8 @@ export function App() {
   }, [songs, songById]);
 
   const currentSong = activeSong ?? songs[0] ?? fallbackSongs[0];
+  const queueRef = useRef(queue);
+  queueRef.current = queue;
 
   function showNotice(message: string) {
     setNotice(message);
@@ -172,13 +205,9 @@ export function App() {
     setActiveSong(song);
     rememberRecent(song);
 
-    setQueue((items) => {
-      if (items.some((item) => item.id === song.id)) {
-        return items;
-      }
-
-      return [song, ...items];
-    });
+    if (!queue.some((item) => item.id === song.id)) {
+      setQueue((items) => [...items, song]);
+    }
 
     setPlaySignal((value) => value + 1);
     showNotice(`Now playing: ${formatSongDisplayName(song)}`);
@@ -335,6 +364,105 @@ export function App() {
     }
   }
 
+  function handleAuthChange(user: AuthUser | null, token: string | null) {
+    setAuthUser(user);
+
+    if (!user) {
+      setRecommendedData(null);
+      setHabitSummaries({});
+    }
+  }
+
+  function getAuthToken(): string | null {
+    return window.localStorage.getItem("wavestack:auth-token");
+  }
+
+  useEffect(() => {
+    if (!getAuthToken()) {
+      setRecommendedData(null);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch(import.meta.env.VITE_GRAPHQL_URL ?? "http://localhost:3000/graphql", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${getAuthToken()}`
+          },
+          body: JSON.stringify({
+            query: RECOMMENDED_SONGS_QUERY.loc?.source?.body ?? "",
+            variables: { limit: 24 }
+          })
+        });
+
+        const json = await response.json() as { data?: { recommendedSongs?: RecommendResult[] } };
+
+        if (json.data?.recommendedSongs) {
+          setRecommendedData(json.data.recommendedSongs);
+        }
+
+        const periods = ["DAY", "WEEK", "MONTH", "YEAR"] as const;
+
+        for (const period of periods) {
+          const summaryResponse = await fetch(import.meta.env.VITE_GRAPHQL_URL ?? "http://localhost:3000/graphql", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${getAuthToken()}`
+            },
+            body: JSON.stringify({
+              query: LISTENING_HABIT_SUMMARY_QUERY.loc?.source?.body ?? "",
+              variables: { period }
+            })
+          });
+
+          const summaryJson = await summaryResponse.json() as { data?: { listeningHabitSummary?: HabitSummaryEntry[] } };
+
+          const summaryPeriodData = summaryJson.data?.listeningHabitSummary;
+          if (summaryPeriodData) {
+            setHabitSummaries((prev) => {
+              const next: Record<string, HabitSummaryEntry[]> = {};
+              for (const key of Object.keys(prev)) {
+                next[key] = prev[key];
+              }
+              next[period] = summaryPeriodData;
+              return next;
+            });
+          }
+        }
+      } catch {
+        // silently fail — non-critical data
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser || !currentSong) return;
+
+    const key = `${authUser.id}:${currentSong.id}`;
+
+    if (key === lastListenRef.current) return;
+    lastListenRef.current = key;
+
+    const timer = setTimeout(() => {
+      void recordListen({
+        variables: {
+          songId: currentSong.id,
+          artistName: currentSong.artistName,
+          title: currentSong.title,
+          durationSeconds: currentSong.durationSeconds || 0,
+          completedPlayRatio: 0
+        }
+      });
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [authUser, currentSong, recordListen]);
+
   function renderSongsPage(title: string, pageSongs: Song[], emptyMessage: string) {
     return (
       <section aria-label={title}>
@@ -380,9 +508,9 @@ export function App() {
           <NavLink to="/recent">
             <Clock aria-hidden="true" /> Recent ({recentSongs.length})
           </NavLink>
-          <NavLink to="/queue">
+          <button type="button" onClick={() => setQueueDrawerOpen(true)} aria-label="Open queue">
             <ListMusic aria-hidden="true" /> Queue ({queue.length})
-          </NavLink>
+          </button>
           <NavLink to="/playlists">
             Playlists ({playlists.length})
           </NavLink>
@@ -390,6 +518,8 @@ export function App() {
             {loading ? "Refreshing..." : "Refresh Drive"}
           </button>
         </nav>
+
+        <AuthPanel user={authUser} onAuthChange={handleAuthChange} />
       </header>
 
       {notice ? <p role="status">{notice}</p> : null}
@@ -405,7 +535,7 @@ export function App() {
       <section aria-label="Player">
         <Player
           activeSong={currentSong}
-          queue={queue.length ? queue : songs.slice(0, 30)}
+          queue={queue}
           playSignal={playSignal}
           isFavorite={favoriteIds.includes(currentSong.id)}
           onToggleFavorite={() => toggleFavorite(currentSong)}
@@ -414,11 +544,6 @@ export function App() {
             setActiveSong(song);
             rememberRecent(song);
             showNotice(`Selected: ${formatSongDisplayName(song)}`);
-          }}
-          onQueueRemove={removeFromQueue}
-          onQueueClear={() => {
-            setQueue([]);
-            showNotice("Queue cleared.");
           }}
         />
       </section>
@@ -434,6 +559,8 @@ export function App() {
                 songs={songs}
                 favorites={favoriteSongs}
                 recentlyPlayed={recentSongs}
+                recommendedData={recommendedData}
+                habitSummaries={habitSummaries}
                 onPlay={playSong}
               />
             </section>
@@ -454,10 +581,6 @@ export function App() {
         <Route
           path="/recent"
           element={renderSongsPage("Recently Played", recentSongs, "No recently played songs yet. Click Play on a song first.")}
-        />
-        <Route
-          path="/queue"
-          element={renderSongsPage("Queue", queue, "Your queue is empty. Click Queue on songs first.")}
         />
         <Route
           path="/playlists"
@@ -482,6 +605,21 @@ export function App() {
         />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
+
+      <QueueDrawer
+        open={queueDrawerOpen}
+        queue={queue}
+        currentSongId={currentSong.id}
+        onClose={() => setQueueDrawerOpen(false)}
+        onPlay={(song) => {
+          playSong(song);
+        }}
+        onRemove={removeFromQueue}
+        onClear={() => {
+          setQueue([]);
+          showNotice("Queue cleared.");
+        }}
+      />
 
       <div className="bottom-player-spacer" aria-hidden="true" />
     </main>

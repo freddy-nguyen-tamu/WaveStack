@@ -32,6 +32,8 @@ services:
       GOOGLE_DRIVE_API_KEY: ${GOOGLE_DRIVE_API_KEY}
       GOOGLE_DRIVE_FOLDER_IDS: ${GOOGLE_DRIVE_FOLDER_IDS}
       API_PUBLIC_ORIGIN: ${API_PUBLIC_ORIGIN:-http://localhost:3000}
+      JWT_SECRET: ${JWT_SECRET:-replace-with-real-jwt-secret-in-production}
+      LISTENING_HABITS_GOOGLE_DRIVE_FOLDER_ID: ${LISTENING_HABITS_GOOGLE_DRIVE_FOLDER_ID:-TODO_FILL_LATER}
     depends_on:
       - postgres
       - neo4j

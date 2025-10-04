@@ -1,15 +1,16 @@
 import { createPortal } from "react-dom";
-import { X } from "lucide-react";
+import { Play, X } from "lucide-react";
 import type { Song } from "../../App";
 import { formatBytes, formatSeconds, formatSongDisplayName } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
 
 type SongMetadataModalProps = {
   song: Song;
+  onPlay: () => void;
   onClose: () => void;
 };
 
-export function SongMetadataModal({ song, onClose }: SongMetadataModalProps) {
+export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalProps) {
   const modal = (
     <div
       className="song-modal-backdrop"
@@ -44,6 +45,10 @@ export function SongMetadataModal({ song, onClose }: SongMetadataModalProps) {
             <h2 id="song-modal-title">{song.title}</h2>
             <h3>{song.artistName}</h3>
           </div>
+
+          <button type="button" className="song-modal__play-button" onClick={onPlay}>
+            <Play aria-hidden="true" fill="currentColor" /> Play
+          </button>
 
           <section className="song-modal__lyrics" aria-label="Lyrics">
             <h4>Lyrics</h4>

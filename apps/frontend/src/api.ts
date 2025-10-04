@@ -1,7 +1,22 @@
-import { ApolloClient, InMemoryCache, gql } from "@apollo/client";
+import { ApolloClient, InMemoryCache, gql, createHttpLink } from "@apollo/client";
+import { setContext } from "@apollo/client/link/context";
+
+const httpLink = createHttpLink({
+  uri: import.meta.env.VITE_GRAPHQL_URL ?? "http://localhost:3000/graphql"
+});
+
+const authLink = setContext((_, { headers }) => {
+  const token = window.localStorage.getItem("wavestack:auth-token");
+  return {
+    headers: {
+      ...headers,
+      ...(token ? { authorization: `Bearer ${token}` } : {})
+    }
+  };
+});
 
 export const apolloClient = new ApolloClient({
-  uri: import.meta.env.VITE_GRAPHQL_URL ?? "http://localhost:3000/graphql",
+  link: authLink.concat(httpLink),
   cache: new InMemoryCache()
 });
 
@@ -42,6 +57,75 @@ export const MUSIC_HOME_QUERY = gql`
     }
     recommendations {
       ...SongFields
+    }
+  }
+`;
+
+export const LOGIN_MUTATION = gql`
+  mutation Login($email: String!, $password: String!) {
+    login(email: $email, password: $password) {
+      token
+      user {
+        id
+        email
+        displayName
+        createdAt
+      }
+    }
+  }
+`;
+
+export const REGISTER_MUTATION = gql`
+  mutation Register($email: String!, $displayName: String!, $password: String!) {
+    register(email: $email, displayName: $displayName, password: $password) {
+      token
+      user {
+        id
+        email
+        displayName
+        createdAt
+      }
+    }
+  }
+`;
+
+export const RECORD_LISTEN_MUTATION = gql`
+  mutation RecordListen(
+    $songId: String!,
+    $artistName: String!,
+    $title: String!,
+    $durationSeconds: Int!,
+    $completedPlayRatio: Float!
+  ) {
+    recordListen(
+      songId: $songId,
+      artistName: $artistName,
+      title: $title,
+      durationSeconds: $durationSeconds,
+      completedPlayRatio: $completedPlayRatio
+    )
+  }
+`;
+
+export const RECOMMENDED_SONGS_QUERY = gql`
+  ${SONG_FIELDS}
+
+  query RecommendedSongs($limit: Int) {
+    recommendedSongs(limit: $limit) {
+      song {
+        ...SongFields
+      }
+      reason
+    }
+  }
+`;
+
+export const LISTENING_HABIT_SUMMARY_QUERY = gql`
+  query ListeningHabitSummary($period: String!) {
+    listeningHabitSummary(period: $period) {
+      label
+      count
+      totalDurationSeconds
     }
   }
 `;

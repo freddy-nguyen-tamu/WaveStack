@@ -9,6 +9,9 @@ import { SearchModule } from "./search/search.module";
 import { HistoryModule } from "./history/history.module";
 import { RecommendationsModule } from "./recommendations/recommendations.module";
 import { StorageModule } from "./storage/storage.module";
+import { DatabaseModule } from "./database/database.module";
+import { AuthModule } from "./auth/auth.module";
+import { HabitsModule } from "./habits/habits.module";
 
 @Module({
   imports: [
@@ -17,15 +20,19 @@ import { StorageModule } from "./storage/storage.module";
       driver: ApolloDriver,
       autoSchemaFile: true,
       playground: true,
-      sortSchema: true
+      sortSchema: true,
+      context: ({ req }: { req: Record<string, unknown> }) => ({ req })
     }),
+    DatabaseModule,
     UsersModule,
     MusicModule,
     PlaylistsModule,
     SearchModule,
     HistoryModule,
     RecommendationsModule,
-    StorageModule
+    StorageModule,
+    AuthModule,
+    HabitsModule
   ]
 })
 export class AppModule {}

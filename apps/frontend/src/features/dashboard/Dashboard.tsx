@@ -1,6 +1,6 @@
-import { Activity, Heart, TrendingUp } from "lucide-react";
+import { Activity, Clock, Flame, Heart, TrendingUp } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { Song } from "../../App";
+import type { HabitSummaryEntry, RecommendResult, Song } from "../../App";
 import { formatSeconds, getSongCardSize, getWeightedSongLength } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
 import { SongMetadataModal } from "./SongMetadataModal";
@@ -10,18 +10,40 @@ type DashboardProps = {
   songs: Song[];
   favorites: Song[];
   recentlyPlayed: Song[];
+  recommendedData: RecommendResult[] | null;
+  habitSummaries: Record<string, HabitSummaryEntry[]>;
   onPlay: (song: Song) => void;
 };
 
-export function Dashboard({ loading, songs, favorites, recentlyPlayed, onPlay }: DashboardProps) {
+export function Dashboard({
+  loading,
+  songs,
+  favorites,
+  recentlyPlayed,
+  recommendedData,
+  habitSummaries,
+  onPlay
+}: DashboardProps) {
   const [selectedSong, setSelectedSong] = useState<Song | null>(null);
+
+  const reasonBySongId = useMemo(() => {
+    const map = new Map<string, string>();
+
+    if (recommendedData) {
+      for (const item of recommendedData) {
+        map.set(item.song.id, item.reason);
+      }
+    }
+
+    return map;
+  }, [recommendedData]);
 
   const suggestions = useMemo(() => {
     return [...songs].sort((a, b) => {
       const aDuration = getWeightedSongLength(a);
       const bDuration = getWeightedSongLength(b);
-      const aScore = (a.score ?? 0) * 1000 + aDuration * 0.5;
-      const bScore = (b.score ?? 0) * 1000 + bDuration * 0.5;
+      const aScore = (a.score ?? 0) * 1000 + aDuration * 0.6;
+      const bScore = (b.score ?? 0) * 1000 + bDuration * 0.6;
 
       return bScore - aScore;
     });
@@ -48,6 +70,20 @@ export function Dashboard({ loading, songs, favorites, recentlyPlayed, onPlay }:
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [selectedSong]);
+
+  const periodLabels: Record<string, string> = {
+    DAY: "Today",
+    WEEK: "This week",
+    MONTH: "This month",
+    YEAR: "This year"
+  };
+
+  const periodIcons: Record<string, React.ReactNode> = {
+    DAY: <Clock aria-hidden="true" />,
+    WEEK: <Activity aria-hidden="true" />,
+    MONTH: <Flame aria-hidden="true" />,
+    YEAR: <TrendingUp aria-hidden="true" />
+  };
 
   return (
     <article className="dashboard-page">
@@ -83,10 +119,27 @@ export function Dashboard({ loading, songs, favorites, recentlyPlayed, onPlay }:
         </div>
       </section>
 
+      {(Object.keys(habitSummaries).length > 0) ? (
+        <section className="habit-grid" aria-label="Listening habits">
+          {Object.entries(habitSummaries).filter(([, entries]) => entries.length > 0).map(([period, entries]) => (
+            <div key={period} className="habit-card">
+              <h3>{periodIcons[period] ?? null} {periodLabels[period] ?? period}</h3>
+              {entries.slice(0, 5).map((entry) => (
+                <div key={entry.label} className="habit-card__row">
+                  <span className="habit-card__label">{entry.label}</span>
+                  <span className="habit-card__count">{entry.count} play(s)</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </section>
+      ) : null}
+
       {suggestions.length ? (
         <section className="song-masonry" aria-label="Suggested songs">
           {suggestions.map((song, index) => {
             const size = getSongCardSize(song, index);
+            const reason = reasonBySongId.get(song.id);
 
             return (
               <article className={`song-tile song-tile--${size}`} key={song.id}>
@@ -106,6 +159,7 @@ export function Dashboard({ loading, songs, favorites, recentlyPlayed, onPlay }:
                     <span>
                       <strong>{song.title}</strong>
                       <small>{song.artistName}</small>
+                      {reason ? <small className="song-tile__reason">{reason}</small> : null}
                     </span>
                     <span className="song-tile__duration">{formatSeconds(song.durationSeconds)}</span>
                   </span>
@@ -128,7 +182,14 @@ export function Dashboard({ loading, songs, favorites, recentlyPlayed, onPlay }:
       )}
 
       {selectedSong ? (
-        <SongMetadataModal song={selectedSong} onClose={() => setSelectedSong(null)} />
+        <SongMetadataModal
+          song={selectedSong}
+          onPlay={() => {
+            onPlay(selectedSong);
+            setSelectedSong(null);
+          }}
+          onClose={() => setSelectedSong(null)}
+        />
       ) : null}
     </article>
   );

@@ -67,7 +67,7 @@ export function getWeightedSongLength(
   song: Pick<Song, "durationSeconds" | "sizeBytes" | "id">
 ): number {
   if (Number.isFinite(song.durationSeconds) && song.durationSeconds > 0) {
-    return song.durationSeconds;
+    return song.durationSeconds + (stableSongNumber(song.id) % 11);
   }
 
   if (song.sizeBytes && Number.isFinite(song.sizeBytes) && song.sizeBytes > 0) {
