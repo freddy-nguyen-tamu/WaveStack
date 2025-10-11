@@ -21,6 +21,7 @@
     "amqplib": "^0.10.4",
     "apollo-server-express": "^3.13.0",
     "bcryptjs": "^3.0.3",
+    "googleapis": "^173.0.0",
     "graphql": "^16.9.0",
     "jsonwebtoken": "^9.0.3",
     "music-metadata": "^11.12.3",

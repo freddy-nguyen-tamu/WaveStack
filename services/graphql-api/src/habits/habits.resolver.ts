@@ -1,7 +1,15 @@
 import { Args, Context, Int, Mutation, Query, Resolver } from "@nestjs/graphql";
 import { AuthService } from "../auth/auth.service";
 import { HabitsService } from "./habits.service";
-import { HabitSummaryEntry, RecommendSongResult } from "./habits.models";
+import { DriveExportResult, HabitSummaryEntry, RecommendSongResult } from "./habits.models";
+
+type GqlContext = {
+  req?: {
+    headers?: {
+      authorization?: string;
+    };
+  };
+};
 
 @Resolver()
 export class HabitsResolver {
@@ -10,7 +18,7 @@ export class HabitsResolver {
     private readonly authService: AuthService
   ) {}
 
-  private resolveUserId(context: { req: { headers?: { authorization?: string } } }): string | null {
+  private resolveUserId(context: GqlContext): string | null {
     const authHeader = context.req?.headers?.authorization ?? "";
 
     if (!authHeader.startsWith("Bearer ")) {
@@ -27,7 +35,7 @@ export class HabitsResolver {
 
   @Query(() => [RecommendSongResult])
   async recommendedSongs(
-    @Context() context: { req: { headers?: { authorization?: string } } },
+    @Context() context: GqlContext,
     @Args("limit", { type: () => Int, nullable: true }) limit?: number
   ): Promise<RecommendSongResult[]> {
     const userId = this.resolveUserId(context);
@@ -36,7 +44,7 @@ export class HabitsResolver {
 
   @Query(() => [HabitSummaryEntry])
   async listeningHabitSummary(
-    @Context() context: { req: { headers?: { authorization?: string } } },
+    @Context() context: GqlContext,
     @Args("period") period: "DAY" | "WEEK" | "MONTH" | "YEAR"
   ): Promise<HabitSummaryEntry[]> {
     const userId = this.resolveUserId(context);
@@ -50,7 +58,7 @@ export class HabitsResolver {
 
   @Mutation(() => Boolean)
   async recordListen(
-    @Context() context: { req: { headers?: { authorization?: string } } },
+    @Context() context: GqlContext,
     @Args("songId") songId: string,
     @Args("artistName") artistName: string,
     @Args("title") title: string,
@@ -66,16 +74,25 @@ export class HabitsResolver {
     return this.habitsService.recordListen(userId, songId, artistName, title, durationSeconds, completedPlayRatio);
   }
 
-  @Mutation(() => Boolean)
+  @Mutation(() => DriveExportResult)
+  async testPrivateDriveWrite(): Promise<DriveExportResult> {
+    return this.habitsService.testDriveWrite();
+  }
+
+  @Mutation(() => DriveExportResult)
   async exportListeningHabits(
-    @Context() context: { req: { headers?: { authorization?: string } } }
-  ): Promise<boolean> {
+    @Context() context: GqlContext,
+    @Args("period", { nullable: true }) period?: "DAY" | "WEEK" | "MONTH" | "YEAR" | "ALL"
+  ): Promise<DriveExportResult> {
     const userId = this.resolveUserId(context);
 
     if (!userId) {
-      return false;
+      return {
+        ok: false,
+        message: "You must be logged in to export listening habits."
+      };
     }
 
-    return this.habitsService.exportToDrive(userId);
+    return this.habitsService.exportToDrive(userId, period ?? "ALL");
   }
 }

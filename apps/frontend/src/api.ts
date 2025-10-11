@@ -129,3 +129,27 @@ export const LISTENING_HABIT_SUMMARY_QUERY = gql`
     }
   }
 `;
+
+export const TEST_PRIVATE_DRIVE_WRITE_MUTATION = gql`
+  mutation TestPrivateDriveWrite {
+    testPrivateDriveWrite {
+      ok
+      message
+      folderId
+      credentialsPath
+      fileId
+      webViewLink
+    }
+  }
+`;
+
+export const EXPORT_LISTENING_HABITS_MUTATION = gql`
+  mutation ExportListeningHabits($period: String) {
+    exportListeningHabits(period: $period) {
+      ok
+      message
+      fileId
+      webViewLink
+    }
+  }
+`;

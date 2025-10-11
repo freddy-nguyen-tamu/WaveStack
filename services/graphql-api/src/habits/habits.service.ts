@@ -1,9 +1,31 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
 import { DatabaseService } from "../database/database.service";
 import { MusicService } from "../music/music.service";
 import { Song } from "../music/music.models";
 import { HabitSummaryEntry, RecommendSongResult } from "./habits.models";
+import { DrivePrivateExportService, ListeningHabitExportPayload } from "./drive-private-export.service";
+
+type QueryRows<T> = { rows: T[] } | T[];
+
+type PlayCountRow = {
+  song_id: string;
+  play_count: string | number;
+};
+
+type HabitSummaryRow = {
+  label: string;
+  count: string | number;
+  total_duration_seconds: string | number;
+};
+
+type ListeningEventExportRow = {
+  song_id: string;
+  artist_name: string;
+  title: string;
+  duration_seconds: string | number;
+  completed_play_ratio: string | number;
+  started_at: Date | string;
+};
 
 @Injectable()
 export class HabitsService {
@@ -12,7 +34,7 @@ export class HabitsService {
   constructor(
     private readonly database: DatabaseService,
     private readonly musicService: MusicService,
-    private readonly config: ConfigService
+    private readonly drivePrivateExport: DrivePrivateExportService
   ) {}
 
   async recordListen(
@@ -53,8 +75,8 @@ export class HabitsService {
       }));
     }
 
-    const rows = await this.database.query(
-      `SELECT song_id, COUNT(*) as play_count
+    const result = await this.database.query(
+      `SELECT song_id, COUNT(*) AS play_count
        FROM app_listening_events
        WHERE user_id = $1
        GROUP BY song_id
@@ -62,10 +84,11 @@ export class HabitsService {
       [userId]
     );
 
+    const rows = this.rows(result) as PlayCountRow[];
     const playCounts = new Map<string, number>();
 
-    for (const row of rows as Array<{ song_id: string; play_count: number }>) {
-      playCounts.set(row.song_id, row.play_count);
+    for (const row of rows) {
+      playCounts.set(row.song_id, Number(row.play_count));
     }
 
     if (playCounts.size === 0) {
@@ -96,7 +119,10 @@ export class HabitsService {
       const discovery = shuffled.filter((song) => !existingIds.has(song.id));
 
       for (const song of discovery) {
-        if (scored.length >= limit) break;
+        if (scored.length >= limit) {
+          break;
+        }
+
         scored.push({
           song,
           score: Math.random(),
@@ -109,16 +135,9 @@ export class HabitsService {
   }
 
   async summarize(userId: string, period: "DAY" | "WEEK" | "MONTH" | "YEAR"): Promise<HabitSummaryEntry[]> {
-    const intervalMap: Record<string, string> = {
-      DAY: "interval '24 hours'",
-      WEEK: "interval '7 days'",
-      MONTH: "interval '30 days'",
-      YEAR: "interval '365 days'"
-    };
+    const interval = this.periodIntervalSql(period);
 
-    const interval = intervalMap[period] ?? "interval '7 days'";
-
-    const rows = await this.database.query(
+    const result = await this.database.query(
       `SELECT
          COALESCE(NULLIF(artist_name, ''), 'Unknown') AS label,
          COUNT(*)::int AS count,
@@ -131,24 +150,98 @@ export class HabitsService {
       [userId]
     );
 
-    return (rows as Array<{ label: string; count: number; total_duration_seconds: number }>).map(
-      (row) => ({
-        label: row.label,
-        count: row.count,
-        totalDurationSeconds: row.total_duration_seconds
-      })
-    );
+    return (this.rows(result) as HabitSummaryRow[]).map((row) => ({
+      label: row.label,
+      count: Number(row.count),
+      totalDurationSeconds: Number(row.total_duration_seconds)
+    }));
   }
 
-  async exportToDrive(userId: string): Promise<boolean> {
-    const folderId = this.config.get<string>("LISTENING_HABITS_GOOGLE_DRIVE_FOLDER_ID");
+  async testDriveWrite(): Promise<{
+    ok: boolean;
+    message: string;
+    folderId?: string;
+    credentialsPath?: string;
+    fileId?: string;
+    webViewLink?: string;
+  }> {
+    return this.drivePrivateExport.assertWritable();
+  }
 
-    if (!folderId || folderId === "TODO_FILL_LATER") {
-      this.logger.warn("LISTENING_HABITS_GOOGLE_DRIVE_FOLDER_ID not set; export skipped.");
-      return false;
+  async exportToDrive(
+    userId: string,
+    period: "DAY" | "WEEK" | "MONTH" | "YEAR" | "ALL" = "ALL"
+  ): Promise<{
+    ok: boolean;
+    message: string;
+    fileId?: string;
+    webViewLink?: string;
+  }> {
+    const events = await this.getEventsForExport(userId, period);
+    const summaries: Record<string, unknown> = {};
+
+    for (const p of ["DAY", "WEEK", "MONTH", "YEAR"] as const) {
+      summaries[p] = await this.summarize(userId, p);
     }
 
-    this.logger.log(`Export listening habits to Drive folder ${folderId} for user ${userId}: not yet implemented.`);
-    return false;
+    const payload: ListeningHabitExportPayload = {
+      userId,
+      period,
+      generatedAt: new Date().toISOString(),
+      events,
+      summaries
+    };
+
+    return this.drivePrivateExport.exportListeningHabits(payload);
+  }
+
+  private async getEventsForExport(
+    userId: string,
+    period: "DAY" | "WEEK" | "MONTH" | "YEAR" | "ALL"
+  ): Promise<ListeningHabitExportPayload["events"]> {
+    const intervalWhere =
+      period === "ALL"
+        ? ""
+        : `AND started_at >= now() - ${this.periodIntervalSql(period)}`;
+
+    const result = await this.database.query(
+      `SELECT
+         song_id,
+         artist_name,
+         title,
+         duration_seconds,
+         completed_play_ratio,
+         started_at
+       FROM app_listening_events
+       WHERE user_id = $1
+       ${intervalWhere}
+       ORDER BY started_at DESC
+       LIMIT 5000`,
+      [userId]
+    );
+
+    return (this.rows(result) as ListeningEventExportRow[]).map((row) => ({
+      songId: row.song_id,
+      artistName: row.artist_name,
+      title: row.title,
+      durationSeconds: Number(row.duration_seconds),
+      completedPlayRatio: Number(row.completed_play_ratio),
+      startedAt: row.started_at instanceof Date ? row.started_at.toISOString() : String(row.started_at)
+    }));
+  }
+
+  private periodIntervalSql(period: "DAY" | "WEEK" | "MONTH" | "YEAR"): string {
+    const intervalMap: Record<"DAY" | "WEEK" | "MONTH" | "YEAR", string> = {
+      DAY: "interval '24 hours'",
+      WEEK: "interval '7 days'",
+      MONTH: "interval '30 days'",
+      YEAR: "interval '365 days'"
+    };
+
+    return intervalMap[period];
+  }
+
+  private rows<T>(result: QueryRows<T>): T[] {
+    return Array.isArray(result) ? result : result.rows;
   }
 }

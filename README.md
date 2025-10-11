@@ -342,6 +342,7 @@ rsync -az --delete \
   --exclude "build" \
   --exclude "coverage" \
   --exclude ".env" \
+  --exclude "secrets" \
   -e "ssh -i ~/.ssh/wavestack_azure" \
   ./ "$ADMIN_USER@$VM_IP:/home/$ADMIN_USER/WaveStack/"
 ```
@@ -466,6 +467,7 @@ rsync -az --delete \
   --exclude "build" \
   --exclude "coverage" \
   --exclude ".env" \
+  --exclude "secrets" \
   -e "ssh -i ~/.ssh/wavestack_azure" \
   ./ "$ADMIN_USER@$VM_IP:/home/$ADMIN_USER/WaveStack/"
 
@@ -489,8 +491,438 @@ ssh -i ~/.ssh/wavestack_azure "$ADMIN_USER@$VM_IP" "cd ~/WaveStack && sudo docke
 ```
 
 ## GitHub secrets
-Go to /settings/secrets/actions/new and add your VM_HOST (your DNS), VM_USER (echo "$ADMIN_USER"), VM_SSH_PRIVATE_KEY_B64 (base64 -w 0 ~/.ssh/wavestack_azure) and VM_SSH_PRIVATE_KEY (cat ~/.ssh/wavestack_azure). No https://, no http://, no slash, no domain path. Just the IP or hostname.
 
+Go to:
+
+```txt
+/settings/secrets/actions/new
+```
+
+Add:
+
+```txt
+VM_HOST
+VM_USER
+VM_SSH_PRIVATE_KEY_B64
+VM_SSH_PRIVATE_KEY
+```
+
+Use these values:
+
+```bash
+echo "$ADMIN_USER"
+base64 -w 0 ~/.ssh/wavestack_azure
+cat ~/.ssh/wavestack_azure
+```
+
+For `VM_HOST`, use only the IP or hostname.
+
+Do not include:
+
+```txt
+https://
+http://
+a trailing slash
+a URL path
+```
+
+## Private Google Drive JSON secret for listening-habit exports
+
+WaveStack can export listening-habit JSON files to a private Google Drive folder.
+This requires a Google **service account JSON key**. A normal Google Drive API key
+cannot write to a private folder.
+
+### 1. Create the service account JSON
+
+In Google Cloud Console:
+
+1. Go to **IAM & Admin**
+2. Go to **Service Accounts**
+3. Create a service account, for example:
+
+```txt
+wavestack-drive-writer
+```
+
+4. Open the service account
+5. Go to **Keys**
+6. Click **Add key**
+7. Click **Create new key**
+8. Choose **JSON**
+9. Download the JSON file
+
+Do not commit this JSON file to GitHub.
+
+### 2. Share the private Drive folder with the service account
+
+Open the private Google Drive folder where WaveStack should write exports.
+
+Click **Share**, then add the service account email as **Editor**.
+
+The service account email looks like this:
+
+```txt
+wavestack-drive-writer@YOUR_GOOGLE_CLOUD_PROJECT.iam.gserviceaccount.com
+```
+
+Copy the Drive folder ID from the folder URL.
+
+Example URL:
+
+```txt
+https://drive.google.com/drive/folders/1YtWvgCd-wJqbIaFcpi6BAgco732vBFaE
+```
+
+Folder ID:
+
+```txt
+1YtWvgCd-wJqbIaFcpi6BAgco732vBFaE
+```
+
+### 3. Store the JSON locally
+
+From your local WSL machine:
+
+```bash
+cd /home/projects/WaveStack
+
+mkdir -p secrets
+
+mv /mnt/c/Users/qacer/Downloads/YOUR_DOWNLOADED_SERVICE_ACCOUNT_FILE.json \
+  secrets/google-drive-service-account.json
+
+chmod 600 secrets/google-drive-service-account.json
+
+ls -la secrets/google-drive-service-account.json
+```
+
+The file should now be here locally:
+
+```txt
+/home/projects/WaveStack/secrets/google-drive-service-account.json
+```
+
+### 4. Make sure the JSON is ignored by Git
+
+Add this to `.gitignore`:
+
+```gitignore
+secrets/
+google-drive-service-account.json
+*service-account*.json
+```
+
+Never run:
+
+```bash
+git add secrets/google-drive-service-account.json
+```
+
+### 5. Add local environment variables
+
+In local `.env`:
+
+```env
+GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/google-drive-service-account.json
+GOOGLE_DRIVE_PRIVATE_EXPORT_ENABLED=true
+LISTENING_HABITS_GOOGLE_DRIVE_FOLDER_ID=REPLACE-ME-WITH-PRIVATE-DRIVE-FOLDER-ID
+```
+
+Example:
+
+```env
+GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/google-drive-service-account.json
+GOOGLE_DRIVE_PRIVATE_EXPORT_ENABLED=true
+LISTENING_HABITS_GOOGLE_DRIVE_FOLDER_ID=1YtWvgCd-wJqbIaFcpi6BAgco732vBFaE
+```
+
+Use `/app/secrets/...` because the backend runs inside Docker.
+
+Docker maps this host folder:
+
+```txt
+./secrets
+```
+
+to this container folder:
+
+```txt
+/app/secrets
+```
+
+### 6. Add example environment variables
+
+In `.env.example`, add placeholders only:
+
+```env
+GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/google-drive-service-account.json
+GOOGLE_DRIVE_PRIVATE_EXPORT_ENABLED=false
+LISTENING_HABITS_GOOGLE_DRIVE_FOLDER_ID=TODO_FILL_LATER
+```
+
+Do not put real secrets in `.env.example`.
+
+### 7. Mount the JSON into the GraphQL API container
+
+In `docker-compose.yml`, under the `graphql-api` service, add these environment
+variables:
+
+```yaml
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-/app/secrets/google-drive-service-account.json}
+      GOOGLE_DRIVE_PRIVATE_EXPORT_ENABLED: ${GOOGLE_DRIVE_PRIVATE_EXPORT_ENABLED:-false}
+      LISTENING_HABITS_GOOGLE_DRIVE_FOLDER_ID: ${LISTENING_HABITS_GOOGLE_DRIVE_FOLDER_ID:-TODO_FILL_LATER}
+```
+
+Also add this volume under the same `graphql-api` service:
+
+```yaml
+    volumes:
+      - ./secrets:/app/secrets:ro
+```
+
+The `graphql-api` service should include this shape:
+
+```yaml
+  graphql-api:
+    build:
+      context: ./services/graphql-api
+    ports:
+      - "3000:3000"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: wavestack
+      POSTGRES_USER: wavestack
+      POSTGRES_PASSWORD: wavestack_dev_password
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: wavestack_graph_password
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      AUDIO_SERVICE_URL: http://audio-ai-service:8000
+      ANALYTICS_SERVICE_URL: http://analytics-service:8080
+      SIGNED_URL_SECRET: local-dev-secret
+      GOOGLE_DRIVE_API_KEY: ${GOOGLE_DRIVE_API_KEY}
+      GOOGLE_DRIVE_FOLDER_IDS: ${GOOGLE_DRIVE_FOLDER_IDS}
+      API_PUBLIC_ORIGIN: ${API_PUBLIC_ORIGIN:-http://localhost:3000}
+      JWT_SECRET: ${JWT_SECRET:-replace-with-real-jwt-secret-in-production}
+      LISTENING_HABITS_GOOGLE_DRIVE_FOLDER_ID: ${LISTENING_HABITS_GOOGLE_DRIVE_FOLDER_ID:-TODO_FILL_LATER}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-/app/secrets/google-drive-service-account.json}
+      GOOGLE_DRIVE_PRIVATE_EXPORT_ENABLED: ${GOOGLE_DRIVE_PRIVATE_EXPORT_ENABLED:-false}
+    volumes:
+      - ./secrets:/app/secrets:ro
+    depends_on:
+      - postgres
+      - neo4j
+      - rabbitmq
+      - audio-ai-service
+      - analytics-service
+```
+
+### 8. Copy the JSON secret to the Azure VM
+
+From your local WSL machine, use the real VM IP and SSH key.
+
+Example:
+
+```bash
+cd /home/projects/WaveStack
+
+scp -i ~/.ssh/wavestack_azure \
+  secrets/google-drive-service-account.json \
+  azureuser@20.225.235.88:/home/azureuser/google-drive-service-account.json
+```
+
+Then SSH into the VM:
+
+```bash
+ssh -i ~/.ssh/wavestack_azure azureuser@20.225.235.88
+```
+
+On the VM:
+
+```bash
+cd ~/WaveStack
+
+mkdir -p secrets
+
+mv /home/azureuser/google-drive-service-account.json \
+  secrets/google-drive-service-account.json
+
+chmod 600 secrets/google-drive-service-account.json
+
+ls -la secrets/google-drive-service-account.json
+```
+
+The file should now be here on the VM:
+
+```txt
+/home/azureuser/WaveStack/secrets/google-drive-service-account.json
+```
+
+### 9. Configure the VM `.env`
+
+On the VM:
+
+```bash
+cd ~/WaveStack
+nano .env
+```
+
+Add or update:
+
+```env
+GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/google-drive-service-account.json
+GOOGLE_DRIVE_PRIVATE_EXPORT_ENABLED=true
+LISTENING_HABITS_GOOGLE_DRIVE_FOLDER_ID=REPLACE-ME-WITH-PRIVATE-DRIVE-FOLDER-ID
+```
+
+Save with:
+
+```txt
+Ctrl + O
+Enter
+Ctrl + X
+```
+
+### 10. Rebuild the API container
+
+On the VM:
+
+```bash
+cd ~/WaveStack
+
+docker compose up -d --build graphql-api
+```
+
+If Docker permission fails, run the same command with `sudo`:
+
+```bash
+sudo docker compose up -d --build graphql-api
+```
+
+### 11. Verify Docker can see the JSON
+
+On the VM:
+
+```bash
+cd ~/WaveStack
+
+docker compose exec graphql-api ls -la /app/secrets
+
+docker compose exec graphql-api printenv GOOGLE_APPLICATION_CREDENTIALS
+
+docker compose exec graphql-api printenv GOOGLE_DRIVE_PRIVATE_EXPORT_ENABLED
+```
+
+Expected:
+
+```txt
+/app/secrets/google-drive-service-account.json
+true
+```
+
+If using `sudo`:
+
+```bash
+sudo docker compose exec graphql-api ls -la /app/secrets
+
+sudo docker compose exec graphql-api printenv GOOGLE_APPLICATION_CREDENTIALS
+
+sudo docker compose exec graphql-api printenv GOOGLE_DRIVE_PRIVATE_EXPORT_ENABLED
+```
+
+### 12. Add Docker permission for the VM user
+
+If `docker compose` requires `sudo`, add the VM user to the Docker group:
+
+```bash
+sudo usermod -aG docker azureuser
+```
+
+Then log out:
+
+```bash
+exit
+```
+
+SSH back in:
+
+```bash
+ssh -i ~/.ssh/wavestack_azure azureuser@20.225.235.88
+```
+
+Test:
+
+```bash
+docker ps
+```
+
+If `docker ps` works without `sudo`, Docker permissions are fixed.
+
+### 13. Make sure deploys do not delete the secret
+
+Your deployment uses `rsync --delete`. Keep these exclusions so deploys do not
+delete `.env` or `secrets/` on the VM:
+
+```bash
+rsync -az --delete \
+  --exclude ".git" \
+  --exclude "node_modules" \
+  --exclude "dist" \
+  --exclude "build" \
+  --exclude "coverage" \
+  --exclude ".env" \
+  --exclude "secrets" \
+  -e "ssh -i ~/.ssh/wavestack_azure" \
+  ./ "$ADMIN_USER@$VM_IP:/home/$ADMIN_USER/WaveStack/"
+```
+
+### 14. Test the private Drive write mutation
+
+After the backend code includes the private Drive export resolver, test:
+
+```bash
+cd ~/WaveStack
+
+curl -s http://localhost:3000/graphql \
+  -H "content-type: application/json" \
+  --data '{"query":"mutation { testPrivateDriveWrite { ok message folderId credentialsPath fileId webViewLink } }"}' \
+  | python3 -m json.tool
+```
+
+If the mutation is installed correctly and the Drive folder was shared with the
+service account, the response should include:
+
+```json
+{
+  "ok": true
+}
+```
+
+Then check the private Google Drive folder for a new test JSON file.
+
+If the response says:
+
+```txt
+Cannot query field "testPrivateDriveWrite" on type "Mutation"
+```
+
+then the JSON secret is mounted correctly, but the backend code for the mutation
+has not been added, committed, pushed, pulled onto the VM, or imported into
+`AppModule` yet.
+
+Check on the VM:
+
+```bash
+cd ~/WaveStack
+
+grep -R "testPrivateDriveWrite" -n services/graphql-api/src || echo "MISSING testPrivateDriveWrite"
+grep -R "DrivePrivateExportService" -n services/graphql-api/src || echo "MISSING DrivePrivateExportService"
+grep -R "HabitsModule" -n services/graphql-api/src/app.module.ts || echo "MISSING HabitsModule in AppModule"
+```
+
+If those are missing, apply the backend code changes locally, commit, push, pull
+on the VM, and rebuild the API container.
 
 ## Cleanup
 

@@ -13,6 +13,7 @@ import { PlaylistPanel } from "./features/playlists/PlaylistPanel";
 import { SearchPanel } from "./features/search/SearchPanel";
 import { Dashboard } from "./features/dashboard/Dashboard";
 import { AuthPanel } from "./features/auth/AuthPanel";
+import { DriveExportPanel } from "./features/habits/DriveExportPanel";
 import { QueueDrawer } from "./features/queue/QueueDrawer";
 import { formatSongDisplayName } from "./song-format";
 
@@ -563,6 +564,8 @@ export function App() {
                 habitSummaries={habitSummaries}
                 onPlay={playSong}
               />
+
+              <DriveExportPanel />
             </section>
           }
         />

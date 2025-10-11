@@ -22,4 +22,25 @@ export class HabitSummaryEntry {
   totalDurationSeconds!: number;
 }
 
+@ObjectType()
+export class DriveExportResult {
+  @Field()
+  ok!: boolean;
+
+  @Field()
+  message!: string;
+
+  @Field({ nullable: true })
+  folderId?: string;
+
+  @Field({ nullable: true })
+  credentialsPath?: string;
+
+  @Field({ nullable: true })
+  fileId?: string;
+
+  @Field({ nullable: true })
+  webViewLink?: string;
+}
+
 export type HabitPeriod = "DAY" | "WEEK" | "MONTH" | "YEAR";

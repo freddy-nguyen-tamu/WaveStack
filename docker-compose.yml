@@ -34,6 +34,10 @@ services:
       API_PUBLIC_ORIGIN: ${API_PUBLIC_ORIGIN:-http://localhost:3000}
       JWT_SECRET: ${JWT_SECRET:-replace-with-real-jwt-secret-in-production}
       LISTENING_HABITS_GOOGLE_DRIVE_FOLDER_ID: ${LISTENING_HABITS_GOOGLE_DRIVE_FOLDER_ID:-TODO_FILL_LATER}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-/app/secrets/google-drive-service-account.json}
+      GOOGLE_DRIVE_PRIVATE_EXPORT_ENABLED: ${GOOGLE_DRIVE_PRIVATE_EXPORT_ENABLED:-false}
+    volumes:
+      - ./secrets:/app/secrets:ro
     depends_on:
       - postgres
       - neo4j
