@@ -114,7 +114,8 @@ export class GoogleDriveService {
         ...(file.appProperties ?? {})
       };
 
-      const thumbnailUrl = `${this.publicApiOrigin}/drive/artwork/${file.id}`;
+      const driveThumbnailUrl = `${this.publicApiOrigin}/drive/artwork/${file.id}`;
+      const embeddedArtworkUrl = this.cleanOptional(properties.embeddedArtworkUrl) ?? this.cleanOptional(properties.artworkUrl) ?? undefined;
 
       const lyrics =
         this.cleanOptional(properties.lyrics) ??
@@ -142,7 +143,9 @@ export class GoogleDriveService {
         durationSeconds,
         streamUrl: `${this.publicApiOrigin}/drive/stream/${file.id}`,
         genreNames: this.parseGenres(properties.genreNames ?? properties.genres),
-        thumbnailUrl,
+        thumbnailUrl: file.thumbnailLink,
+        driveThumbnailUrl,
+        embeddedArtworkUrl,
         lyrics,
         webViewLink: file.webViewLink,
         mimeType: file.mimeType,

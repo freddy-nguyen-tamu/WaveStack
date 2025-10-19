@@ -11,8 +11,8 @@ export class AuthUser {
   @Field()
   displayName!: string;
 
-  @Field()
-  createdAt!: string;
+  @Field({ nullable: true })
+  avatarUrl?: string;
 }
 
 @ObjectType()

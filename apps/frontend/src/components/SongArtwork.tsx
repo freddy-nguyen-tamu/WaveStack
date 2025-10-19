@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import type { Song } from "../App";
 
 type SongArtworkProps = {
-  song: Pick<Song, "id" | "artistName" | "thumbnailUrl">;
+  song: Pick<Song, "id" | "artistName" | "thumbnailUrl" | "driveThumbnailUrl" | "embeddedArtworkUrl">;
   wrapClassName: string;
   fallbackClassName: string;
   imageClassName?: string;
   loading?: "lazy" | "eager";
 };
+
+const FALLBACK_SRC: string[] = [];
 
 export function SongArtwork({
   song,
@@ -16,28 +18,45 @@ export function SongArtwork({
   imageClassName,
   loading = "lazy"
 }: SongArtworkProps) {
-  const [failed, setFailed] = useState(false);
-  const src = song.thumbnailUrl?.trim();
+  const srcChain = [
+    song.thumbnailUrl?.trim(),
+    song.driveThumbnailUrl?.trim(),
+    song.embeddedArtworkUrl?.trim(),
+    ...FALLBACK_SRC
+  ].filter(Boolean) as string[];
+
+  const [srcIndex, setSrcIndex] = useState(0);
+  const currentSrc = srcChain[srcIndex];
 
   useEffect(() => {
-    setFailed(false);
-  }, [song.id, src]);
+    setSrcIndex(0);
+  }, [song.id]);
+
+  const handleError = () => {
+    if (srcIndex < srcChain.length - 1) {
+      setSrcIndex(srcIndex + 1);
+    }
+  };
+
+  if (currentSrc) {
+    return (
+      <span className={wrapClassName}>
+        <img
+          className={imageClassName}
+          src={currentSrc}
+          alt=""
+          loading={loading}
+          onError={handleError}
+        />
+      </span>
+    );
+  }
 
   return (
     <span className={wrapClassName}>
-      {src && !failed ? (
-        <img
-          className={imageClassName}
-          src={src}
-          alt=""
-          loading={loading}
-          onError={() => setFailed(true)}
-        />
-      ) : (
-        <span className={fallbackClassName} aria-hidden="true">
-          {song.artistName?.trim()?.charAt(0)?.toUpperCase() || "\u266A"}
-        </span>
-      )}
+      <span className={fallbackClassName} aria-hidden="true">
+        {song.artistName?.trim()?.charAt(0)?.toUpperCase() || "\u266A"}
+      </span>
     </span>
   );
 }

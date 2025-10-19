@@ -31,6 +31,8 @@ const SONG_FIELDS = gql`
     genreNames
     score
     thumbnailUrl
+    driveThumbnailUrl
+    embeddedArtworkUrl
     lyrics
     webViewLink
     mimeType
@@ -61,30 +63,13 @@ export const MUSIC_HOME_QUERY = gql`
   }
 `;
 
-export const LOGIN_MUTATION = gql`
-  mutation Login($email: String!, $password: String!) {
-    login(email: $email, password: $password) {
-      token
-      user {
-        id
-        email
-        displayName
-        createdAt
-      }
-    }
-  }
-`;
-
-export const REGISTER_MUTATION = gql`
-  mutation Register($email: String!, $displayName: String!, $password: String!) {
-    register(email: $email, displayName: $displayName, password: $password) {
-      token
-      user {
-        id
-        email
-        displayName
-        createdAt
-      }
+export const ME_QUERY = gql`
+  query Me {
+    me {
+      id
+      email
+      displayName
+      avatarUrl
     }
   }
 `;

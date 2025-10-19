@@ -30,6 +30,12 @@ export class Song {
   thumbnailUrl?: string;
 
   @Field({ nullable: true })
+  driveThumbnailUrl?: string;
+
+  @Field({ nullable: true })
+  embeddedArtworkUrl?: string;
+
+  @Field({ nullable: true })
   lyrics?: string;
 
   @Field({ nullable: true })

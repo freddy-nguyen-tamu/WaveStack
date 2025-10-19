@@ -4,6 +4,7 @@ import { Activity, Clock, Heart, Library, ListMusic, Search } from "lucide-react
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import {
   LISTENING_HABIT_SUMMARY_QUERY,
+  ME_QUERY,
   MUSIC_HOME_QUERY,
   RECOMMENDED_SONGS_QUERY,
   RECORD_LISTEN_MUTATION
@@ -27,6 +28,8 @@ export type Song = {
   genreNames: string[];
   score?: number;
   thumbnailUrl?: string;
+  driveThumbnailUrl?: string;
+  embeddedArtworkUrl?: string;
   lyrics?: string;
   webViewLink?: string;
   mimeType?: string;
@@ -39,6 +42,7 @@ export type AuthUser = {
   id: string;
   email: string;
   displayName: string;
+  avatarUrl?: string | null;
 };
 
 export type RecommendResult = {
@@ -68,6 +72,8 @@ const fallbackSongs: Song[] = [
     streamUrl: "/demo/cloudline.mp3",
     genreNames: ["electronic", "ambient"],
     thumbnailUrl: "https://images.unsplash.com/photo-1493246507139-91e8fad9978e?auto=format&fit=crop&w=900&q=80",
+    driveThumbnailUrl: undefined,
+    embeddedArtworkUrl: undefined,
     lyrics: "Instrumental demo track."
   },
   {
@@ -79,6 +85,8 @@ const fallbackSongs: Song[] = [
     streamUrl: "/demo/packet-chorus.mp3",
     genreNames: ["indie", "pop"],
     thumbnailUrl: "https://images.unsplash.com/photo-1511379938547-c1f69419868d?auto=format&fit=crop&w=900&q=80",
+    driveThumbnailUrl: undefined,
+    embeddedArtworkUrl: undefined,
     lyrics: "Demo lyrics placeholder."
   }
 ];
@@ -117,19 +125,24 @@ export function App() {
   const [refreshNotice, setRefreshNotice] = useState("");
   const [queueDrawerOpen, setQueueDrawerOpen] = useState(false);
 
-  const [authUser, setAuthUser] = useState<AuthUser | null>(() => {
-    try {
-      const stored = window.localStorage.getItem("wavestack:auth-user");
-      return stored ? JSON.parse(stored) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
 
   const [recommendedData, setRecommendedData] = useState<RecommendResult[] | null>(null);
   const [habitSummaries, setHabitSummaries] = useState<Record<string, HabitSummaryEntry[]>>({});
   const [recordListen] = useMutation(RECORD_LISTEN_MUTATION);
   const lastListenRef = useRef("");
+  const hasToken = !!window.localStorage.getItem("wavestack:auth-token");
+
+  const { data: meData } = useQuery(ME_QUERY, {
+    skip: !hasToken,
+    fetchPolicy: "network-only"
+  });
+
+  useEffect(() => {
+    if (meData?.me) {
+      setAuthUser(meData.me);
+    }
+  }, [meData]);
 
   const { data, loading, error, refetch } = useQuery(MUSIC_HOME_QUERY, {
     fetchPolicy: "cache-and-network"
@@ -373,6 +386,8 @@ export function App() {
       setHabitSummaries({});
     }
   }
+
+  const meLoading = !authUser && hasToken;
 
   function getAuthToken(): string | null {
     return window.localStorage.getItem("wavestack:auth-token");
