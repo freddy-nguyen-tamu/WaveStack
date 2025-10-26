@@ -378,15 +378,6 @@ export function App() {
     }
   }
 
-  function handleAuthChange(user: AuthUser | null, token: string | null) {
-    setAuthUser(user);
-
-    if (!user) {
-      setRecommendedData(null);
-      setHabitSummaries({});
-    }
-  }
-
   const meLoading = !authUser && hasToken;
 
   function getAuthToken(): string | null {
@@ -535,7 +526,17 @@ export function App() {
           </button>
         </nav>
 
-        <AuthPanel user={authUser} onAuthChange={handleAuthChange} />
+        <AuthPanel
+          user={authUser}
+          onLogout={() => {
+            window.localStorage.removeItem("wavestack:auth-token");
+            window.localStorage.removeItem("wavestack:auth-user");
+            setAuthUser(null);
+            setRecommendedData(null);
+            setHabitSummaries({});
+            showNotice("Signed out.");
+          }}
+        />
       </header>
 
       {notice ? <p role="status">{notice}</p> : null}

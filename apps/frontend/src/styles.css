@@ -886,10 +886,7 @@ body.modal-open {
   font-size: 0.85rem;
 }
 
-.auth-panel__google-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.6rem;
+.auth-panel__google {
   width: 100%;
   justify-content: center;
   padding: 0.65rem 1rem;
@@ -902,13 +899,13 @@ body.modal-open {
   transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
 }
 
-.auth-panel__google-btn:hover:not(:disabled) {
+.auth-panel__google:hover:not(:disabled) {
   border-color: rgba(255, 255, 255, 0.5);
   background: rgba(30, 41, 59, 0.9);
   transform: translateY(-1px);
 }
 
-.auth-panel__google-btn:disabled {
+.auth-panel__google:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
