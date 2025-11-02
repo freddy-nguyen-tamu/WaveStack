@@ -1,83 +1,88 @@
 import { Injectable } from "@nestjs/common";
-import { Album, Artist, Song } from "./music.models";
+import { Album, Artist, Song, SongConnection } from "./music.models";
 import { SignedUrlService } from "../storage/signed-url.service";
 import { AudioJobsProducer } from "./audio-jobs.producer";
 import { GoogleDriveService } from "./google-drive.service";
+import { DriveTrackRepository } from "./drive-track.repository";
 
 @Injectable()
 export class MusicService {
   constructor(
     private readonly signedUrlService: SignedUrlService,
     private readonly audioJobsProducer: AudioJobsProducer,
-    private readonly googleDriveService: GoogleDriveService
+    private readonly googleDriveService: GoogleDriveService,
+    private readonly driveTrackRepository: DriveTrackRepository
   ) {}
 
   async listSongs(): Promise<Song[]> {
-    const driveSongs = await this.googleDriveService.listSongs();
+    const count = await this.driveTrackRepository.countTracks();
 
-    if (driveSongs.length) {
-      return driveSongs;
+    if (count > 0) {
+      const page = await this.driveTrackRepository.listSongs({ first: 80 });
+      return page.nodes;
     }
 
-    return [
-      {
-        id: "song-1",
-        title: "Cloudline",
-        artistName: "The Latency",
-        albumTitle: "Regions",
-        durationSeconds: 213,
-        streamUrl: this.signedUrlService.createSignedStreamUrl("tracks/song-1/master.m3u8"),
-        genreNames: ["electronic", "ambient"],
-        thumbnailUrl: "https://images.unsplash.com/photo-1493246507139-91e8fad9978e?auto=format&fit=crop&w=900&q=80",
-        lyrics: "Instrumental demo track."
-      },
-      {
-        id: "song-2",
-        title: "Packet Chorus",
-        artistName: "Blue Queue",
-        albumTitle: "Async Hearts",
-        durationSeconds: 188,
-        streamUrl: this.signedUrlService.createSignedStreamUrl("tracks/song-2/master.m3u8"),
-        genreNames: ["indie", "pop"],
-        thumbnailUrl: "https://images.unsplash.com/photo-1511379938547-c1f69419868d?auto=format&fit=crop&w=900&q=80",
-        lyrics: "Demo lyrics placeholder."
-      }
-    ];
+    return this.googleDriveService.listSongs();
+  }
+
+  songPage(first: number, after?: string | null, query?: string | null): Promise<SongConnection> {
+    return this.driveTrackRepository.listSongs({ first, after, query });
+  }
+
+  async dashboardSongs(limit: number): Promise<Song[]> {
+    const count = await this.driveTrackRepository.countTracks();
+
+    if (count > 0) {
+      return this.driveTrackRepository.listDashboardSongs(limit);
+    }
+
+    const songs = await this.googleDriveService.listSongs();
+    return songs.slice(0, limit);
+  }
+
+  songDetails(id: string): Promise<Song | null> {
+    return this.driveTrackRepository.getSong(id);
   }
 
   async listAlbums(): Promise<Album[]> {
     const songs = await this.listSongs();
-    const albums = new Map<string, Album>();
+    const byAlbum = new Map<string, Album>();
 
     for (const song of songs) {
-      const id = `${song.artistName}:${song.albumTitle}`;
-      albums.set(id, {
-        id,
-        title: song.albumTitle,
-        artistName: song.artistName
-      });
+      const id = `${song.artistName}:${song.albumTitle}`.toLowerCase();
+
+      if (!byAlbum.has(id)) {
+        byAlbum.set(id, {
+          id,
+          title: song.albumTitle,
+          artistName: song.artistName
+        });
+      }
     }
 
-    return Array.from(albums.values());
+    return [...byAlbum.values()];
   }
 
   async listArtists(): Promise<Artist[]> {
     const songs = await this.listSongs();
-    const artists = new Map<string, Artist>();
+    const byArtist = new Map<string, Artist>();
 
     for (const song of songs) {
-      artists.set(song.artistName, {
-        id: song.artistName,
-        name: song.artistName
-      });
+      const id = song.artistName.toLowerCase();
+
+      if (!byArtist.has(id)) {
+        byArtist.set(id, {
+          id,
+          name: song.artistName
+        });
+      }
     }
 
-    return Array.from(artists.values());
+    return [...byArtist.values()];
   }
 
   async listFavoriteSongs(): Promise<Song[]> {
-    const songs = await this.listSongs();
-    return songs.slice(0, 10);
+    return this.listSongs();
   }
 
   async requestUploadProcessing(songId: string, blobUrl: string, userId: string): Promise<boolean> {

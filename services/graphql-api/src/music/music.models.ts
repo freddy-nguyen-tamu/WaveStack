@@ -30,6 +30,9 @@ export class Song {
   thumbnailUrl?: string;
 
   @Field({ nullable: true })
+  localThumbnailUrl?: string;
+
+  @Field({ nullable: true })
   driveThumbnailUrl?: string;
 
   @Field({ nullable: true })
@@ -52,6 +55,69 @@ export class Song {
 
   @Field({ nullable: true })
   sourceRootFolderId?: string;
+}
+
+@ObjectType()
+export class SongPageInfo {
+  @Field({ nullable: true })
+  endCursor?: string;
+
+  @Field()
+  hasNextPage!: boolean;
+}
+
+@ObjectType()
+export class SongConnection {
+  @Field(() => [Song])
+  nodes!: Song[];
+
+  @Field(() => SongPageInfo)
+  pageInfo!: SongPageInfo;
+
+  @Field(() => Int)
+  totalCount!: number;
+}
+
+@ObjectType()
+export class DriveSyncResult {
+  @Field()
+  ok!: boolean;
+
+  @Field()
+  message!: string;
+
+  @Field(() => Int)
+  scannedCount!: number;
+
+  @Field(() => Int)
+  upsertedCount!: number;
+
+  @Field(() => Int)
+  thumbnailCount!: number;
+}
+
+@ObjectType()
+export class DriveSyncStatus {
+  @Field()
+  status!: string;
+
+  @Field({ nullable: true })
+  startedAt?: string;
+
+  @Field({ nullable: true })
+  finishedAt?: string;
+
+  @Field(() => Int)
+  scannedCount!: number;
+
+  @Field(() => Int)
+  upsertedCount!: number;
+
+  @Field(() => Int)
+  thumbnailCount!: number;
+
+  @Field({ nullable: true })
+  errorMessage?: string;
 }
 
 @ObjectType()

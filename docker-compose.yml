@@ -40,8 +40,13 @@ services:
       GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET}
       GOOGLE_OAUTH_CALLBACK_URL: ${GOOGLE_OAUTH_CALLBACK_URL:-http://localhost:3000/auth/google/callback}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+      DRIVE_TRACK_SYNC_THUMBNAIL_DIR: ${DRIVE_TRACK_SYNC_THUMBNAIL_DIR:-/app/.cache/thumbnails}
+      DRIVE_TRACK_SYNC_THUMBNAIL_PUBLIC_PATH: ${DRIVE_TRACK_SYNC_THUMBNAIL_PUBLIC_PATH:-/drive/assets/thumbnails}
+      DRIVE_TRACK_SYNC_PAGE_SIZE: ${DRIVE_TRACK_SYNC_PAGE_SIZE:-100}
+      DASHBOARD_RECOMMENDATION_LIMIT: ${DASHBOARD_RECOMMENDATION_LIMIT:-40}
     volumes:
       - ./secrets:/app/secrets:ro
+      - ./services/graphql-api/.cache:/app/.cache
     depends_on:
       - postgres
       - neo4j

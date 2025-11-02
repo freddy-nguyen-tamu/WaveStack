@@ -22,5 +22,6 @@ TestResults/
 uploads/
 tmp/
 secrets/
+.cache/
 google-drive-service-account.json
 *service-account*.json

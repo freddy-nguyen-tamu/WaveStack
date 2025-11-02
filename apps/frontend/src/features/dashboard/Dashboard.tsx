@@ -13,6 +13,7 @@ type DashboardProps = {
   recommendedData: RecommendResult[] | null;
   habitSummaries: Record<string, HabitSummaryEntry[]>;
   onPlay: (song: Song) => void;
+  userName?: string;
 };
 
 export function Dashboard({
@@ -22,7 +23,8 @@ export function Dashboard({
   recentlyPlayed,
   recommendedData,
   habitSummaries,
-  onPlay
+  onPlay,
+  userName
 }: DashboardProps) {
   const [selectedSong, setSelectedSong] = useState<Song | null>(null);
 
@@ -89,12 +91,12 @@ export function Dashboard({
     <article className="dashboard-page">
       <div className="dashboard-page__header">
         <div>
-          <p className="eyebrow">Dashboard</p>
-          <h2>Suggested songs</h2>
+          <p className="eyebrow">{userName ? "Personalized dashboard" : "Public dashboard"}</p>
+          <h2>{userName ? `For ${userName}` : "Suggested songs"}</h2>
           <p>
-            A visual recommendation wall. Real Drive songs are sized by their
-            duration, with file size used as a fallback when Drive does not
-            expose exact audio duration.
+            {userName
+              ? "Recommendations are weighted by your listening habits and refreshed as you play more songs."
+              : "Sign in with Google to unlock personalized recommendations and habit summaries."}
           </p>
         </div>
 

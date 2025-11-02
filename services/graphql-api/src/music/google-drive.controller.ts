@@ -1,5 +1,8 @@
 import { Controller, Get, Header, NotFoundException, Param, Req, Res } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { Request, Response } from "express";
+import { createReadStream, existsSync } from "node:fs";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import { DriveArtworkService } from "./drive-artwork.service";
 import { GoogleDriveService } from "./google-drive.service";
@@ -8,7 +11,8 @@ import { GoogleDriveService } from "./google-drive.service";
 export class GoogleDriveController {
   constructor(
     private readonly googleDriveService: GoogleDriveService,
-    private readonly driveArtworkService: DriveArtworkService
+    private readonly driveArtworkService: DriveArtworkService,
+    private readonly config: ConfigService
   ) {}
 
   @Get("debug")
@@ -92,5 +96,22 @@ export class GoogleDriveController {
     response.setHeader("Content-Type", artwork.contentType);
     response.setHeader("Content-Length", String(artwork.buffer.length));
     response.end(artwork.buffer);
+  }
+
+  @Get("assets/thumbnails/:fileName")
+  thumbnail(@Param("fileName") fileName: string, @Res() response: Response): void {
+    const safeName = fileName.replace(/[^a-zA-Z0-9_.-]/g, "");
+    const thumbnailDir = this.config.get<string>("DRIVE_TRACK_SYNC_THUMBNAIL_DIR") ?? "/app/.cache/thumbnails";
+    const path = join(thumbnailDir, safeName);
+
+    if (!existsSync(path) || !safeName.endsWith(".webp")) {
+      response.status(404).send("Thumbnail not found.");
+      return;
+    }
+
+    response.status(200);
+    response.setHeader("Content-Type", "image/webp");
+    response.setHeader("Cache-Control", "public, max-age=604800, immutable");
+    createReadStream(path).pipe(response);
   }
 }

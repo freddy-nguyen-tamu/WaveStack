@@ -60,7 +60,7 @@ export class HabitsService {
   }
 
   async recommendSongs(userId: string | null, limit = 24): Promise<RecommendSongResult[]> {
-    const allSongs = await this.musicService.listSongs();
+    const allSongs = await this.musicService.dashboardSongs(Math.max(limit * 3, 80));
 
     if (!allSongs.length) {
       return [];

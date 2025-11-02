@@ -291,6 +291,7 @@ export function Player({
                 wrapClassName="mini-player__cover"
                 fallbackClassName="mini-player__cover-fallback"
                 loading="eager"
+                eager
               />
 
               <div className="mini-player__meta">

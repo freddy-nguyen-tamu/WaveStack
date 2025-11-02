@@ -1,14 +1,58 @@
-import { Args, Mutation, Query, Resolver } from "@nestjs/graphql";
-import { Album, Artist, Song } from "./music.models";
+import { Args, Int, Mutation, Query, Resolver } from "@nestjs/graphql";
+import {
+  Album,
+  Artist,
+  DriveSyncResult,
+  DriveSyncStatus,
+  Song,
+  SongConnection
+} from "./music.models";
 import { MusicService } from "./music.service";
+import { DriveLibrarySyncService } from "./drive-library-sync.service";
+import { DriveTrackRepository } from "./drive-track.repository";
 
 @Resolver(() => Song)
 export class MusicResolver {
-  constructor(private readonly musicService: MusicService) {}
+  constructor(
+    private readonly musicService: MusicService,
+    private readonly driveLibrarySyncService: DriveLibrarySyncService,
+    private readonly driveTrackRepository: DriveTrackRepository
+  ) {}
 
   @Query(() => [Song])
   songs(): Promise<Song[]> {
     return this.musicService.listSongs();
+  }
+
+  @Query(() => SongConnection)
+  songPage(
+    @Args("first", { type: () => Int, nullable: true }) first?: number,
+    @Args("after", { nullable: true }) after?: string,
+    @Args("query", { nullable: true }) query?: string
+  ): Promise<SongConnection> {
+    return this.musicService.songPage(first ?? 50, after, query);
+  }
+
+  @Query(() => [Song])
+  dashboardSongs(
+    @Args("limit", { type: () => Int, nullable: true }) limit?: number
+  ): Promise<Song[]> {
+    return this.musicService.dashboardSongs(limit ?? 40);
+  }
+
+  @Query(() => Song, { nullable: true })
+  songDetails(@Args("id") id: string): Promise<Song | null> {
+    return this.musicService.songDetails(id);
+  }
+
+  @Query(() => DriveSyncStatus)
+  driveSyncStatus(): Promise<DriveSyncStatus> {
+    return this.driveTrackRepository.latestSyncStatus();
+  }
+
+  @Mutation(() => DriveSyncResult)
+  syncDriveLibrary(): Promise<DriveSyncResult> {
+    return this.driveLibrarySyncService.syncDriveLibrary();
   }
 
   @Query(() => [Album])

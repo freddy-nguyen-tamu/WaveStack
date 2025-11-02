@@ -1,20 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@apollo/client";
-import { Activity, Clock, Heart, Library, ListMusic, Search } from "lucide-react";
+import { Activity, Clock, Heart, Library, ListMusic, Search, UserCircle } from "lucide-react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import {
   LISTENING_HABIT_SUMMARY_QUERY,
   ME_QUERY,
   MUSIC_HOME_QUERY,
   RECOMMENDED_SONGS_QUERY,
-  RECORD_LISTEN_MUTATION
+  RECORD_LISTEN_MUTATION,
+  SONG_PAGE_QUERY,
+  SYNC_DRIVE_LIBRARY_MUTATION
 } from "./api";
 import { Player } from "./features/player/Player";
 import { PlaylistPanel } from "./features/playlists/PlaylistPanel";
 import { SearchPanel } from "./features/search/SearchPanel";
 import { Dashboard } from "./features/dashboard/Dashboard";
 import { AuthPanel } from "./features/auth/AuthPanel";
-import { DriveExportPanel } from "./features/habits/DriveExportPanel";
+import { ProfilePage } from "./features/profile/ProfilePage";
 import { QueueDrawer } from "./features/queue/QueueDrawer";
 import { formatSongDisplayName } from "./song-format";
 
@@ -28,6 +30,7 @@ export type Song = {
   genreNames: string[];
   score?: number;
   thumbnailUrl?: string;
+  localThumbnailUrl?: string;
   driveThumbnailUrl?: string;
   embeddedArtworkUrl?: string;
   lyrics?: string;
@@ -125,13 +128,23 @@ export function App() {
   const [refreshNotice, setRefreshNotice] = useState("");
   const [queueDrawerOpen, setQueueDrawerOpen] = useState(false);
 
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(() => {
+    try {
+      const stored = window.localStorage.getItem("wavestack:auth-user");
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
+  });
 
   const [recommendedData, setRecommendedData] = useState<RecommendResult[] | null>(null);
   const [habitSummaries, setHabitSummaries] = useState<Record<string, HabitSummaryEntry[]>>({});
   const [recordListen] = useMutation(RECORD_LISTEN_MUTATION);
   const lastListenRef = useRef("");
   const hasToken = !!window.localStorage.getItem("wavestack:auth-token");
+
+  const [libraryCursor, setLibraryCursor] = useState<string | null>(null);
+  const [librarySongs, setLibrarySongs] = useState<Song[]>([]);
 
   const { data: meData } = useQuery(ME_QUERY, {
     skip: !hasToken,
@@ -149,7 +162,7 @@ export function App() {
   });
 
   const songs = useMemo<Song[]>(
-    () => uniqueSongsById(data?.songs?.length ? data.songs : fallbackSongs),
+    () => uniqueSongsById(data?.dashboardSongs?.length ? data.dashboardSongs : fallbackSongs),
     [data]
   );
 
@@ -166,6 +179,42 @@ export function App() {
       .map((id) => songById.get(id))
       .filter((song): song is Song => Boolean(song));
   }, [recentSongIds, songById]);
+
+  const [syncDriveLibrary] = useMutation(SYNC_DRIVE_LIBRARY_MUTATION);
+
+  const {
+    data: libraryData,
+    fetchMore: fetchMoreLibrary
+  } = useQuery(SONG_PAGE_QUERY, {
+    variables: { first: 50, after: null, query: null },
+    fetchPolicy: "cache-and-network"
+  });
+
+  useEffect(() => {
+    if (libraryData?.songPage?.nodes) {
+      setLibrarySongs(libraryData.songPage.nodes);
+      setLibraryCursor(libraryData.songPage.pageInfo.endCursor ?? null);
+    }
+  }, [libraryData]);
+
+  async function loadMoreLibrary() {
+    if (!libraryCursor) return;
+
+    const result = await fetchMoreLibrary({
+      variables: {
+        first: 50,
+        after: libraryCursor,
+        query: null
+      }
+    });
+
+    const page = result.data?.songPage;
+
+    if (page?.nodes) {
+      setLibrarySongs((items) => uniqueSongsById([...items, ...page.nodes]));
+      setLibraryCursor(page.pageInfo.endCursor ?? null);
+    }
+  }
 
   useEffect(() => {
     window.localStorage.setItem("wavestack:favorites", JSON.stringify(favoriteIds));
@@ -218,11 +267,6 @@ export function App() {
   function playSong(song: Song) {
     setActiveSong(song);
     rememberRecent(song);
-
-    if (!queue.some((item) => item.id === song.id)) {
-      setQueue((items) => [...items, song]);
-    }
-
     setPlaySignal((value) => value + 1);
     showNotice(`Now playing: ${formatSongDisplayName(song)}`);
   }
@@ -366,15 +410,25 @@ export function App() {
     );
   }
 
+  function logout() {
+    window.localStorage.removeItem("wavestack:auth-token");
+    window.localStorage.removeItem("wavestack:auth-user");
+    setAuthUser(null);
+    setRecommendedData(null);
+    setHabitSummaries({});
+    showNotice("Signed out.");
+  }
+
   async function refreshDrive() {
-    setRefreshNotice("Refreshing Drive library...");
+    setRefreshNotice("Syncing Drive library into the database...");
 
     try {
+      const result = await syncDriveLibrary();
       await refetch();
-      setRefreshNotice("Drive library refreshed.");
+      setRefreshNotice(result.data?.syncDriveLibrary?.message ?? "Drive library synced.");
     } catch (refreshError) {
-      const message = refreshError instanceof Error ? refreshError.message : "Unknown refresh error.";
-      setRefreshNotice(`Refresh failed: ${message}`);
+      const message = refreshError instanceof Error ? refreshError.message : "Unknown sync error.";
+      setRefreshNotice(`Sync failed: ${message}`);
     }
   }
 
@@ -496,8 +550,25 @@ export function App() {
   return (
     <main>
       <header>
-        <h1>WaveStack</h1>
-        <p>Cloud-native music streaming platform</p>
+        <div className="app-header__top">
+          <div>
+            <h1>WaveStack</h1>
+            <p>Cloud-native music streaming platform</p>
+          </div>
+
+          <NavLink
+            to="/profile"
+            className="profile-shortcut"
+            aria-label={authUser ? `Open profile for ${authUser.displayName}` : "Open profile"}
+          >
+            {authUser?.avatarUrl ? (
+              <img src={authUser.avatarUrl} alt="" />
+            ) : (
+              <UserCircle aria-hidden="true" />
+            )}
+            <span>{authUser ? authUser.displayName : "Profile"}</span>
+          </NavLink>
+        </div>
 
         <nav aria-label="Primary">
           <NavLink to="/dashboard">
@@ -522,20 +593,13 @@ export function App() {
             Playlists ({playlists.length})
           </NavLink>
           <button type="button" onClick={() => void refreshDrive()} disabled={loading}>
-            {loading ? "Refreshing..." : "Refresh Drive"}
+            {loading ? "Syncing..." : "Sync Drive"}
           </button>
         </nav>
 
         <AuthPanel
           user={authUser}
-          onLogout={() => {
-            window.localStorage.removeItem("wavestack:auth-token");
-            window.localStorage.removeItem("wavestack:auth-user");
-            setAuthUser(null);
-            setRecommendedData(null);
-            setHabitSummaries({});
-            showNotice("Signed out.");
-          }}
+          onLogout={logout}
         />
       </header>
 
@@ -579,15 +643,40 @@ export function App() {
                 recommendedData={recommendedData}
                 habitSummaries={habitSummaries}
                 onPlay={playSong}
+                userName={authUser?.displayName}
               />
-
-              <DriveExportPanel />
             </section>
           }
         />
         <Route
           path="/library"
-          element={renderSongsPage("Library", songs, "No songs found.")}
+          element={
+            <section aria-label="Library">
+              <SearchPanel
+                pageKey="Library"
+                title="Library"
+                songs={librarySongs.length ? librarySongs : songs}
+                playlists={playlists}
+                selectedPlaylistId={selectedPlaylistId}
+                favoriteIds={favoriteIds}
+                emptyMessage="No songs found."
+                onSelectedPlaylistChange={setSelectedPlaylistId}
+                onCreatePlaylist={createPlaylist}
+                onAddToPlaylist={addToPlaylist}
+                onPlay={playSong}
+                onQueue={queueSong}
+                onToggleFavorite={toggleFavorite}
+              />
+
+              {libraryCursor ? (
+                <div className="load-more-row">
+                  <button type="button" onClick={() => void loadMoreLibrary()}>
+                    Load more songs
+                  </button>
+                </div>
+              ) : null}
+            </section>
+          }
         />
         <Route
           path="/search"
@@ -620,6 +709,20 @@ export function App() {
                 onToggleFavorite={toggleFavorite}
               />
             </section>
+          }
+        />
+        <Route
+          path="/profile"
+          element={
+            <ProfilePage
+              user={authUser}
+              favorites={favoriteSongs}
+              recentlyPlayed={recentSongs}
+              queueLength={queue.length}
+              habitSummaries={habitSummaries}
+              onLogout={logout}
+              onPlay={playSong}
+            />
           }
         />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
