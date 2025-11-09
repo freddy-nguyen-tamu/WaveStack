@@ -65,6 +65,33 @@ export type ClientPlaylist = {
   songIds: string[];
 };
 
+type SongPageQueryData = {
+  songPage: {
+    nodes: Song[];
+    pageInfo: {
+      endCursor?: string | null;
+      hasNextPage: boolean;
+    };
+    totalCount: number;
+  };
+};
+
+type SongPageQueryVariables = {
+  first: number;
+  after?: string | null;
+  query?: string | null;
+};
+
+type SyncDriveLibraryMutationData = {
+  syncDriveLibrary: {
+    ok: boolean;
+    message: string;
+    scannedCount: number;
+    upsertedCount: number;
+    thumbnailCount: number;
+  };
+};
+
 const fallbackSongs: Song[] = [
   {
     id: "demo-1",
@@ -180,12 +207,12 @@ export function App() {
       .filter((song): song is Song => Boolean(song));
   }, [recentSongIds, songById]);
 
-  const [syncDriveLibrary] = useMutation(SYNC_DRIVE_LIBRARY_MUTATION);
+  const [syncDriveLibrary] = useMutation<SyncDriveLibraryMutationData>(SYNC_DRIVE_LIBRARY_MUTATION);
 
   const {
     data: libraryData,
     fetchMore: fetchMoreLibrary
-  } = useQuery(SONG_PAGE_QUERY, {
+  } = useQuery<SongPageQueryData, SongPageQueryVariables>(SONG_PAGE_QUERY, {
     variables: { first: 50, after: null, query: null },
     fetchPolicy: "cache-and-network"
   });

@@ -12,22 +12,33 @@ type SongMetadataModalProps = {
   onClose: () => void;
 };
 
+type SongDetailsQueryData = {
+  songDetails: Song | null;
+};
+
+type SongDetailsQueryVariables = {
+  id: string;
+};
+
 export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalProps) {
-  const { data } = useQuery(SONG_DETAILS_QUERY, {
+  const { data } = useQuery<SongDetailsQueryData, SongDetailsQueryVariables>(SONG_DETAILS_QUERY, {
     variables: { id: song.id },
     fetchPolicy: "cache-first"
   });
 
-  const details = data?.songDetails ?? song;
+  const details: Song = data?.songDetails ?? song;
+  const genreNames: string[] = details.genreNames ?? [];
 
   const modal = (
     <div
       className="song-modal-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label={`Details for ${formatSongDisplayName(song)}`}
+      aria-label={`Details for ${formatSongDisplayName(details)}`}
       onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
       }}
     >
       <div className="song-modal">
@@ -58,61 +69,90 @@ export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalPr
             <p className="song-modal__album">{details.albumTitle}</p>
           ) : null}
 
-          <div className="song-modal__genres">
-            {details.genreNames?.map((genre) => (
-              <span key={genre} className="song-modal__genre-tag">
-                {genre}
-              </span>
-            ))}
-          </div>
+          {genreNames.length ? (
+            <div className="song-modal__genres">
+              {genreNames.map((genre) => (
+                <span key={genre} className="song-modal__genre-tag">
+                  {genre}
+                </span>
+              ))}
+            </div>
+          ) : null}
 
           <table className="song-modal__table">
             <tbody>
-              {details.durationSeconds ? (
-                <tr>
-                  <td>Duration</td>
-                  <td>{formatSeconds(details.durationSeconds)}</td>
-                </tr>
-              ) : null}
+              <tr>
+                <td>Display name</td>
+                <td>{formatSongDisplayName(details)}</td>
+              </tr>
+
+              <tr>
+                <td>Title</td>
+                <td>{details.title}</td>
+              </tr>
+
+              <tr>
+                <td>Artist / author</td>
+                <td>{details.artistName}</td>
+              </tr>
+
+              <tr>
+                <td>Album / source</td>
+                <td>{details.albumTitle || "Unknown"}</td>
+              </tr>
+
+              <tr>
+                <td>Duration</td>
+                <td>{formatSeconds(details.durationSeconds)} ({details.durationSeconds || 0} seconds)</td>
+              </tr>
 
               {details.lyrics ? (
                 <tr>
                   <td>Lyrics</td>
                   <td className="song-modal__lyrics">{details.lyrics}</td>
                 </tr>
-              ) : null}
+              ) : (
+                <tr>
+                  <td>Lyrics</td>
+                  <td>No lyrics attribute was provided for this Drive file.</td>
+                </tr>
+              )}
 
               {details.webViewLink ? (
                 <tr>
                   <td>Drive link</td>
                   <td>
                     <a href={details.webViewLink} target="_blank" rel="noreferrer">
-                      Open in Drive
+                      Open in Google Drive
                     </a>
                   </td>
                 </tr>
               ) : null}
 
-              {details.mimeType ? (
-                <tr>
-                  <td>Format</td>
-                  <td>{details.mimeType}</td>
-                </tr>
-              ) : null}
+              <tr>
+                <td>MIME type</td>
+                <td>{details.mimeType || "Unknown"}</td>
+              </tr>
 
-              {details.modifiedTime ? (
-                <tr>
-                  <td>Modified</td>
-                  <td>{new Date(details.modifiedTime).toLocaleDateString()}</td>
-                </tr>
-              ) : null}
+              <tr>
+                <td>Modified</td>
+                <td>{details.modifiedTime || "Unknown"}</td>
+              </tr>
 
-              {details.sizeBytes ? (
-                <tr>
-                  <td>Size</td>
-                  <td>{formatBytes(details.sizeBytes)}</td>
-                </tr>
-              ) : null}
+              <tr>
+                <td>Size</td>
+                <td>{formatBytes(details.sizeBytes)}</td>
+              </tr>
+
+              <tr>
+                <td>Source folder</td>
+                <td>{details.sourceRootFolderId || "Unknown"}</td>
+              </tr>
+
+              <tr>
+                <td>Stream URL</td>
+                <td>{details.streamUrl}</td>
+              </tr>
             </tbody>
           </table>
         </div>

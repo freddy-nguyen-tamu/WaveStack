@@ -57,7 +57,7 @@ export const apolloClient = new ApolloClient({
 
 export async function restoreApolloCache(): Promise<void> {
   await persistCache({
-    cache: apolloCache,
+    cache: apolloCache as unknown as Parameters<typeof persistCache>[0]["cache"],
     storage: new LocalStorageWrapper(window.localStorage),
     key: "wavestack:apollo-cache",
     maxSize: 6 * 1024 * 1024
