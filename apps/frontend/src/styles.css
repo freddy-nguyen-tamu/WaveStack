@@ -917,6 +917,16 @@ body.modal-open {
   object-fit: cover;
 }
 
+.auth-panel__profile-link {
+  color: #93c5fd;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.auth-panel__profile-link:hover {
+  color: #bfdbfe;
+}
+
 /* ------------------------------------------------------------------ */
 /* Queue drawer (right-side slide-out)                                */
 /* ------------------------------------------------------------------ */

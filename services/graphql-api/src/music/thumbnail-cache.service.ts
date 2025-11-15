@@ -3,7 +3,7 @@ import { ConfigService } from "@nestjs/config";
 import { mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import sharp from "sharp";
+import sharp = require("sharp");
 import { Song } from "./music.models";
 import { DriveArtworkService } from "./drive-artwork.service";
 
@@ -25,38 +25,73 @@ export class ThumbnailCacheService {
       return publicUrl;
     }
 
-    const rawFileId = song.id.replace(/^drive-/, "");
+    const fallbackUrl = this.firstUsableUrl([
+      song.driveThumbnailUrl,
+      song.thumbnailUrl
+    ]);
 
-    try {
-      const embedded = await this.driveArtworkService.getEmbeddedArtwork(rawFileId);
+    if (fallbackUrl) {
+      const madeFromDriveThumbnail = await this.tryGenerateFromUrl(outputPath, fallbackUrl, song.id);
 
-      if (embedded?.buffer?.length) {
-        await this.writeWebp(outputPath, embedded.buffer);
+      if (madeFromDriveThumbnail) {
         return publicUrl;
       }
-    } catch (error) {
-      this.logger.debug(`No embedded artwork for ${song.id}: ${error instanceof Error ? error.message : String(error)}`);
     }
 
-    const fallbackUrl = song.driveThumbnailUrl ?? song.thumbnailUrl;
+    /*
+      Do not download full audio files during the main library sync.
 
-    if (!fallbackUrl || fallbackUrl.includes("/assets/thumbnails/")) {
-      return null;
-    }
+      For a 3,000+ song Drive library, trying to download every MP3 just to
+      inspect embedded artwork is too slow and often fails with 403. The main
+      sync should only generate thumbnails from cheap image URLs such as
+      Drive thumbnailLink. Songs without a usable thumbnail URL fall back to
+      the normal letter artwork in the UI.
+    */
+    return null;
+  }
 
+  private async tryGenerateFromUrl(
+    outputPath: string,
+    url: string,
+    songId: string
+  ): Promise<boolean> {
     try {
-      const response = await fetch(fallbackUrl);
+      const response = await this.withTimeout(
+        fetch(url, {
+          headers: {
+            "user-agent": "WaveStack/1.0"
+          }
+        }),
+        12000
+      );
 
       if (!response.ok) {
-        return null;
+        this.logger.debug(`Thumbnail URL failed for ${songId}: ${response.status}`);
+        return false;
+      }
+
+      const contentType = response.headers.get("content-type") ?? "";
+
+      if (contentType && !contentType.toLowerCase().startsWith("image/")) {
+        this.logger.debug(`Thumbnail URL for ${songId} was not an image: ${contentType}`);
+        return false;
       }
 
       const buffer = Buffer.from(await response.arrayBuffer());
+
+      if (!buffer.length) {
+        return false;
+      }
+
       await this.writeWebp(outputPath, buffer);
-      return publicUrl;
+      return true;
     } catch (error) {
-      this.logger.debug(`Could not make thumbnail for ${song.id}: ${error instanceof Error ? error.message : String(error)}`);
-      return null;
+      this.logger.debug(
+        `Could not generate thumbnail from URL for ${songId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return false;
     }
   }
 
@@ -71,11 +106,51 @@ export class ThumbnailCacheService {
       })
       .webp({
         quality: 76,
-        effort: 4
+        effort: 3
       })
       .toBuffer();
 
     await writeFile(path, output);
+  }
+
+  private firstUsableUrl(urls: Array<string | null | undefined>): string | null {
+    for (const url of urls) {
+      const trimmed = url?.trim();
+
+      if (!trimmed) {
+        continue;
+      }
+
+      if (trimmed.includes("/assets/thumbnails/")) {
+        continue;
+      }
+
+      if (trimmed.includes("/drive/assets/thumbnails/")) {
+        continue;
+      }
+
+      return trimmed;
+    }
+
+    return null;
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+    let timeoutId: NodeJS.Timeout | undefined;
+
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        reject(new Error(`Timed out after ${ms}ms`));
+      }, ms);
+    });
+
+    try {
+      return await Promise.race([promise, timeout]);
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
   }
 
   private safeFileName(value: string): string {

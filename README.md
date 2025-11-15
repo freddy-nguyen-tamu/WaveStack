@@ -924,6 +924,9 @@ grep -R "HabitsModule" -n services/graphql-api/src/app.module.ts || echo "MISSIN
 If those are missing, apply the backend code changes locally, commit, push, pull
 on the VM, and rebuild the API container.
 
+## Login VM
+ssh -i ~/.ssh/wavestack_azure azureuser@[IP]
+
 ## Cleanup
 
 Delete the Azure resource group when you no longer need the deployment:

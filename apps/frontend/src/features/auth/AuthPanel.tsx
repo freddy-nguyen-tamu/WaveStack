@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import type { AuthUser } from "../../App";
 
 type AuthPanelProps = {
@@ -55,6 +56,10 @@ export function AuthPanel({ user, onLogout }: AuthPanelProps) {
           <strong>{user.displayName}</strong>
           <small>{user.email}</small>
         </div>
+
+        <Link className="auth-panel__profile-link" to="/profile">
+          View profile
+        </Link>
 
         <button type="button" onClick={onLogout}>
           Log out

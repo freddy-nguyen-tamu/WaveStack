@@ -16,6 +16,7 @@ import { PlaylistPanel } from "./features/playlists/PlaylistPanel";
 import { SearchPanel } from "./features/search/SearchPanel";
 import { Dashboard } from "./features/dashboard/Dashboard";
 import { AuthPanel } from "./features/auth/AuthPanel";
+import { OAuthCallbackPage } from "./features/auth/OAuthCallbackPage";
 import { ProfilePage } from "./features/profile/ProfilePage";
 import { QueueDrawer } from "./features/queue/QueueDrawer";
 import { formatSongDisplayName } from "./song-format";
@@ -164,16 +165,20 @@ export function App() {
     }
   });
 
+  const [authToken, setAuthToken] = useState<string | null>(() => {
+    return window.localStorage.getItem("wavestack:auth-token");
+  });
+
   const [recommendedData, setRecommendedData] = useState<RecommendResult[] | null>(null);
   const [habitSummaries, setHabitSummaries] = useState<Record<string, HabitSummaryEntry[]>>({});
   const [recordListen] = useMutation(RECORD_LISTEN_MUTATION);
   const lastListenRef = useRef("");
-  const hasToken = !!window.localStorage.getItem("wavestack:auth-token");
+  const hasToken = Boolean(authToken);
 
   const [libraryCursor, setLibraryCursor] = useState<string | null>(null);
   const [librarySongs, setLibrarySongs] = useState<Song[]>([]);
 
-  const { data: meData } = useQuery(ME_QUERY, {
+  const { data: meData, refetch: refetchMe } = useQuery(ME_QUERY, {
     skip: !hasToken,
     fetchPolicy: "network-only"
   });
@@ -181,8 +186,15 @@ export function App() {
   useEffect(() => {
     if (meData?.me) {
       setAuthUser(meData.me);
+      window.localStorage.setItem("wavestack:auth-user", JSON.stringify(meData.me));
     }
   }, [meData]);
+
+  useEffect(() => {
+    if (authToken) {
+      void refetchMe();
+    }
+  }, [authToken, refetchMe]);
 
   const { data, loading, error, refetch } = useQuery(MUSIC_HOME_QUERY, {
     fetchPolicy: "cache-and-network"
@@ -440,6 +452,7 @@ export function App() {
   function logout() {
     window.localStorage.removeItem("wavestack:auth-token");
     window.localStorage.removeItem("wavestack:auth-user");
+    setAuthToken(null);
     setAuthUser(null);
     setRecommendedData(null);
     setHabitSummaries({});
@@ -481,7 +494,11 @@ export function App() {
           },
           body: JSON.stringify({
             query: RECOMMENDED_SONGS_QUERY.loc?.source?.body ?? "",
-            variables: { limit: 24 }
+            variables: {
+              limit: 24,
+              favoriteSongIds: favoriteIds,
+              recentSongIds
+            }
           })
         });
 
@@ -526,7 +543,7 @@ export function App() {
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [authUser]);
+  }, [authToken, favoriteIds, recentSongIds]);
 
   useEffect(() => {
     if (!authUser || !currentSong) return;
@@ -749,6 +766,18 @@ export function App() {
               habitSummaries={habitSummaries}
               onLogout={logout}
               onPlay={playSong}
+            />
+          }
+        />
+        <Route
+          path="/oauth-callback"
+          element={
+            <OAuthCallbackPage
+              onToken={(token) => {
+                setAuthToken(token);
+                showNotice("Signed in with Google.");
+              }}
+              onError={showNotice}
             />
           }
         />

@@ -36,10 +36,16 @@ export class HabitsResolver {
   @Query(() => [RecommendSongResult])
   async recommendedSongs(
     @Context() context: GqlContext,
-    @Args("limit", { type: () => Int, nullable: true }) limit?: number
+    @Args("limit", { type: () => Int, nullable: true }) limit?: number,
+    @Args("favoriteSongIds", { type: () => [String], nullable: true }) favoriteSongIds?: string[],
+    @Args("recentSongIds", { type: () => [String], nullable: true }) recentSongIds?: string[]
   ): Promise<RecommendSongResult[]> {
     const userId = this.resolveUserId(context);
-    return this.habitsService.recommendSongs(userId, limit ?? 24);
+
+    return this.habitsService.recommendSongs(userId, limit ?? 24, {
+      favoriteSongIds: favoriteSongIds ?? [],
+      recentSongIds: recentSongIds ?? []
+    });
   }
 
   @Query(() => [HabitSummaryEntry])

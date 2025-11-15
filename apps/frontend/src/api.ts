@@ -206,8 +206,8 @@ export const RECORD_LISTEN_MUTATION = gql`
 export const RECOMMENDED_SONGS_QUERY = gql`
   ${SONG_CARD_FIELDS}
 
-  query RecommendedSongs($limit: Int) {
-    recommendedSongs(limit: $limit) {
+  query RecommendedSongs($limit: Int, $favoriteSongIds: [String!], $recentSongIds: [String!]) {
+    recommendedSongs(limit: $limit, favoriteSongIds: $favoriteSongIds, recentSongIds: $recentSongIds) {
       song {
         ...SongCardFields
       }

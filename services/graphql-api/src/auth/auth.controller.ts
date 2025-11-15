@@ -17,17 +17,19 @@ export class AuthController {
 
   @Get("google/callback")
   async googleCallback(@Query("code") code: string, @Res() res: Response): Promise<void> {
+    const frontendOrigin =
+      this.config.get<string>("FRONTEND_ORIGIN") ?? "https://wavestack.duckdns.org";
+
     if (!code) {
-      throw new HttpException("Missing authorization code", HttpStatus.BAD_REQUEST);
+      res.redirect(`${frontendOrigin}/oauth-callback#error=${encodeURIComponent("Missing authorization code")}`);
+      return;
     }
 
     try {
       const { token } = await this.authService.authenticateWithGoogleCode(code);
-      const frontendOrigin = this.config.get<string>("FRONTEND_ORIGIN") ?? "https://app.wavestack.duckdns.org";
-      res.redirect(`${frontendOrigin}/oauth-callback#token=${token}`);
+      res.redirect(`${frontendOrigin}/oauth-callback#token=${encodeURIComponent(token)}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "OAuth authentication failed";
-      const frontendOrigin = this.config.get<string>("FRONTEND_ORIGIN") ?? "https://app.wavestack.duckdns.org";
       res.redirect(`${frontendOrigin}/oauth-callback#error=${encodeURIComponent(message)}`);
     }
   }
