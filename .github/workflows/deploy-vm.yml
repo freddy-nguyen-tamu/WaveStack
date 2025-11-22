@@ -49,7 +49,9 @@ jobs:
             --exclude "build" \
             --exclude "coverage" \
             --exclude ".env" \
+            --exclude "secrets" \
             --exclude "response.json" \
+            --exclude "services/graphql-api/.cache" \
             -e "ssh -i ~/.ssh/wavestack_deploy" \
             ./ "${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:/home/${{ secrets.VM_USER }}/WaveStack/"
 

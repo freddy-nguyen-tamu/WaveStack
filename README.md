@@ -343,6 +343,7 @@ rsync -az --delete \
   --exclude "coverage" \
   --exclude ".env" \
   --exclude "secrets" \
+  --exclude "services/graphql-api/.cache" \
   -e "ssh -i ~/.ssh/wavestack_azure" \
   ./ "$ADMIN_USER@$VM_IP:/home/$ADMIN_USER/WaveStack/"
 ```
@@ -468,6 +469,7 @@ rsync -az --delete \
   --exclude "coverage" \
   --exclude ".env" \
   --exclude "secrets" \
+  --exclude "services/graphql-api/.cache" \
   -e "ssh -i ~/.ssh/wavestack_azure" \
   ./ "$ADMIN_USER@$VM_IP:/home/$ADMIN_USER/WaveStack/"
 
@@ -873,6 +875,7 @@ rsync -az --delete \
   --exclude "coverage" \
   --exclude ".env" \
   --exclude "secrets" \
+  --exclude "services/graphql-api/.cache" \
   -e "ssh -i ~/.ssh/wavestack_azure" \
   ./ "$ADMIN_USER@$VM_IP:/home/$ADMIN_USER/WaveStack/"
 ```
