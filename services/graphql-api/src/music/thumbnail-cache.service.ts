@@ -95,6 +95,15 @@ export class ThumbnailCacheService {
     }
   }
 
+  async writeEmbeddedArtwork(songId: string, buffer: Buffer): Promise<string | null> {
+    const fileName = `${this.safeFileName(songId)}.webp`;
+    const outputPath = join(this.thumbnailDir, fileName);
+    const publicUrl = `${this.publicPath}/${fileName}`;
+
+    await this.writeWebp(outputPath, buffer);
+    return publicUrl;
+  }
+
   private async writeWebp(path: string, buffer: Buffer): Promise<void> {
     await mkdir(this.thumbnailDir, { recursive: true });
 

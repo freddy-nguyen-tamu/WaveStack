@@ -259,6 +259,26 @@ export class DriveTrackRepository {
     return Number(rows[0]?.count ?? 0);
   }
 
+  async listTracksMissingLocalThumbnails(limit: number): Promise<Song[]> {
+    const safeLimit = Math.max(1, Math.min(limit || 10, 25));
+
+    const rows = (
+      await this.database.query<DriveTrackRow>(
+        `
+        SELECT *
+        FROM drive_tracks
+        WHERE deleted_at IS NULL
+          AND local_thumbnail_url IS NULL
+        ORDER BY synced_at DESC, id ASC
+        LIMIT $1
+        `,
+        [safeLimit]
+      )
+    ).rows;
+
+    return rows.map((row) => this.rowToSong(row));
+  }
+
   async createSyncRun(): Promise<string> {
     const rows = (
       await this.database.query<{ id: string }>(

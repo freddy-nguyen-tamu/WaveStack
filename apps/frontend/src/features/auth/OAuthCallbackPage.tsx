@@ -12,9 +12,11 @@ export function OAuthCallbackPage({ onToken, onError }: OAuthCallbackPageProps) 
   const navigate = useNavigate();
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-    const token = params.get("token");
-    const error = params.get("error");
+    const searchParams = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+
+    const token = searchParams.get("token") ?? hashParams.get("token");
+    const error = searchParams.get("error") ?? hashParams.get("error");
 
     if (error) {
       onError(`Google login failed: ${error}`);
@@ -23,7 +25,7 @@ export function OAuthCallbackPage({ onToken, onError }: OAuthCallbackPageProps) 
     }
 
     if (!token) {
-      onError("Google login did not return a token.");
+      onError(`Google login did not return a token. Callback URL was ${window.location.href}`);
       navigate("/profile", { replace: true });
       return;
     }
@@ -31,8 +33,9 @@ export function OAuthCallbackPage({ onToken, onError }: OAuthCallbackPageProps) 
     window.localStorage.setItem("wavestack:auth-token", token);
     onToken(token);
 
-    void client.resetStore().finally(() => {
+    void client.clearStore().finally(() => {
       navigate("/profile", { replace: true });
+      window.location.reload();
     });
   }, [client, navigate, onError, onToken]);
 

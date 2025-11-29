@@ -1,4 +1,4 @@
-import { Controller, Get, HttpException, HttpStatus, Query, Res } from "@nestjs/common";
+import { Controller, Get, Query, Res } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Response } from "express";
 import { AuthService } from "./auth.service";
@@ -21,16 +21,22 @@ export class AuthController {
       this.config.get<string>("FRONTEND_ORIGIN") ?? "https://wavestack.duckdns.org";
 
     if (!code) {
-      res.redirect(`${frontendOrigin}/oauth-callback#error=${encodeURIComponent("Missing authorization code")}`);
+      const url = new URL("/oauth-callback", frontendOrigin);
+      url.searchParams.set("error", "Missing authorization code");
+      res.redirect(url.toString());
       return;
     }
 
     try {
       const { token } = await this.authService.authenticateWithGoogleCode(code);
-      res.redirect(`${frontendOrigin}/oauth-callback#token=${encodeURIComponent(token)}`);
+      const url = new URL("/oauth-callback", frontendOrigin);
+      url.searchParams.set("token", token);
+      res.redirect(url.toString());
     } catch (error) {
       const message = error instanceof Error ? error.message : "OAuth authentication failed";
-      res.redirect(`${frontendOrigin}/oauth-callback#error=${encodeURIComponent(message)}`);
+      const url = new URL("/oauth-callback", frontendOrigin);
+      url.searchParams.set("error", message);
+      res.redirect(url.toString());
     }
   }
 }

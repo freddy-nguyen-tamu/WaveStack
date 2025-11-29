@@ -5,18 +5,21 @@ import {
   DriveSyncResult,
   DriveSyncStatus,
   Song,
-  SongConnection
+  SongConnection,
+  ThumbnailRepairResult
 } from "./music.models";
 import { MusicService } from "./music.service";
 import { DriveLibrarySyncService } from "./drive-library-sync.service";
 import { DriveTrackRepository } from "./drive-track.repository";
+import { ThumbnailRepairService } from "./thumbnail-repair.service";
 
 @Resolver(() => Song)
 export class MusicResolver {
   constructor(
     private readonly musicService: MusicService,
     private readonly driveLibrarySyncService: DriveLibrarySyncService,
-    private readonly driveTrackRepository: DriveTrackRepository
+    private readonly driveTrackRepository: DriveTrackRepository,
+    private readonly thumbnailRepairService: ThumbnailRepairService
   ) {}
 
   @Query(() => [Song])
@@ -68,6 +71,13 @@ export class MusicResolver {
   @Query(() => [Song])
   favoriteSongs(): Promise<Song[]> {
     return this.musicService.listFavoriteSongs();
+  }
+
+  @Mutation(() => ThumbnailRepairResult)
+  repairEmbeddedArtworkThumbnails(
+    @Args("limit", { type: () => Int, nullable: true }) limit?: number
+  ): Promise<ThumbnailRepairResult> {
+    return this.thumbnailRepairService.repairMissingEmbeddedArtwork(limit ?? 10);
   }
 
   @Mutation(() => Boolean)

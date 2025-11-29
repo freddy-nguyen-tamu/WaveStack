@@ -11,6 +11,7 @@ import { DriveArtworkService } from "./drive-artwork.service";
 import { DriveTrackRepository } from "./drive-track.repository";
 import { DriveLibrarySyncService } from "./drive-library-sync.service";
 import { ThumbnailCacheService } from "./thumbnail-cache.service";
+import { ThumbnailRepairService } from "./thumbnail-repair.service";
 
 @Module({
   imports: [ConfigModule, StorageModule, DatabaseModule],
@@ -23,7 +24,8 @@ import { ThumbnailCacheService } from "./thumbnail-cache.service";
     DriveArtworkService,
     DriveTrackRepository,
     DriveLibrarySyncService,
-    ThumbnailCacheService
+    ThumbnailCacheService,
+    ThumbnailRepairService
   ],
   exports: [MusicService, DriveTrackRepository]
 })
