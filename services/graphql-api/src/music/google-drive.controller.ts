@@ -5,6 +5,7 @@ import { createReadStream, existsSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { DriveArtworkService } from "./drive-artwork.service";
+import { DriveDownloadService } from "./drive-download.service";
 import { GoogleDriveService } from "./google-drive.service";
 
 @Controller("drive")
@@ -12,7 +13,8 @@ export class GoogleDriveController {
   constructor(
     private readonly googleDriveService: GoogleDriveService,
     private readonly driveArtworkService: DriveArtworkService,
-    private readonly config: ConfigService
+    private readonly config: ConfigService,
+    private readonly driveDownloadService: DriveDownloadService
   ) {}
 
   @Get("debug")
@@ -42,15 +44,10 @@ export class GoogleDriveController {
     @Req() request: Request,
     @Res() response: Response
   ) {
-    const headers: Record<string, string> = {};
-
-    if (request.headers.range) {
-      headers.Range = request.headers.range;
-    }
-
-    const upstream = await fetch(this.googleDriveService.getMediaUrl(fileId), {
-      headers
-    });
+    const upstream = await this.driveDownloadService.fetchMedia(
+      fileId,
+      request.headers.range as string | undefined
+    );
 
     const contentType = upstream.headers.get("content-type") ?? "audio/mpeg";
     const contentLength = upstream.headers.get("content-length");
@@ -58,6 +55,8 @@ export class GoogleDriveController {
 
     response.status(upstream.status);
     response.setHeader("Content-Type", contentType);
+    response.setHeader("Access-Control-Allow-Origin", "*");
+    response.setHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges");
     response.setHeader("Cache-Control", "public, max-age=3600");
     response.setHeader("Accept-Ranges", "bytes");
 
