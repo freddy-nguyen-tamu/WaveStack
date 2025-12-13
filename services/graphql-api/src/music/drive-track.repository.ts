@@ -140,6 +140,37 @@ export class DriveTrackRepository {
     return count;
   }
 
+  async updateLyrics(trackId: string, lyrics: string): Promise<void> {
+    await this.database.query(
+      `
+      UPDATE drive_tracks
+      SET lyrics = $2
+      WHERE id = $1
+      `,
+      [trackId, lyrics]
+    );
+  }
+
+  async listTracksMissingLyrics(limit: number): Promise<Song[]> {
+    const safeLimit = Math.max(1, Math.min(limit || 10, 25));
+
+    const rows = (
+      await this.database.query<DriveTrackRow>(
+        `
+        SELECT *
+        FROM drive_tracks
+        WHERE deleted_at IS NULL
+          AND (lyrics IS NULL OR length(trim(lyrics)) = 0)
+        ORDER BY synced_at DESC, id ASC
+        LIMIT $1
+        `,
+        [safeLimit]
+      )
+    ).rows;
+
+    return rows.map((row) => this.rowToSong(row));
+  }
+
   async updateLocalThumbnail(trackId: string, localThumbnailUrl: string): Promise<void> {
     await this.database.query(
       `

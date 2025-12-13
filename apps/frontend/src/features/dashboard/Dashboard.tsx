@@ -186,10 +186,7 @@ export function Dashboard({
       {selectedSong ? (
         <SongMetadataModal
           song={selectedSong}
-          onPlay={() => {
-            onPlay(selectedSong);
-            setSelectedSong(null);
-          }}
+          onPlay={() => onPlay(selectedSong)}
           onClose={() => setSelectedSong(null)}
         />
       ) : null}

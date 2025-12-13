@@ -21,13 +21,18 @@ type SongDetailsQueryVariables = {
 };
 
 export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalProps) {
-  const { data } = useQuery<SongDetailsQueryData, SongDetailsQueryVariables>(SONG_DETAILS_QUERY, {
-    variables: { id: song.id },
-    fetchPolicy: "cache-first"
-  });
+  const { data, loading } = useQuery<SongDetailsQueryData, SongDetailsQueryVariables>(
+    SONG_DETAILS_QUERY,
+    {
+      variables: { id: song.id },
+      fetchPolicy: "cache-and-network",
+      nextFetchPolicy: "cache-first"
+    }
+  );
 
   const details: Song = data?.songDetails ?? song;
   const genreNames: string[] = details.genreNames ?? [];
+  const lyrics = details.lyrics?.trim();
 
   const modal = (
     <div
@@ -41,7 +46,7 @@ export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalPr
         }
       }}
     >
-      <div className="song-modal">
+      <div className="song-modal" onClick={(event) => event.stopPropagation()}>
         <SongArtwork
           song={details}
           wrapClassName="song-modal__hero"
@@ -55,11 +60,12 @@ export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalPr
             className="song-modal__play-button"
             type="button"
             onClick={(event) => {
+              event.preventDefault();
               event.stopPropagation();
               onPlay();
             }}
           >
-            <Play aria-hidden="true" /> Play
+            <Play aria-hidden="true" /> Play without closing
           </button>
 
           <h2>{details.title}</h2>
@@ -79,82 +85,96 @@ export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalPr
             </div>
           ) : null}
 
-          <table className="song-modal__table">
-            <tbody>
-              <tr>
-                <td>Display name</td>
-                <td>{formatSongDisplayName(details)}</td>
-              </tr>
+          <section className="song-modal__lyrics-panel" aria-label="Lyrics">
+            <div className="song-modal__section-heading">
+              <h3>Lyrics</h3>
+              {loading ? <span>Refreshing metadata...</span> : null}
+            </div>
 
-              <tr>
-                <td>Title</td>
-                <td>{details.title}</td>
-              </tr>
+            {lyrics ? (
+              <pre className="song-modal__lyrics-text">{lyrics}</pre>
+            ) : (
+              <p className="song-modal__empty">
+                No embedded lyrics have been extracted for this song yet. Run
+                <code> repairEmbeddedLyrics </code>
+                and reopen this modal.
+              </p>
+            )}
+          </section>
 
-              <tr>
-                <td>Artist / author</td>
-                <td>{details.artistName}</td>
-              </tr>
+          <section aria-label="All metadata">
+            <h3>All metadata</h3>
 
-              <tr>
-                <td>Album / source</td>
-                <td>{details.albumTitle || "Unknown"}</td>
-              </tr>
-
-              <tr>
-                <td>Duration</td>
-                <td>{formatSeconds(details.durationSeconds)} ({details.durationSeconds || 0} seconds)</td>
-              </tr>
-
-              {details.lyrics ? (
+            <table className="song-modal__table">
+              <tbody>
                 <tr>
-                  <td>Lyrics</td>
-                  <td className="song-modal__lyrics">{details.lyrics}</td>
+                  <td>Display name</td>
+                  <td>{formatSongDisplayName(details)}</td>
                 </tr>
-              ) : (
+
                 <tr>
-                  <td>Lyrics</td>
-                  <td>No lyrics attribute was provided for this Drive file.</td>
+                  <td>Title</td>
+                  <td>{details.title}</td>
                 </tr>
-              )}
 
-              {details.webViewLink ? (
                 <tr>
-                  <td>Drive link</td>
-                  <td>
-                    <a href={details.webViewLink} target="_blank" rel="noreferrer">
-                      Open in Google Drive
-                    </a>
-                  </td>
+                  <td>Artist / author</td>
+                  <td>{details.artistName}</td>
                 </tr>
-              ) : null}
 
-              <tr>
-                <td>MIME type</td>
-                <td>{details.mimeType || "Unknown"}</td>
-              </tr>
+                <tr>
+                  <td>Album / source</td>
+                  <td>{details.albumTitle || "Unknown"}</td>
+                </tr>
 
-              <tr>
-                <td>Modified</td>
-                <td>{details.modifiedTime || "Unknown"}</td>
-              </tr>
+                <tr>
+                  <td>Duration</td>
+                  <td>{formatSeconds(details.durationSeconds)} ({details.durationSeconds || 0} seconds)</td>
+                </tr>
 
-              <tr>
-                <td>Size</td>
-                <td>{formatBytes(details.sizeBytes)}</td>
-              </tr>
+                <tr>
+                  <td>Lyrics attribute</td>
+                  <td>{lyrics ? `${lyrics.length.toLocaleString()} characters` : "Not extracted yet"}</td>
+                </tr>
 
-              <tr>
-                <td>Source folder</td>
-                <td>{details.sourceRootFolderId || "Unknown"}</td>
-              </tr>
+                {details.webViewLink ? (
+                  <tr>
+                    <td>Drive link</td>
+                    <td>
+                      <a href={details.webViewLink} target="_blank" rel="noreferrer">
+                        Open in Google Drive
+                      </a>
+                    </td>
+                  </tr>
+                ) : null}
 
-              <tr>
-                <td>Stream URL</td>
-                <td>{details.streamUrl}</td>
-              </tr>
-            </tbody>
-          </table>
+                <tr>
+                  <td>MIME type</td>
+                  <td>{details.mimeType || "Unknown"}</td>
+                </tr>
+
+                <tr>
+                  <td>Modified</td>
+                  <td>{details.modifiedTime || "Unknown"}</td>
+                </tr>
+
+                <tr>
+                  <td>Size</td>
+                  <td>{formatBytes(details.sizeBytes)}</td>
+                </tr>
+
+                <tr>
+                  <td>Source folder</td>
+                  <td>{details.sourceRootFolderId || "Unknown"}</td>
+                </tr>
+
+                <tr>
+                  <td>Stream URL</td>
+                  <td>{details.streamUrl}</td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
         </div>
 
         <button

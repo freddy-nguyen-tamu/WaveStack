@@ -2,15 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@apollo/client";
 import { Activity, Clock, Heart, Library, ListMusic, Search, UserCircle } from "lucide-react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import {
-  LISTENING_HABIT_SUMMARY_QUERY,
-  ME_QUERY,
-  MUSIC_HOME_QUERY,
-  RECOMMENDED_SONGS_QUERY,
-  RECORD_LISTEN_MUTATION,
-  SONG_PAGE_QUERY,
-  SYNC_DRIVE_LIBRARY_MUTATION
-} from "./api";
+  import {
+    LISTENING_HABIT_SUMMARY_QUERY,
+    ME_QUERY,
+    MUSIC_HOME_QUERY,
+    RECOMMENDED_SONGS_QUERY,
+    RECORD_LISTEN_MUTATION,
+    SONG_PAGE_QUERY
+  } from "./api";
 import { Player } from "./features/player/Player";
 import { PlaylistPanel } from "./features/playlists/PlaylistPanel";
 import { SearchPanel } from "./features/search/SearchPanel";
@@ -83,16 +82,6 @@ type SongPageQueryVariables = {
   query?: string | null;
 };
 
-type SyncDriveLibraryMutationData = {
-  syncDriveLibrary: {
-    ok: boolean;
-    message: string;
-    scannedCount: number;
-    upsertedCount: number;
-    thumbnailCount: number;
-  };
-};
-
 const fallbackSongs: Song[] = [
   {
     id: "demo-1",
@@ -153,7 +142,6 @@ export function App() {
   const [playlists, setPlaylists] = useState<ClientPlaylist[]>(readPlaylists);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState("");
   const [notice, setNotice] = useState("");
-  const [refreshNotice, setRefreshNotice] = useState("");
   const [queueDrawerOpen, setQueueDrawerOpen] = useState(false);
 
   const [authUser, setAuthUser] = useState<AuthUser | null>(() => {
@@ -218,8 +206,6 @@ export function App() {
       .map((id) => songById.get(id))
       .filter((song): song is Song => Boolean(song));
   }, [recentSongIds, songById]);
-
-  const [syncDriveLibrary] = useMutation<SyncDriveLibraryMutationData>(SYNC_DRIVE_LIBRARY_MUTATION);
 
   const {
     data: libraryData,
@@ -459,19 +445,6 @@ export function App() {
     showNotice("Signed out.");
   }
 
-  async function refreshDrive() {
-    setRefreshNotice("Syncing Drive library into the database...");
-
-    try {
-      const result = await syncDriveLibrary();
-      await refetch();
-      setRefreshNotice(result.data?.syncDriveLibrary?.message ?? "Drive library synced.");
-    } catch (refreshError) {
-      const message = refreshError instanceof Error ? refreshError.message : "Unknown sync error.";
-      setRefreshNotice(`Sync failed: ${message}`);
-    }
-  }
-
   const meLoading = !authUser && hasToken;
 
   function getAuthToken(): string | null {
@@ -636,9 +609,6 @@ export function App() {
           <NavLink to="/playlists">
             Playlists ({playlists.length})
           </NavLink>
-          <button type="button" onClick={() => void refreshDrive()} disabled={loading}>
-            {loading ? "Syncing..." : "Sync Drive"}
-          </button>
         </nav>
 
         <AuthPanel
@@ -648,8 +618,6 @@ export function App() {
       </header>
 
       {notice ? <p role="status">{notice}</p> : null}
-      {refreshNotice ? <p role="status">{refreshNotice}</p> : null}
-
       {error ? (
         <section role="alert">
           <h2>Could not load music library</h2>

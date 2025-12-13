@@ -4,6 +4,7 @@ import {
   Artist,
   DriveSyncResult,
   DriveSyncStatus,
+  LyricsRepairResult,
   Song,
   SongConnection,
   ThumbnailRepairResult
@@ -12,6 +13,7 @@ import { MusicService } from "./music.service";
 import { DriveLibrarySyncService } from "./drive-library-sync.service";
 import { DriveTrackRepository } from "./drive-track.repository";
 import { ThumbnailRepairService } from "./thumbnail-repair.service";
+import { LyricsRepairService } from "./lyrics-repair.service";
 
 @Resolver(() => Song)
 export class MusicResolver {
@@ -19,7 +21,8 @@ export class MusicResolver {
     private readonly musicService: MusicService,
     private readonly driveLibrarySyncService: DriveLibrarySyncService,
     private readonly driveTrackRepository: DriveTrackRepository,
-    private readonly thumbnailRepairService: ThumbnailRepairService
+    private readonly thumbnailRepairService: ThumbnailRepairService,
+    private readonly lyricsRepairService: LyricsRepairService
   ) {}
 
   @Query(() => [Song])
@@ -78,6 +81,13 @@ export class MusicResolver {
     @Args("limit", { type: () => Int, nullable: true }) limit?: number
   ): Promise<ThumbnailRepairResult> {
     return this.thumbnailRepairService.repairMissingEmbeddedArtwork(limit ?? 10);
+  }
+
+  @Mutation(() => LyricsRepairResult)
+  repairEmbeddedLyrics(
+    @Args("limit", { type: () => Int, nullable: true }) limit?: number
+  ): Promise<LyricsRepairResult> {
+    return this.lyricsRepairService.repairMissingEmbeddedLyrics(limit ?? 10);
   }
 
   @Mutation(() => Boolean)

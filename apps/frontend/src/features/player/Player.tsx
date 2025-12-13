@@ -34,6 +34,7 @@ export function Player({
 }: PlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const playRequestRef = useRef(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [hasPlaybackHistory, setHasPlaybackHistory] = useState(false);
   const [pendingAutoplay, setPendingAutoplay] = useState(false);
@@ -53,7 +54,13 @@ export function Player({
   }, [volume]);
 
   useEffect(() => {
-    audioRef.current?.load();
+    const audio = audioRef.current;
+
+    if (!audio) return;
+
+    playRequestRef.current += 1;
+    audio.pause();
+    audio.load();
     setIsPlaying(false);
     setCurrentTime(0);
     setDuration(activeSong.durationSeconds || 0);
@@ -118,17 +125,35 @@ export function Player({
   }
 
   async function playCurrent() {
-    if (!audioRef.current) return;
+    const audio = audioRef.current;
+
+    if (!audio) return;
+
+    const requestId = playRequestRef.current + 1;
+    playRequestRef.current = requestId;
 
     try {
       setHasPlaybackHistory(true);
       setPlayError("");
-      await audioRef.current.play();
-      setIsPlaying(true);
-      setMessage(`Playing: ${displayName}`);
+      await audio.play();
+
+      if (playRequestRef.current === requestId) {
+        setIsPlaying(true);
+        setMessage(`Playing: ${displayName}`);
+      }
     } catch (error) {
+      if (playRequestRef.current !== requestId) {
+        return;
+      }
+
       setIsPlaying(false);
-      setPlayError(error instanceof Error ? error.message : "Browser blocked playback.");
+      const message = error instanceof Error ? error.message : "Browser blocked playback.";
+
+      if (message.includes("interrupted by a call to pause")) {
+        return;
+      }
+
+      setPlayError(message);
     }
   }
 

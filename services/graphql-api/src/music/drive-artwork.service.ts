@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { parseBuffer } from "music-metadata";
+import { DriveDownloadService } from "./drive-download.service";
 
 export type DriveArtwork = {
   buffer: Buffer;
@@ -31,15 +32,10 @@ export class DriveArtworkService {
   private readonly logger = new Logger(DriveArtworkService.name);
   private readonly cache = new Map<string, ArtworkCacheEntry>();
 
-  constructor(private readonly config: ConfigService) {}
-
-  private get apiKey(): string {
-    return this.config.get<string>("GOOGLE_DRIVE_API_KEY") ?? "";
-  }
-
-  getMediaUrl(fileId: string): string {
-    return `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&key=${encodeURIComponent(this.apiKey)}`;
-  }
+  constructor(
+    private readonly config: ConfigService,
+    private readonly driveDownloadService: DriveDownloadService
+  ) {}
 
   async getEmbeddedArtwork(fileId: string): Promise<DriveArtwork | null> {
     const cached = this.cache.get(fileId);
@@ -58,12 +54,7 @@ export class DriveArtworkService {
   }
 
   private async loadEmbeddedArtwork(fileId: string): Promise<DriveArtwork | null> {
-    if (!this.apiKey) {
-      this.logger.warn("GOOGLE_DRIVE_API_KEY is missing. Cannot read embedded artwork.");
-      return null;
-    }
-
-    const upstream = await fetch(this.getMediaUrl(fileId));
+    const upstream = await this.driveDownloadService.fetchMedia(fileId);
 
     if (!upstream.ok) {
       this.logger.warn(

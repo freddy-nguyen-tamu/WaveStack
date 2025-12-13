@@ -1109,6 +1109,67 @@ body.modal-open {
   transform: translateY(-1px);
 }
 
+/* ------------------------------------------------------------------ */
+/* Modal lyrics panel                                                  */
+/* ------------------------------------------------------------------ */
+
+.song-modal__lyrics-panel {
+  display: grid;
+  gap: 0.85rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 1.1rem;
+  padding: 1rem;
+  background:
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.18), transparent 18rem),
+    rgba(15, 23, 42, 0.74);
+}
+
+.song-modal__section-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+}
+
+.song-modal__section-heading h3 {
+  margin: 0;
+  color: #f8fafc;
+}
+
+.song-modal__section-heading span {
+  color: #93c5fd;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.song-modal__lyrics-text {
+  max-height: 22rem;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 0.9rem;
+  padding: 1rem;
+  background: rgba(2, 6, 23, 0.72);
+  color: #e5e7eb;
+  font: inherit;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.song-modal__empty {
+  margin: 0;
+  color: #cbd5e1;
+}
+
+.song-modal__empty code {
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  border-radius: 0.45rem;
+  padding: 0.1rem 0.35rem;
+  background: rgba(37, 99, 235, 0.18);
+  color: #bfdbfe;
+}
+
 .drive-export-panel {
   border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 1.5rem;
