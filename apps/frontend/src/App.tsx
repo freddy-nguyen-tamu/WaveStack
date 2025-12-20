@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@apollo/client";
 import { Activity, Clock, Heart, Library, ListMusic, Search, UserCircle } from "lucide-react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-  import {
+import {
     LISTENING_HABIT_SUMMARY_QUERY,
     ME_QUERY,
     MUSIC_HOME_QUERY,
@@ -14,6 +14,7 @@ import { Player } from "./features/player/Player";
 import { PlaylistPanel } from "./features/playlists/PlaylistPanel";
 import { SearchPanel } from "./features/search/SearchPanel";
 import { Dashboard } from "./features/dashboard/Dashboard";
+import { SongMetadataModal } from "./features/dashboard/SongMetadataModal";
 import { AuthPanel } from "./features/auth/AuthPanel";
 import { OAuthCallbackPage } from "./features/auth/OAuthCallbackPage";
 import { ProfilePage } from "./features/profile/ProfilePage";
@@ -143,6 +144,7 @@ export function App() {
   const [selectedPlaylistId, setSelectedPlaylistId] = useState("");
   const [notice, setNotice] = useState("");
   const [queueDrawerOpen, setQueueDrawerOpen] = useState(false);
+  const [detailsSong, setDetailsSong] = useState<Song | null>(null);
 
   const [authUser, setAuthUser] = useState<AuthUser | null>(() => {
     try {
@@ -248,6 +250,28 @@ export function App() {
   useEffect(() => {
     window.localStorage.setItem("wavestack:recent", JSON.stringify(recentSongIds));
   }, [recentSongIds]);
+
+  useEffect(() => {
+    if (!detailsSong) {
+      document.body.classList.remove("modal-open");
+      return;
+    }
+
+    document.body.classList.add("modal-open");
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setDetailsSong(null);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.classList.remove("modal-open");
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [detailsSong]);
 
   useEffect(() => {
     window.localStorage.setItem("wavestack:playlists", JSON.stringify(playlists));
@@ -638,6 +662,7 @@ export function App() {
             rememberRecent(song);
             showNotice(`Selected: ${formatSongDisplayName(song)}`);
           }}
+          onOpenDetails={setDetailsSong}
         />
       </section>
 
@@ -751,6 +776,14 @@ export function App() {
         />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
+
+      {detailsSong ? (
+        <SongMetadataModal
+          song={detailsSong}
+          onPlay={() => playSong(detailsSong)}
+          onClose={() => setDetailsSong(null)}
+        />
+      ) : null}
 
       <QueueDrawer
         open={queueDrawerOpen}

@@ -90,6 +90,13 @@ export class MusicResolver {
     return this.lyricsRepairService.repairMissingEmbeddedLyrics(limit ?? 10);
   }
 
+  @Mutation(() => LyricsRepairResult)
+  repairEmbeddedLyricsForSong(
+    @Args("songId") songId: string
+  ): Promise<LyricsRepairResult> {
+    return this.lyricsRepairService.repairEmbeddedLyricsForSong(songId);
+  }
+
   @Mutation(() => Boolean)
   processUploadedSong(
     @Args("songId") songId: string,

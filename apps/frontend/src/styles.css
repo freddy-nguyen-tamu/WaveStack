@@ -816,6 +816,59 @@ body.modal-open {
   object-fit: cover;
 }
 
+.mini-player__cover-button {
+  display: grid;
+  width: 4.5rem;
+  height: 4.5rem;
+  place-items: stretch;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 0.45rem;
+  padding: 0;
+  overflow: hidden;
+  background: rgba(15, 23, 42, 0.86);
+  color: inherit;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
+}
+
+.mini-player__cover-button:hover:not(:disabled),
+.mini-player__cover-button:focus-visible {
+  transform: translateY(-1px) scale(1.02);
+  border-color: rgba(96, 165, 250, 0.85);
+  background: rgba(30, 41, 59, 0.94);
+  outline: none;
+}
+
+.mini-player__cover-button:focus-visible {
+  box-shadow:
+    0 0 0 3px rgba(96, 165, 250, 0.28),
+    0 14px 34px rgba(0, 0, 0, 0.28);
+}
+
+.mini-player__cover-button .mini-player__cover {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+}
+
+.song-modal__empty-state {
+  display: grid;
+  gap: 0.85rem;
+  align-items: start;
+}
+
+.song-modal__secondary-button {
+  justify-self: start;
+  border-color: rgba(96, 165, 250, 0.28);
+  background: rgba(37, 99, 235, 0.18);
+  color: #bfdbfe;
+  font-weight: 800;
+}
+
+.song-modal__secondary-button:hover:not(:disabled) {
+  border-color: rgba(96, 165, 250, 0.75);
+  background: rgba(37, 99, 235, 0.32);
+}
+
 .mini-player__cover-fallback {
   display: grid;
   width: 100%;

@@ -13,6 +13,71 @@ export class LyricsRepairService {
     private readonly driveTrackRepository: DriveTrackRepository
   ) {}
 
+  async repairEmbeddedLyricsForSong(songId: string): Promise<LyricsRepairResult> {
+    const song = await this.driveTrackRepository.getSong(songId);
+
+    if (!song) {
+      return {
+        ok: false,
+        message: "Song was not found in the Drive track cache.",
+        attemptedCount: 0,
+        repairedCount: 0,
+        failedCount: 1
+      };
+    }
+
+    if (song.lyrics?.trim()) {
+      return {
+        ok: true,
+        message: "This song already has lyrics.",
+        attemptedCount: 1,
+        repairedCount: 0,
+        failedCount: 0
+      };
+    }
+
+    const rawFileId = song.id.replace(/^drive-/, "");
+
+    try {
+      const lyrics = await this.withTimeout(
+        this.driveLyricsService.getEmbeddedLyrics(rawFileId),
+        20000
+      );
+
+      if (!lyrics?.trim()) {
+        return {
+          ok: true,
+          message: "No embedded lyrics were found for this song.",
+          attemptedCount: 1,
+          repairedCount: 0,
+          failedCount: 1
+        };
+      }
+
+      await this.driveTrackRepository.updateLyrics(song.id, lyrics);
+
+      return {
+        ok: true,
+        message: "Embedded lyrics were extracted for this song.",
+        attemptedCount: 1,
+        repairedCount: 1,
+        failedCount: 0
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      this.logger.warn(`Embedded lyrics repair failed for ${song.id}: ${message}`);
+
+      return {
+        ok: false,
+        message: `Could not extract embedded lyrics: ${message}`,
+        attemptedCount: 1,
+        repairedCount: 0,
+        failedCount: 1
+      };
+    }
+  }
+
   repairMissingEmbeddedLyrics(limit: number): Promise<LyricsRepairResult> {
     if (this.inFlight) {
       return Promise.resolve({

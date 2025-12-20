@@ -21,6 +21,7 @@ type PlayerProps = {
   onToggleFavorite: () => void;
   onQueueChange: (songs: Song[]) => void;
   onActiveSongChange: (song: Song) => void;
+  onOpenDetails: (song: Song) => void;
 };
 
 export function Player({
@@ -30,7 +31,8 @@ export function Player({
   isFavorite,
   onToggleFavorite,
   onQueueChange,
-  onActiveSongChange
+  onActiveSongChange,
+  onOpenDetails
 }: PlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
@@ -311,13 +313,25 @@ export function Player({
       {hasPlaybackHistory ? (
         <aside className="mini-player" aria-label="Now playing">
             <div className="mini-player__track">
-              <SongArtwork
-                song={activeSong}
-                wrapClassName="mini-player__cover"
-                fallbackClassName="mini-player__cover-fallback"
-                loading="eager"
-                eager
-              />
+              <button
+                type="button"
+                className="mini-player__cover-button"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onOpenDetails(activeSong);
+                }}
+                aria-label={`Open details for ${displayName}`}
+                title={`Open details for ${displayName}`}
+              >
+                <SongArtwork
+                  song={activeSong}
+                  wrapClassName="mini-player__cover"
+                  fallbackClassName="mini-player__cover-fallback"
+                  loading="eager"
+                  eager
+                />
+              </button>
 
               <div className="mini-player__meta">
                 <strong title={displayName}>{displayName}</strong>

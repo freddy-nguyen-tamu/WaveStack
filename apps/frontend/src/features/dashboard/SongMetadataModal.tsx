@@ -1,8 +1,12 @@
 import { createPortal } from "react-dom";
-import { Play, X } from "lucide-react";
-import { useQuery } from "@apollo/client";
+import { useEffect, useRef, useState } from "react";
+import { Play, RefreshCw, X } from "lucide-react";
+import { useMutation, useQuery } from "@apollo/client";
 import type { Song } from "../../App";
-import { SONG_DETAILS_QUERY } from "../../api";
+import {
+  REPAIR_EMBEDDED_LYRICS_FOR_SONG_MUTATION,
+  SONG_DETAILS_QUERY
+} from "../../api";
 import { formatBytes, formatSeconds, formatSongDisplayName } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
 
@@ -20,8 +24,25 @@ type SongDetailsQueryVariables = {
   id: string;
 };
 
+type LyricsRepairMutationData = {
+  repairEmbeddedLyricsForSong: {
+    ok: boolean;
+    message: string;
+    attemptedCount: number;
+    repairedCount: number;
+    failedCount: number;
+  };
+};
+
+type LyricsRepairMutationVariables = {
+  songId: string;
+};
+
 export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalProps) {
-  const { data, loading } = useQuery<SongDetailsQueryData, SongDetailsQueryVariables>(
+  const attemptedAutoRepairRef = useRef("");
+  const [lyricsRepairMessage, setLyricsRepairMessage] = useState("");
+
+  const { data, loading, refetch } = useQuery<SongDetailsQueryData, SongDetailsQueryVariables>(
     SONG_DETAILS_QUERY,
     {
       variables: { id: song.id },
@@ -30,9 +51,60 @@ export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalPr
     }
   );
 
+  const [repairLyrics, { loading: repairingLyrics }] = useMutation<
+    LyricsRepairMutationData,
+    LyricsRepairMutationVariables
+  >(REPAIR_EMBEDDED_LYRICS_FOR_SONG_MUTATION);
+
   const details: Song = data?.songDetails ?? song;
   const genreNames: string[] = details.genreNames ?? [];
   const lyrics = details.lyrics?.trim();
+
+  async function extractLyricsForThisSong(manual = false) {
+    if (repairingLyrics) {
+      return;
+    }
+
+    setLyricsRepairMessage(manual ? "Checking this MP3 for embedded lyrics..." : "");
+
+    try {
+      const result = await repairLyrics({
+        variables: { songId: details.id }
+      });
+
+      const payload = result.data?.repairEmbeddedLyricsForSong;
+
+      if (payload?.repairedCount) {
+        setLyricsRepairMessage("Lyrics were extracted. Refreshing metadata...");
+        await refetch();
+        return;
+      }
+
+      setLyricsRepairMessage(payload?.message || "No embedded lyrics were found for this track.");
+      await refetch();
+    } catch (error) {
+      setLyricsRepairMessage(
+        error instanceof Error
+          ? `Could not extract lyrics: ${error.message}`
+          : "Could not extract lyrics for this track."
+      );
+    }
+  }
+
+  useEffect(() => {
+    const hasLyrics = Boolean(lyrics);
+
+    if (hasLyrics || loading || repairingLyrics) {
+      return;
+    }
+
+    if (attemptedAutoRepairRef.current === details.id) {
+      return;
+    }
+
+    attemptedAutoRepairRef.current = details.id;
+    void extractLyricsForThisSong(false);
+  }, [details.id, lyrics, loading, repairingLyrics]);
 
   const modal = (
     <div
@@ -55,7 +127,7 @@ export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalPr
           eager
         />
 
-        <div className="song-modal__body">
+        <div className="song-modal__body song-modal__content">
           <button
             className="song-modal__play-button"
             type="button"
@@ -87,18 +159,38 @@ export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalPr
 
           <section className="song-modal__lyrics-panel" aria-label="Lyrics">
             <div className="song-modal__section-heading">
-              <h3>Lyrics</h3>
-              {loading ? <span>Refreshing metadata...</span> : null}
+              <div>
+                <p className="eyebrow">Embedded MP3 metadata</p>
+                <h3>Lyrics</h3>
+              </div>
+
+              {loading || repairingLyrics ? (
+                <span>{repairingLyrics ? "Extracting lyrics..." : "Refreshing metadata..."}</span>
+              ) : null}
             </div>
 
             {lyrics ? (
               <pre className="song-modal__lyrics-text">{lyrics}</pre>
             ) : (
-              <p className="song-modal__empty">
-                No embedded lyrics have been extracted for this song yet. Run
-                <code> repairEmbeddedLyrics </code>
-                and reopen this modal.
-              </p>
+              <div className="song-modal__empty-state">
+                <p className="song-modal__empty">
+                  {lyricsRepairMessage || "Checking this track for embedded lyrics..."}
+                </p>
+
+                <button
+                  type="button"
+                  className="song-modal__secondary-button"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void extractLyricsForThisSong(true);
+                  }}
+                  disabled={repairingLyrics}
+                >
+                  <RefreshCw aria-hidden="true" />
+                  {repairingLyrics ? "Checking..." : "Check embedded lyrics again"}
+                </button>
+              </div>
             )}
           </section>
 
@@ -134,7 +226,7 @@ export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalPr
 
                 <tr>
                   <td>Lyrics attribute</td>
-                  <td>{lyrics ? `${lyrics.length.toLocaleString()} characters` : "Not extracted yet"}</td>
+                  <td>{lyrics ? `${lyrics.length.toLocaleString()} characters` : "No embedded lyrics found yet"}</td>
                 </tr>
 
                 {details.webViewLink ? (

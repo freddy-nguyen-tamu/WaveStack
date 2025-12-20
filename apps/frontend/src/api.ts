@@ -239,6 +239,18 @@ export const TEST_PRIVATE_DRIVE_WRITE_MUTATION = gql`
   }
 `;
 
+export const REPAIR_EMBEDDED_LYRICS_FOR_SONG_MUTATION = gql`
+  mutation RepairEmbeddedLyricsForSong($songId: String!) {
+    repairEmbeddedLyricsForSong(songId: $songId) {
+      ok
+      message
+      attemptedCount
+      repairedCount
+      failedCount
+    }
+  }
+`;
+
 export const EXPORT_LISTENING_HABITS_MUTATION = gql`
   mutation ExportListeningHabits($period: String) {
     exportListeningHabits(period: $period) {
