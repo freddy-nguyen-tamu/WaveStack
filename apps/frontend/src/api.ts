@@ -30,9 +30,18 @@ export const apolloCache = new InMemoryCache({
           keyArgs: ["query"],
           merge(existing, incoming) {
             if (!existing) return incoming;
+            const existingNodes = existing.nodes ?? [];
+            const incomingNodes = incoming.nodes ?? [];
+            const merged = [...existingNodes, ...incomingNodes];
+            const seen = new Set<string>();
+            const deduped = merged.filter((n) => {
+              if (seen.has(n.__ref)) return false;
+              seen.add(n.__ref);
+              return true;
+            });
             return {
               ...incoming,
-              nodes: [...(existing.nodes ?? []), ...(incoming.nodes ?? [])]
+              nodes: deduped
             };
           }
         }
@@ -206,8 +215,8 @@ export const RECORD_LISTEN_MUTATION = gql`
 export const RECOMMENDED_SONGS_QUERY = gql`
   ${SONG_CARD_FIELDS}
 
-  query RecommendedSongs($limit: Int, $favoriteSongIds: [String!], $recentSongIds: [String!]) {
-    recommendedSongs(limit: $limit, favoriteSongIds: $favoriteSongIds, recentSongIds: $recentSongIds) {
+  query RecommendedSongs($limit: Int, $offset: Int, $favoriteSongIds: [String!], $recentSongIds: [String!]) {
+    recommendedSongs(limit: $limit, offset: $offset, favoriteSongIds: $favoriteSongIds, recentSongIds: $recentSongIds) {
       song {
         ...SongCardFields
       }
@@ -222,6 +231,106 @@ export const LISTENING_HABIT_SUMMARY_QUERY = gql`
       label
       count
       totalDurationSeconds
+    }
+  }
+`;
+
+export const TOP_TRACKS_QUERY = gql`
+  ${SONG_CARD_FIELDS}
+
+  query TopTracks($period: String!, $limit: Int) {
+    topTracks(period: $period, limit: $limit) {
+      songId
+      title
+      artistName
+      playCount
+      position
+      previousPosition
+    }
+  }
+`;
+
+export const TOP_ARTISTS_QUERY = gql`
+  query TopArtists($period: String!, $limit: Int) {
+    topArtists(period: $period, limit: $limit) {
+      songId
+      title
+      artistName
+      playCount
+      position
+      previousPosition
+    }
+  }
+`;
+
+export const TOP_GENRES_QUERY = gql`
+  query TopGenres($period: String!, $limit: Int) {
+    topGenres(period: $period, limit: $limit) {
+      songId
+      title
+      artistName
+      playCount
+      position
+      previousPosition
+    }
+  }
+`;
+
+export const RECENTLY_PLAYED_DETAILED_QUERY = gql`
+  query RecentlyPlayedDetailed($period: String!, $limit: Int) {
+    recentlyPlayedDetailed(period: $period, limit: $limit) {
+      songId
+      title
+      artistName
+      playedAt
+      completedPlayRatio
+    }
+  }
+`;
+
+export const SAVE_STATS_SNAPSHOT_MUTATION = gql`
+  mutation SaveStatsSnapshot($label: String!, $period: String!) {
+    saveStatsSnapshot(label: $label, period: $period) {
+      id
+      label
+      createdAt
+      entries {
+        songId
+        title
+        artistName
+        playCount
+        position
+        previousPosition
+      }
+    }
+  }
+`;
+
+export const PREVIOUS_STATS_SNAPSHOTS_QUERY = gql`
+  query PreviousStatsSnapshots {
+    previousStatsSnapshots {
+      id
+      label
+      createdAt
+      entries {
+        songId
+        title
+        artistName
+        playCount
+        position
+        previousPosition
+      }
+    }
+  }
+`;
+
+export const PLACEMENT_HISTORY_QUERY = gql`
+  query PlacementHistory($songId: String!) {
+    placementHistory(songId: $songId) {
+      snapshotId
+      label
+      createdAt
+      position
     }
   }
 `;

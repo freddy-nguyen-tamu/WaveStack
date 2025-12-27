@@ -1,7 +1,15 @@
 import { Args, Context, Int, Mutation, Query, Resolver } from "@nestjs/graphql";
 import { AuthService } from "../auth/auth.service";
 import { HabitsService } from "./habits.service";
-import { DriveExportResult, HabitSummaryEntry, RecommendSongResult } from "./habits.models";
+import {
+  DriveExportResult,
+  HabitSummaryEntry,
+  ListeningStatsEntry,
+  ListeningStatsSnapshot,
+  PlacementPoint,
+  RecentlyPlayedEntry,
+  RecommendSongResult
+} from "./habits.models";
 
 type GqlContext = {
   req?: {
@@ -37,6 +45,7 @@ export class HabitsResolver {
   async recommendedSongs(
     @Context() context: GqlContext,
     @Args("limit", { type: () => Int, nullable: true }) limit?: number,
+    @Args("offset", { type: () => Int, nullable: true }) offset?: number,
     @Args("favoriteSongIds", { type: () => [String], nullable: true }) favoriteSongIds?: string[],
     @Args("recentSongIds", { type: () => [String], nullable: true }) recentSongIds?: string[]
   ): Promise<RecommendSongResult[]> {
@@ -44,8 +53,93 @@ export class HabitsResolver {
 
     return this.habitsService.recommendSongs(userId, limit ?? 24, {
       favoriteSongIds: favoriteSongIds ?? [],
-      recentSongIds: recentSongIds ?? []
+      recentSongIds: recentSongIds ?? [],
+      offset: offset ?? 0
     });
+  }
+
+  @Query(() => [ListeningStatsEntry])
+  async topTracks(
+    @Context() context: GqlContext,
+    @Args("period") period: string,
+    @Args("limit", { type: () => Int, nullable: true }) limit?: number
+  ): Promise<ListeningStatsEntry[]> {
+    const userId = this.resolveUserId(context);
+    if (!userId) return [];
+    return this.habitsService.topTracks(userId, period as "FOUR_WEEKS" | "SIX_MONTHS" | "TWELVE_MONTHS" | "ALL_TIME", limit ?? 50);
+  }
+
+  @Query(() => [ListeningStatsEntry])
+  async topArtists(
+    @Context() context: GqlContext,
+    @Args("period") period: string,
+    @Args("limit", { type: () => Int, nullable: true }) limit?: number
+  ): Promise<ListeningStatsEntry[]> {
+    const userId = this.resolveUserId(context);
+    if (!userId) return [];
+    return this.habitsService.topArtists(userId, period as "FOUR_WEEKS" | "SIX_MONTHS" | "TWELVE_MONTHS" | "ALL_TIME", limit ?? 50);
+  }
+
+  @Query(() => [ListeningStatsEntry])
+  async topGenres(
+    @Context() context: GqlContext,
+    @Args("period") period: string,
+    @Args("limit", { type: () => Int, nullable: true }) limit?: number
+  ): Promise<ListeningStatsEntry[]> {
+    const userId = this.resolveUserId(context);
+    if (!userId) return [];
+    return this.habitsService.topGenres(userId, period as "FOUR_WEEKS" | "SIX_MONTHS" | "TWELVE_MONTHS" | "ALL_TIME", limit ?? 50);
+  }
+
+  @Query(() => [RecentlyPlayedEntry])
+  async recentlyPlayedDetailed(
+    @Context() context: GqlContext,
+    @Args("period") period: string,
+    @Args("limit", { type: () => Int, nullable: true }) limit?: number
+  ): Promise<RecentlyPlayedEntry[]> {
+    const userId = this.resolveUserId(context);
+    if (!userId) return [];
+    return this.habitsService.recentlyPlayedDetailed(userId, period as "FOUR_WEEKS" | "SIX_MONTHS" | "TWELVE_MONTHS" | "ALL_TIME", limit ?? 50);
+  }
+
+  @Mutation(() => ListeningStatsSnapshot)
+  async saveStatsSnapshot(
+    @Context() context: GqlContext,
+    @Args("label") label: string,
+    @Args("period") period: string
+  ): Promise<ListeningStatsSnapshot> {
+    const userId = this.resolveUserId(context);
+    if (!userId) {
+      return { id: "", label: "", createdAt: new Date().toISOString(), entries: [] };
+    }
+
+    const statsPeriod = period as "FOUR_WEEKS" | "SIX_MONTHS" | "TWELVE_MONTHS" | "ALL_TIME";
+    const [tracks, artists, genres] = await Promise.all([
+      this.habitsService.topTracks(userId, statsPeriod, 50),
+      this.habitsService.topArtists(userId, statsPeriod, 50),
+      this.habitsService.topGenres(userId, statsPeriod, 50)
+    ]);
+
+    return this.habitsService.saveStatsSnapshot(userId, label, tracks, artists, genres);
+  }
+
+  @Query(() => [ListeningStatsSnapshot])
+  async previousStatsSnapshots(
+    @Context() context: GqlContext
+  ): Promise<ListeningStatsSnapshot[]> {
+    const userId = this.resolveUserId(context);
+    if (!userId) return [];
+    return this.habitsService.previousStatsSnapshots(userId);
+  }
+
+  @Query(() => [PlacementPoint])
+  async placementHistory(
+    @Context() context: GqlContext,
+    @Args("songId") songId: string
+  ): Promise<PlacementPoint[]> {
+    const userId = this.resolveUserId(context);
+    if (!userId) return [];
+    return this.habitsService.placementHistory(userId, songId);
   }
 
   @Query(() => [HabitSummaryEntry])

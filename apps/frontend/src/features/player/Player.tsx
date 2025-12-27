@@ -334,8 +334,19 @@ export function Player({
               </button>
 
               <div className="mini-player__meta">
-                <strong title={displayName}>{displayName}</strong>
-                <span title={activeSong.albumTitle}>{activeSong.albumTitle}</span>
+                <button
+                  type="button"
+                  className="mini-player__meta-button"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onOpenDetails(activeSong);
+                  }}
+                  title={`Open details for ${displayName}`}
+                >
+                  <strong title={displayName}>{displayName}</strong>
+                  <span title={activeSong.albumTitle}>{activeSong.albumTitle}</span>
+                </button>
               </div>
 
               <button type="button" className="mini-player__icon-button" onClick={favorite} aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}>

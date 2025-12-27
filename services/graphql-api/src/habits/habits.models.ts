@@ -44,3 +44,78 @@ export class DriveExportResult {
 }
 
 export type HabitPeriod = "DAY" | "WEEK" | "MONTH" | "YEAR";
+
+@ObjectType()
+export class ListeningStatsEntry {
+  @Field()
+  songId!: string;
+
+  @Field()
+  title!: string;
+
+  @Field()
+  artistName!: string;
+
+  @Field({ nullable: true })
+  albumTitle?: string;
+
+  @Field(() => Int)
+  playCount!: number;
+
+  @Field(() => Int, { nullable: true })
+  previousPosition?: number;
+
+  @Field(() => Int, { nullable: true })
+  position?: number;
+}
+
+@ObjectType()
+export class RecentlyPlayedEntry {
+  @Field()
+  songId!: string;
+
+  @Field()
+  title!: string;
+
+  @Field()
+  artistName!: string;
+
+  @Field({ nullable: true })
+  albumTitle?: string;
+
+  @Field()
+  playedAt!: string;
+
+  @Field(() => Float)
+  completedPlayRatio!: number;
+}
+
+@ObjectType()
+export class ListeningStatsSnapshot {
+  @Field()
+  id!: string;
+
+  @Field()
+  label!: string;
+
+  @Field()
+  createdAt!: string;
+
+  @Field(() => [ListeningStatsEntry])
+  entries!: ListeningStatsEntry[];
+}
+
+@ObjectType()
+export class PlacementPoint {
+  @Field()
+  snapshotId!: string;
+
+  @Field()
+  label!: string;
+
+  @Field()
+  createdAt!: string;
+
+  @Field(() => Int, { nullable: true })
+  position?: number;
+}

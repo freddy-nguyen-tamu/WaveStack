@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@apollo/client";
-import { Activity, Clock, Heart, Library, ListMusic, Search, UserCircle } from "lucide-react";
+import { Activity, Clock, Heart, Library, ListMusic, Search, TrendingUp, UserCircle } from "lucide-react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import {
     LISTENING_HABIT_SUMMARY_QUERY,
@@ -19,6 +19,7 @@ import { AuthPanel } from "./features/auth/AuthPanel";
 import { OAuthCallbackPage } from "./features/auth/OAuthCallbackPage";
 import { ProfilePage } from "./features/profile/ProfilePage";
 import { QueueDrawer } from "./features/queue/QueueDrawer";
+import { StatsPage } from "./features/stats/StatsPage";
 import { formatSongDisplayName } from "./song-format";
 
 export type Song = {
@@ -164,6 +165,9 @@ export function App() {
   const [recordListen] = useMutation(RECORD_LISTEN_MUTATION);
   const lastListenRef = useRef("");
   const hasToken = Boolean(authToken);
+  const [recommendationOffset, setRecommendationOffset] = useState(0);
+  const [loadingMoreRecommendations, setLoadingMoreRecommendations] = useState(false);
+  const [hasMoreRecommendations, setHasMoreRecommendations] = useState(true);
 
   const [libraryCursor, setLibraryCursor] = useState<string | null>(null);
   const [librarySongs, setLibrarySongs] = useState<Song[]>([]);
@@ -565,6 +569,99 @@ export function App() {
     return () => clearTimeout(timer);
   }, [authUser, currentSong, recordListen]);
 
+  async function loadMoreRecommendations() {
+    const token = getAuthToken();
+    if (!token || loadingMoreRecommendations) return;
+
+    setLoadingMoreRecommendations(true);
+    const nextOffset = recommendationOffset + 24;
+
+    try {
+      const response = await fetch(import.meta.env.VITE_GRAPHQL_URL ?? "http://localhost:3000/graphql", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          query: RECOMMENDED_SONGS_QUERY.loc?.source?.body ?? "",
+          variables: {
+            limit: 24,
+            offset: nextOffset,
+            favoriteSongIds: favoriteIds,
+            recentSongIds
+          }
+        })
+      });
+
+      const json = await response.json() as { data?: { recommendedSongs?: RecommendResult[] } };
+      const newItems = json.data?.recommendedSongs;
+
+      if (newItems && newItems.length > 0) {
+        setRecommendedData((prev) => {
+          const existing = prev ?? [];
+          const existingIds = new Set(existing.map((r) => r.song.id));
+          const deduped = newItems.filter((r) => !existingIds.has(r.song.id));
+          return [...existing, ...deduped];
+        });
+        setRecommendationOffset(nextOffset);
+        setHasMoreRecommendations(newItems.length >= 24);
+      } else {
+        setHasMoreRecommendations(false);
+      }
+    } catch {
+      setHasMoreRecommendations(false);
+    } finally {
+      setLoadingMoreRecommendations(false);
+    }
+  }
+
+  async function refetchRecommended() {
+    const token = getAuthToken();
+    if (!token) return;
+
+    try {
+      const response = await fetch(import.meta.env.VITE_GRAPHQL_URL ?? "http://localhost:3000/graphql", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          query: RECOMMENDED_SONGS_QUERY.loc?.source?.body ?? "",
+          variables: {
+            limit: 24,
+            offset: 0,
+            favoriteSongIds: favoriteIds,
+            recentSongIds
+          }
+        })
+      });
+
+      const json = await response.json() as { data?: { recommendedSongs?: RecommendResult[] } };
+      if (json.data?.recommendedSongs) {
+        setRecommendedData(json.data.recommendedSongs);
+        setRecommendationOffset(0);
+        setHasMoreRecommendations(json.data.recommendedSongs.length >= 24);
+      }
+    } catch {
+      // silently fail
+    }
+  }
+
+  function createPlaylistFromSongIds(songIds: string[]) {
+    const name = `Chart ${new Date().toLocaleDateString()}`;
+    const playlist: ClientPlaylist = {
+      id: `playlist-${Date.now()}`,
+      name,
+      songIds
+    };
+
+    setPlaylists((items) => [...items, playlist]);
+    setSelectedPlaylistId(playlist.id);
+    showNotice(`Created playlist: ${playlist.name}`);
+  }
+
   function renderSongsPage(title: string, pageSongs: Song[], emptyMessage: string) {
     return (
       <section aria-label={title}>
@@ -630,6 +727,9 @@ export function App() {
           <button type="button" onClick={() => setQueueDrawerOpen(true)} aria-label="Open queue">
             <ListMusic aria-hidden="true" /> Queue ({queue.length})
           </button>
+          <NavLink to="/stats">
+            <TrendingUp aria-hidden="true" /> Stats
+          </NavLink>
           <NavLink to="/playlists">
             Playlists ({playlists.length})
           </NavLink>
@@ -681,6 +781,9 @@ export function App() {
                 habitSummaries={habitSummaries}
                 onPlay={playSong}
                 userName={authUser?.displayName}
+                onLoadMoreRecommendations={hasToken ? loadMoreRecommendations : undefined}
+                hasMoreRecommendations={hasToken && hasMoreRecommendations}
+                loadingMoreRecommendations={loadingMoreRecommendations}
               />
             </section>
           }
@@ -744,6 +847,20 @@ export function App() {
                 onPlay={playSong}
                 onQueue={queueSong}
                 onToggleFavorite={toggleFavorite}
+              />
+            </section>
+          }
+        />
+        <Route
+          path="/stats"
+          element={
+            <section aria-label="Stats">
+              <StatsPage
+                onPlay={playSong}
+                playlists={playlists}
+                onCreatePlaylist={(name) => createPlaylist(name)}
+                onAddToPlaylist={(playlistId, song) => addToPlaylist(playlistId, song)}
+                getSongById={(id) => songById.get(id)}
               />
             </section>
           }

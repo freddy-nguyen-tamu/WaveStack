@@ -2,10 +2,19 @@ import { Injectable, Logger } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
 import { MusicService } from "../music/music.service";
 import { Song } from "../music/music.models";
-import { HabitSummaryEntry, RecommendSongResult } from "./habits.models";
+import {
+  HabitSummaryEntry,
+  ListeningStatsEntry,
+  ListeningStatsSnapshot,
+  PlacementPoint,
+  RecentlyPlayedEntry,
+  RecommendSongResult
+} from "./habits.models";
 import { DrivePrivateExportService, ListeningHabitExportPayload } from "./drive-private-export.service";
 
 type QueryRows<T> = { rows: T[] } | T[];
+
+type StatsPeriod = "FOUR_WEEKS" | "SIX_MONTHS" | "TWELVE_MONTHS" | "ALL_TIME";
 
 type PlayCountRow = {
   song_id: string;
@@ -69,9 +78,11 @@ export class HabitsService {
     options: {
       favoriteSongIds?: string[];
       recentSongIds?: string[];
+      offset?: number;
     } = {}
   ): Promise<RecommendSongResult[]> {
-    const allSongs = await this.getRecommendationPool(Math.max(limit * 30, 500));
+    const totalNeeded = limit + (options.offset ?? 0);
+    const allSongs = await this.getRecommendationPool(Math.max(totalNeeded * 30, 500));
 
     if (!allSongs.length) {
       return [];
@@ -81,7 +92,7 @@ export class HabitsService {
     const byId = new Map(allSongs.map((song) => [song.id, song]));
 
     if (!userId) {
-      return shuffled.slice(0, limit).map((song) => ({
+      return shuffled.slice(options.offset ?? 0, totalNeeded).map((song) => ({
         song,
         reason: "Random pick"
       }));
@@ -101,7 +112,7 @@ export class HabitsService {
     ]);
 
     if (!seedIds.length) {
-      return shuffled.slice(0, limit).map((song) => ({
+      return shuffled.slice(options.offset ?? 0, totalNeeded).map((song) => ({
         song,
         reason: "Random pick (no listening history yet)"
       }));
@@ -198,12 +209,12 @@ export class HabitsService {
         reason: item.reason
       });
 
-      if (output.length >= limit) {
+      if (output.length >= totalNeeded) {
         break;
       }
     }
 
-    return output;
+    return output.slice(options.offset ?? 0, totalNeeded);
   }
 
   private async getRecommendationPool(limit: number): Promise<Song[]> {
@@ -369,6 +380,231 @@ export class HabitsService {
     };
 
     return intervalMap[period];
+  }
+
+  private statsPeriodIntervalSql(period: StatsPeriod): string {
+    const map: Record<StatsPeriod, string> = {
+      FOUR_WEEKS: "interval '28 days'",
+      SIX_MONTHS: "interval '182 days'",
+      TWELVE_MONTHS: "interval '365 days'",
+      ALL_TIME: "interval '9999 days'"
+    };
+
+    return map[period];
+  }
+
+  async topTracks(userId: string, period: StatsPeriod, limit = 50): Promise<ListeningStatsEntry[]> {
+    const interval = this.statsPeriodIntervalSql(period);
+
+    const result = await this.database.query(
+      `SELECT
+         song_id,
+         COALESCE(NULLIF(title, ''), 'Unknown') AS title,
+         COALESCE(NULLIF(artist_name, ''), 'Unknown') AS artist_name,
+         COUNT(*)::int AS play_count
+       FROM app_listening_events
+       WHERE user_id = $1 AND started_at >= now() - ${interval}
+       GROUP BY song_id, title, artist_name
+       ORDER BY play_count DESC
+       LIMIT $2`,
+      [userId, limit]
+    );
+
+    return (this.rows(result) as Array<{ song_id: string; title: string; artist_name: string; play_count: string | number }>)
+      .map((row, index) => ({
+        songId: row.song_id,
+        title: row.title,
+        artistName: row.artist_name,
+        playCount: Number(row.play_count),
+        position: index + 1
+      }));
+  }
+
+  async topArtists(userId: string, period: StatsPeriod, limit = 50): Promise<ListeningStatsEntry[]> {
+    const interval = this.statsPeriodIntervalSql(period);
+
+    const result = await this.database.query(
+      `SELECT
+         COALESCE(NULLIF(artist_name, ''), 'Unknown') AS artist_name,
+         COUNT(*)::int AS play_count
+       FROM app_listening_events
+       WHERE user_id = $1 AND started_at >= now() - ${interval}
+       GROUP BY artist_name
+       ORDER BY play_count DESC
+       LIMIT $2`,
+      [userId, limit]
+    );
+
+    return (this.rows(result) as Array<{ artist_name: string; play_count: string | number }>)
+      .map((row, index) => ({
+        songId: "",
+        title: "",
+        artistName: row.artist_name,
+        playCount: Number(row.play_count),
+        position: index + 1
+      }));
+  }
+
+  async topGenres(userId: string, period: StatsPeriod, limit = 50): Promise<ListeningStatsEntry[]> {
+    const interval = this.statsPeriodIntervalSql(period);
+
+    const result = await this.database.query(
+      `WITH song_genres AS (
+         SELECT unnest(dt.genre_names) AS genre_name
+         FROM app_listening_events ale
+         JOIN drive_tracks dt ON dt.file_id = ale.song_id
+         WHERE ale.user_id = $1 AND ale.started_at >= now() - ${interval}
+       )
+       SELECT
+         COALESCE(NULLIF(genre_name, ''), 'Unknown') AS genre_name,
+         COUNT(*)::int AS play_count
+       FROM song_genres
+       GROUP BY genre_name
+       ORDER BY play_count DESC
+       LIMIT $2`,
+      [userId, limit]
+    );
+
+    return (this.rows(result) as Array<{ genre_name: string; play_count: string | number }>)
+      .map((row, index) => ({
+        songId: "",
+        title: row.genre_name,
+        artistName: "",
+        playCount: Number(row.play_count),
+        position: index + 1
+      }));
+  }
+
+  async recentlyPlayedDetailed(userId: string, period: StatsPeriod, limit = 50): Promise<RecentlyPlayedEntry[]> {
+    const interval = this.statsPeriodIntervalSql(period);
+
+    const result = await this.database.query(
+      `SELECT
+         song_id,
+         COALESCE(NULLIF(title, ''), 'Unknown') AS title,
+         COALESCE(NULLIF(artist_name, ''), 'Unknown') AS artist_name,
+         started_at,
+         completed_play_ratio
+       FROM app_listening_events
+       WHERE user_id = $1 AND started_at >= now() - ${interval}
+       ORDER BY started_at DESC
+       LIMIT $2`,
+      [userId, limit]
+    );
+
+    return (this.rows(result) as Array<{
+      song_id: string; title: string; artist_name: string; started_at: Date | string; completed_play_ratio: string | number;
+    }>).map((row) => ({
+      songId: row.song_id,
+      title: row.title,
+      artistName: row.artist_name,
+      playedAt: row.started_at instanceof Date ? row.started_at.toISOString() : String(row.started_at),
+      completedPlayRatio: Number(row.completed_play_ratio)
+    }));
+  }
+
+  async saveStatsSnapshot(
+    userId: string,
+    label: string,
+    topTrackEntries: ListeningStatsEntry[],
+    topArtistEntries: ListeningStatsEntry[],
+    topGenreEntries: ListeningStatsEntry[]
+  ): Promise<ListeningStatsSnapshot> {
+    const id = `snap-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const createdAt = new Date().toISOString();
+
+    await this.database.query(
+      `INSERT INTO app_stats_snapshots (id, user_id, label, created_at) VALUES ($1, $2, $3, $4)`,
+      [id, userId, label, createdAt]
+    );
+
+    const entries: Array<{ category: string; song_id: string | null; artist_name: string; play_count: number; position: number }> = [
+      ...topTrackEntries.map((e, i) => ({ category: "TRACK", song_id: e.songId || null, artist_name: e.title || e.artistName, play_count: e.playCount, position: i + 1 })),
+      ...topArtistEntries.map((e, i) => ({ category: "ARTIST", song_id: null, artist_name: e.artistName, play_count: e.playCount, position: i + 1 })),
+      ...topGenreEntries.map((e, i) => ({ category: "GENRE", song_id: null, artist_name: e.title || e.artistName, play_count: e.playCount, position: i + 1 }))
+    ];
+
+    for (const entry of entries) {
+      const entryId = `snap-${id}-${entry.category}-${entry.position}`;
+      await this.database.query(
+        `INSERT INTO app_stats_snapshot_entries (id, snapshot_id, category, position, song_id, artist_name, play_count)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [entryId, id, entry.category, entry.position, entry.song_id, entry.artist_name, entry.play_count]
+      );
+    }
+
+    return {
+      id,
+      label,
+      createdAt,
+      entries: [...topTrackEntries, ...topArtistEntries, ...topGenreEntries]
+    };
+  }
+
+  async previousStatsSnapshots(userId: string): Promise<ListeningStatsSnapshot[]> {
+    const snapResult = await this.database.query(
+      `SELECT id, label, created_at
+       FROM app_stats_snapshots
+       WHERE user_id = $1
+       ORDER BY created_at DESC
+       LIMIT 20`,
+      [userId]
+    );
+
+    const snapRows = this.rows(snapResult) as Array<{ id: string; label: string; created_at: Date | string }>;
+
+    const snapshots: ListeningStatsSnapshot[] = [];
+
+    for (const row of snapRows) {
+      const entryResult = await this.database.query(
+        `SELECT category, position, song_id, artist_name, play_count
+         FROM app_stats_snapshot_entries
+         WHERE snapshot_id = $1
+         ORDER BY category, position`,
+        [row.id]
+      );
+
+      const entryRows = this.rows(entryResult) as Array<{
+        category: string; position: string | number; song_id: string | null; artist_name: string; play_count: string | number;
+      }>;
+
+      snapshots.push({
+        id: row.id,
+        label: row.label,
+        createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+        entries: entryRows.map((e) => ({
+          songId: e.song_id ?? "",
+          title: e.artist_name,
+          artistName: e.artist_name,
+          playCount: Number(e.play_count),
+          position: Number(e.position)
+        }))
+      });
+    }
+
+    return snapshots;
+  }
+
+  async placementHistory(userId: string, songId: string): Promise<PlacementPoint[]> {
+    const result = await this.database.query(
+      `SELECT ss.id, ss.label, ss.created_at, sse.position
+       FROM app_stats_snapshot_entries sse
+       JOIN app_stats_snapshots ss ON ss.id = sse.snapshot_id
+       WHERE ss.user_id = $1 AND sse.song_id = $2 AND sse.category = 'TRACK'
+       ORDER BY ss.created_at ASC`,
+      [userId, songId]
+    );
+
+    const rows = this.rows(result) as Array<{
+      id: string; label: string; created_at: Date | string; position: string | number;
+    }>;
+
+    return rows.map((row) => ({
+      snapshotId: row.id,
+      label: row.label,
+      createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+      position: Number(row.position)
+    }));
   }
 
   private rows<T>(result: QueryRows<T>): T[] {

@@ -14,6 +14,9 @@ type DashboardProps = {
   habitSummaries: Record<string, HabitSummaryEntry[]>;
   onPlay: (song: Song) => void;
   userName?: string;
+  onLoadMoreRecommendations?: () => void;
+  hasMoreRecommendations?: boolean;
+  loadingMoreRecommendations?: boolean;
 };
 
 export function Dashboard({
@@ -24,7 +27,10 @@ export function Dashboard({
   recommendedData,
   habitSummaries,
   onPlay,
-  userName
+  userName,
+  onLoadMoreRecommendations,
+  hasMoreRecommendations,
+  loadingMoreRecommendations
 }: DashboardProps) {
   const [selectedSong, setSelectedSong] = useState<Song | null>(null);
 
@@ -182,6 +188,18 @@ export function Dashboard({
       ) : (
         <p>No song suggestions available.</p>
       )}
+
+      {onLoadMoreRecommendations && hasMoreRecommendations ? (
+        <div className="load-more-row">
+          <button
+            type="button"
+            onClick={onLoadMoreRecommendations}
+            disabled={loadingMoreRecommendations}
+          >
+            {loadingMoreRecommendations ? "Loading more..." : "Load more recommendations"}
+          </button>
+        </div>
+      ) : null}
 
       {selectedSong ? (
         <SongMetadataModal

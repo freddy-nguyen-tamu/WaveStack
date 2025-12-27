@@ -1,7 +1,26 @@
 import { Heart, ListPlus, Play, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@apollo/client";
+import { SONG_PAGE_QUERY } from "../../api";
 import type { ClientPlaylist, Song } from "../../App";
 import { formatSongDisplayName } from "../../song-format";
+
+type SongPageQueryData = {
+  songPage: {
+    nodes: Song[];
+    pageInfo: {
+      endCursor?: string | null;
+      hasNextPage: boolean;
+    };
+    totalCount: number;
+  };
+};
+
+type SongPageQueryVariables = {
+  first: number;
+  after?: string | null;
+  query?: string | null;
+};
 
 type SearchPanelProps = {
   pageKey: string;
@@ -19,8 +38,6 @@ type SearchPanelProps = {
   onToggleFavorite: (song: Song) => void;
 };
 
-const PAGE_SIZE = 30;
-
 export function SearchPanel({
   pageKey,
   title,
@@ -37,16 +54,72 @@ export function SearchPanel({
   onToggleFavorite
 }: SearchPanelProps) {
   const [query, setQuery] = useState("");
-  const [page, setPage] = useState(1);
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [message, setMessage] = useState("");
+  const [allResults, setAllResults] = useState<Song[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [cursor, setCursor] = useState<string | null>(null);
 
-  const results = useMemo(() => {
-    const needle = query.trim().toLowerCase();
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedQuery(query);
+      setAllResults([]);
+      setCursor(null);
+      setHasMore(false);
+    }, 300);
 
-    if (!needle) {
-      return songs;
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  const { data, fetchMore, loading } = useQuery<SongPageQueryData, SongPageQueryVariables>(
+    SONG_PAGE_QUERY,
+    {
+      variables: {
+        first: 30,
+        after: null,
+        query: debouncedQuery || null
+      },
+      fetchPolicy: "cache-and-network",
+      skip: !debouncedQuery
     }
+  );
 
+  useEffect(() => {
+    if (data?.songPage) {
+      setAllResults(data.songPage.nodes ?? []);
+      setCursor(data.songPage.pageInfo.endCursor ?? null);
+      setHasMore(data.songPage.pageInfo.hasNextPage);
+    }
+  }, [data]);
+
+  async function loadMore() {
+    if (!cursor || !hasMore) return;
+
+    const result = await fetchMore({
+      variables: {
+        first: 30,
+        after: cursor,
+        query: debouncedQuery || null
+      }
+    });
+
+    const page = result.data?.songPage;
+
+    if (page?.nodes) {
+      setAllResults((prev) => {
+        const seen = new Set(prev.map((s) => s.id));
+        const deduped = page.nodes.filter((n) => !seen.has(n.id));
+        return [...prev, ...deduped];
+      });
+      setCursor(page.pageInfo.endCursor ?? null);
+      setHasMore(page.pageInfo.hasNextPage);
+    }
+  }
+
+  const fallbackResults = useMemo(() => {
+    if (debouncedQuery) return [];
+    const needle = query.trim().toLowerCase();
+    if (!needle) return songs;
     return songs.filter((song) => {
       const haystack = [
         song.title,
@@ -55,24 +128,20 @@ export function SearchPanel({
         formatSongDisplayName(song),
         ...song.genreNames
       ].join(" ").toLowerCase();
-
       return haystack.includes(needle);
     });
-  }, [query, songs]);
+  }, [query, debouncedQuery, songs]);
 
-  const pageCount = Math.max(1, Math.ceil(results.length / PAGE_SIZE));
-  const currentPage = Math.min(page, pageCount);
-  const pagedSongs = results.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const results = debouncedQuery ? allResults : fallbackResults;
 
   useEffect(() => {
     setQuery("");
-    setPage(1);
+    setDebouncedQuery("");
+    setAllResults([]);
     setMessage("");
+    setCursor(null);
+    setHasMore(false);
   }, [pageKey]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [query, songs.length]);
 
   function createPlaylistFromPrompt() {
     const name = window.prompt("Playlist name", "My Playlist");
@@ -143,31 +212,14 @@ export function SearchPanel({
       {message ? <p role="status">{message}</p> : null}
 
       <p>
-        Showing {pagedSongs.length} of {results.length} song(s). Page {currentPage} of {pageCount}.
+        Showing {results.length} song(s)
+        {debouncedQuery ? ` (DB search: "${debouncedQuery}")` : ""}
+        {loading ? " — searching..." : ""}
       </p>
 
-      {pageCount > 1 ? (
-        <div aria-label="Pagination">
-          <button type="button" onClick={() => setPage(1)} disabled={currentPage === 1}>
-            First
-          </button>
-          <button type="button" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={currentPage === 1}>
-            Previous
-          </button>
-          <button type="button" onClick={() => setPage((value) => Math.min(pageCount, value + 1))} disabled={currentPage === pageCount}>
-            Next
-          </button>
-          <button type="button" onClick={() => setPage(pageCount)} disabled={currentPage === pageCount}>
-            Last
-          </button>
-        </div>
-      ) : (
-        <p>Pagination appears after more than {PAGE_SIZE} matching songs.</p>
-      )}
-
-      {pagedSongs.length ? (
+      {results.length ? (
         <ul>
-          {pagedSongs.map((song) => {
+          {results.map((song) => {
             const isFavorite = favoriteIds.includes(song.id);
 
             return (
@@ -196,6 +248,14 @@ export function SearchPanel({
       ) : (
         <p>{emptyMessage}</p>
       )}
+
+      {hasMore ? (
+        <div className="load-more-row">
+          <button type="button" onClick={() => void loadMore()} disabled={loading}>
+            {loading ? "Loading..." : "Load more results"}
+          </button>
+        </div>
+      ) : null}
     </article>
   );
 }
