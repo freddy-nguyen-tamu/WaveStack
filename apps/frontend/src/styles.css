@@ -1692,6 +1692,54 @@ body.modal-open {
   color: #cbd5e1;
 }
 
+.drive-export-panel h4 {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.drive-export-panel__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 1.2rem;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 2rem;
+  background: rgba(30, 41, 59, 0.6);
+  color: #f1f5f9;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.drive-export-panel__btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.drive-export-panel__btn:hover:not(:disabled) {
+  background: rgba(51, 65, 85, 0.7);
+}
+
+.drive-export-panel__success {
+  margin-top: 0.75rem;
+  color: #4ade80;
+}
+
+.drive-export-panel__error {
+  margin-top: 0.75rem;
+  color: #f87171;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 /* Mobile responsive for stats page */
 @media (max-width: 860px) {
   .ranking-list__item {

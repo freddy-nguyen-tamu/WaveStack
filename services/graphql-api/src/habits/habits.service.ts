@@ -10,28 +10,34 @@ import {
   RecentlyPlayedEntry,
   RecommendSongResult
 } from "./habits.models";
-import { DrivePrivateExportService, ListeningHabitExportPayload } from "./drive-private-export.service";
+import { DrivePrivateExportService } from "./drive-private-export.service";
 
 type QueryRows<T> = { rows: T[] } | T[];
 
 type StatsPeriod = "FOUR_WEEKS" | "SIX_MONTHS" | "TWELVE_MONTHS" | "ALL_TIME";
 
-type PlayCountRow = {
-  song_id: string;
-  play_count: string | number;
-};
-
-type HabitSummaryRow = {
+type StatsEntryRow = {
+  key: string;
   label: string;
-  count: string | number;
+  subtitle: string | null;
+  rank: string | number;
+  previous_rank: string | number;
+  rank_change: string | number;
+  play_count: string | number;
   total_duration_seconds: string | number;
+  song_id: string | null;
+  thumbnail_url: string | null;
 };
 
-type RecentListenRow = {
-  song_id: string;
+type SnapshotRow = {
+  id: string;
+  stat_type: string;
+  period: string;
+  label: string;
+  generated_at: Date | string;
 };
 
-type ListeningEventExportRow = {
+type RecentListenExportRow = {
   song_id: string;
   artist_name: string;
   title: string;
@@ -64,7 +70,6 @@ export class HabitsService {
          VALUES ($1, $2, $3, $4, $5, $6)`,
         [userId, songId, artistName, title, durationSeconds, completedPlayRatio]
       );
-
       return true;
     } catch (error) {
       this.logger.error(`Failed to record listen: ${error instanceof Error ? error.message : String(error)}`);
@@ -246,7 +251,7 @@ export class HabitsService {
       [userId]
     );
 
-    const rows = this.rows(result) as PlayCountRow[];
+    const rows = this.rows(result) as Array<{ song_id: string; play_count: string | number }>;
     const playCounts = new Map<string, number>();
 
     for (const row of rows) {
@@ -270,7 +275,7 @@ export class HabitsService {
       [userId, limit]
     );
 
-    const rows = this.rows(result) as RecentListenRow[];
+    const rows = this.rows(result) as Array<{ song_id: string }>;
 
     return rows.map((row) => row.song_id);
   }
@@ -291,22 +296,34 @@ export class HabitsService {
       [userId]
     );
 
-    return (this.rows(result) as HabitSummaryRow[]).map((row) => ({
-      label: row.label,
-      count: Number(row.count),
-      totalDurationSeconds: Number(row.total_duration_seconds)
-    }));
+    return (this.rows(result) as Array<{ label: string; count: string | number; total_duration_seconds: string | number }>)
+      .map((row) => ({
+        label: row.label,
+        count: Number(row.count),
+        totalDurationSeconds: Number(row.total_duration_seconds)
+      }));
+  }
+
+  async getUserByEmail(email: string): Promise<{ id: string; email: string } | null> {
+    const result = await this.database.query(
+      `SELECT id, email FROM users WHERE email = $1`,
+      [email]
+    );
+    const rows = this.rows(result) as Array<{ id: string; email: string }>;
+    return rows.length > 0 ? rows[0] : null;
   }
 
   async testDriveWrite(): Promise<{
     ok: boolean;
     message: string;
     folderId?: string;
-    credentialsPath?: string;
-    fileId?: string;
-    webViewLink?: string;
   }> {
-    return this.drivePrivateExport.assertWritable();
+    try {
+      const folderId = await this.drivePrivateExport.ensureRootFolder();
+      return { ok: true, message: "Root folder ready", folderId };
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   async exportToDrive(
@@ -315,60 +332,38 @@ export class HabitsService {
   ): Promise<{
     ok: boolean;
     message: string;
-    fileId?: string;
     webViewLink?: string;
   }> {
-    const events = await this.getEventsForExport(userId, period);
-    const summaries: Record<string, unknown> = {};
+    try {
+      const intervalWhere = period === "ALL" ? "" : `AND started_at >= now() - ${this.periodIntervalSql(period as "DAY" | "WEEK" | "MONTH" | "YEAR")}`;
 
-    for (const p of ["DAY", "WEEK", "MONTH", "YEAR"] as const) {
-      summaries[p] = await this.summarize(userId, p);
+      const result = await this.database.query(
+        `SELECT
+           song_id, artist_name, title, duration_seconds, completed_play_ratio, started_at
+         FROM app_listening_events
+         WHERE user_id = $1 ${intervalWhere}
+         ORDER BY started_at DESC
+         LIMIT 5000`,
+        [userId]
+      );
+
+      const rows = this.rows(result) as RecentListenExportRow[];
+      const header = "Song ID,Artist,Title,Duration (s),Completion Ratio,Started At";
+      const csvRows = rows.map((r) =>
+        `"${r.song_id}","${r.artist_name}","${r.title}",${r.duration_seconds},${r.completed_play_ratio},"${r.started_at instanceof Date ? r.started_at.toISOString() : r.started_at}"`
+      );
+      const csv = [header, ...csvRows].join("\n");
+
+      const link = await this.drivePrivateExport.exportData(
+        userId,
+        csv,
+        `listening-history-${period.toLowerCase()}-${new Date().toISOString().split("T")[0]}.csv`,
+        "text/csv"
+      );
+      return { ok: true, message: "Exported", webViewLink: link };
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
     }
-
-    const payload: ListeningHabitExportPayload = {
-      userId,
-      period,
-      generatedAt: new Date().toISOString(),
-      events,
-      summaries
-    };
-
-    return this.drivePrivateExport.exportListeningHabits(payload);
-  }
-
-  private async getEventsForExport(
-    userId: string,
-    period: "DAY" | "WEEK" | "MONTH" | "YEAR" | "ALL"
-  ): Promise<ListeningHabitExportPayload["events"]> {
-    const intervalWhere =
-      period === "ALL"
-        ? ""
-        : `AND started_at >= now() - ${this.periodIntervalSql(period)}`;
-
-    const result = await this.database.query(
-      `SELECT
-         song_id,
-         artist_name,
-         title,
-         duration_seconds,
-         completed_play_ratio,
-         started_at
-       FROM app_listening_events
-       WHERE user_id = $1
-       ${intervalWhere}
-       ORDER BY started_at DESC
-       LIMIT 5000`,
-      [userId]
-    );
-
-    return (this.rows(result) as ListeningEventExportRow[]).map((row) => ({
-      songId: row.song_id,
-      artistName: row.artist_name,
-      title: row.title,
-      durationSeconds: Number(row.duration_seconds),
-      completedPlayRatio: Number(row.completed_play_ratio),
-      startedAt: row.started_at instanceof Date ? row.started_at.toISOString() : String(row.started_at)
-    }));
   }
 
   private periodIntervalSql(period: "DAY" | "WEEK" | "MONTH" | "YEAR"): string {
@@ -398,10 +393,16 @@ export class HabitsService {
 
     const result = await this.database.query(
       `SELECT
-         song_id,
-         COALESCE(NULLIF(title, ''), 'Unknown') AS title,
-         COALESCE(NULLIF(artist_name, ''), 'Unknown') AS artist_name,
-         COUNT(*)::int AS play_count
+         song_id AS key,
+         COALESCE(NULLIF(title, ''), 'Unknown') AS label,
+         COALESCE(NULLIF(artist_name, ''), 'Unknown') AS subtitle,
+         ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC)::int AS rank,
+         0 AS previous_rank,
+         0 AS rank_change,
+         COUNT(*)::int AS play_count,
+         COALESCE(SUM(duration_seconds), 0)::float8 AS total_duration_seconds,
+         song_id AS song_id,
+         NULL AS thumbnail_url
        FROM app_listening_events
        WHERE user_id = $1 AND started_at >= now() - ${interval}
        GROUP BY song_id, title, artist_name
@@ -410,14 +411,7 @@ export class HabitsService {
       [userId, limit]
     );
 
-    return (this.rows(result) as Array<{ song_id: string; title: string; artist_name: string; play_count: string | number }>)
-      .map((row, index) => ({
-        songId: row.song_id,
-        title: row.title,
-        artistName: row.artist_name,
-        playCount: Number(row.play_count),
-        position: index + 1
-      }));
+    return this.mapStatsEntries(this.rows(result));
   }
 
   async topArtists(userId: string, period: StatsPeriod, limit = 50): Promise<ListeningStatsEntry[]> {
@@ -425,8 +419,16 @@ export class HabitsService {
 
     const result = await this.database.query(
       `SELECT
-         COALESCE(NULLIF(artist_name, ''), 'Unknown') AS artist_name,
-         COUNT(*)::int AS play_count
+         COALESCE(NULLIF(artist_name, ''), 'Unknown') AS key,
+         COALESCE(NULLIF(artist_name, ''), 'Unknown') AS label,
+         '' AS subtitle,
+         ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC)::int AS rank,
+         0 AS previous_rank,
+         0 AS rank_change,
+         COUNT(*)::int AS play_count,
+         COALESCE(SUM(duration_seconds), 0)::float8 AS total_duration_seconds,
+         NULL AS song_id,
+         NULL AS thumbnail_url
        FROM app_listening_events
        WHERE user_id = $1 AND started_at >= now() - ${interval}
        GROUP BY artist_name
@@ -435,44 +437,37 @@ export class HabitsService {
       [userId, limit]
     );
 
-    return (this.rows(result) as Array<{ artist_name: string; play_count: string | number }>)
-      .map((row, index) => ({
-        songId: "",
-        title: "",
-        artistName: row.artist_name,
-        playCount: Number(row.play_count),
-        position: index + 1
-      }));
+    return this.mapStatsEntries(this.rows(result));
   }
 
   async topGenres(userId: string, period: StatsPeriod, limit = 50): Promise<ListeningStatsEntry[]> {
     const interval = this.statsPeriodIntervalSql(period);
 
     const result = await this.database.query(
-      `WITH song_genres AS (
+      `SELECT
+         COALESCE(NULLIF(genre_name, ''), 'Unknown') AS key,
+         COALESCE(NULLIF(genre_name, ''), 'Unknown') AS label,
+         '' AS subtitle,
+         ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC)::int AS rank,
+         0 AS previous_rank,
+         0 AS rank_change,
+         COUNT(*)::int AS play_count,
+         0::float8 AS total_duration_seconds,
+         NULL AS song_id,
+         NULL AS thumbnail_url
+       FROM (
          SELECT unnest(dt.genre_names) AS genre_name
          FROM app_listening_events ale
          JOIN drive_tracks dt ON dt.file_id = ale.song_id
          WHERE ale.user_id = $1 AND ale.started_at >= now() - ${interval}
-       )
-       SELECT
-         COALESCE(NULLIF(genre_name, ''), 'Unknown') AS genre_name,
-         COUNT(*)::int AS play_count
-       FROM song_genres
+       ) sub
        GROUP BY genre_name
        ORDER BY play_count DESC
        LIMIT $2`,
       [userId, limit]
     );
 
-    return (this.rows(result) as Array<{ genre_name: string; play_count: string | number }>)
-      .map((row, index) => ({
-        songId: "",
-        title: row.genre_name,
-        artistName: "",
-        playCount: Number(row.play_count),
-        position: index + 1
-      }));
+    return this.mapStatsEntries(this.rows(result));
   }
 
   async recentlyPlayedDetailed(userId: string, period: StatsPeriod, limit = 50): Promise<RecentlyPlayedEntry[]> {
@@ -483,8 +478,9 @@ export class HabitsService {
          song_id,
          COALESCE(NULLIF(title, ''), 'Unknown') AS title,
          COALESCE(NULLIF(artist_name, ''), 'Unknown') AS artist_name,
-         started_at,
-         completed_play_ratio
+         duration_seconds,
+         completed_play_ratio,
+         started_at
        FROM app_listening_events
        WHERE user_id = $1 AND started_at >= now() - ${interval}
        ORDER BY started_at DESC
@@ -493,117 +489,127 @@ export class HabitsService {
     );
 
     return (this.rows(result) as Array<{
-      song_id: string; title: string; artist_name: string; started_at: Date | string; completed_play_ratio: string | number;
+      song_id: string; title: string; artist_name: string;
+      duration_seconds: string | number;
+      completed_play_ratio: string | number; started_at: Date | string;
     }>).map((row) => ({
       songId: row.song_id,
       title: row.title,
       artistName: row.artist_name,
-      playedAt: row.started_at instanceof Date ? row.started_at.toISOString() : String(row.started_at),
-      completedPlayRatio: Number(row.completed_play_ratio)
+      durationSeconds: Number(row.duration_seconds),
+      completedPlayRatio: Number(row.completed_play_ratio),
+      startedAt: row.started_at instanceof Date ? row.started_at.toISOString() : String(row.started_at)
+    }));
+  }
+
+  private mapStatsEntries(rows: unknown[]): ListeningStatsEntry[] {
+    return (rows as StatsEntryRow[]).map((r) => ({
+      key: r.key,
+      label: r.label,
+      subtitle: r.subtitle ?? "",
+      rank: Number(r.rank),
+      previousRank: Number(r.previous_rank),
+      rankChange: Number(r.rank_change),
+      playCount: Number(r.play_count),
+      totalDurationSeconds: Number(r.total_duration_seconds),
+      songId: r.song_id ?? undefined,
+      thumbnailUrl: r.thumbnail_url ?? undefined,
     }));
   }
 
   async saveStatsSnapshot(
     userId: string,
+    statType: string,
+    period: string,
     label: string,
-    topTrackEntries: ListeningStatsEntry[],
-    topArtistEntries: ListeningStatsEntry[],
-    topGenreEntries: ListeningStatsEntry[]
+    entries: ListeningStatsEntry[]
   ): Promise<ListeningStatsSnapshot> {
-    const id = `snap-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const createdAt = new Date().toISOString();
-
-    await this.database.query(
-      `INSERT INTO app_stats_snapshots (id, user_id, label, created_at) VALUES ($1, $2, $3, $4)`,
-      [id, userId, label, createdAt]
+    const snapResult = await this.database.query(
+      `INSERT INTO listening_stat_snapshots (stat_type, period, label, generated_at)
+       VALUES ($1, $2, $3, now())
+       RETURNING id, stat_type, period, label, generated_at`,
+      [statType, period, label]
     );
 
-    const entries: Array<{ category: string; song_id: string | null; artist_name: string; play_count: number; position: number }> = [
-      ...topTrackEntries.map((e, i) => ({ category: "TRACK", song_id: e.songId || null, artist_name: e.title || e.artistName, play_count: e.playCount, position: i + 1 })),
-      ...topArtistEntries.map((e, i) => ({ category: "ARTIST", song_id: null, artist_name: e.artistName, play_count: e.playCount, position: i + 1 })),
-      ...topGenreEntries.map((e, i) => ({ category: "GENRE", song_id: null, artist_name: e.title || e.artistName, play_count: e.playCount, position: i + 1 }))
-    ];
+    const snap = (this.rows(snapResult) as SnapshotRow[])[0];
 
     for (const entry of entries) {
-      const entryId = `snap-${id}-${entry.category}-${entry.position}`;
       await this.database.query(
-        `INSERT INTO app_stats_snapshot_entries (id, snapshot_id, category, position, song_id, artist_name, play_count)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [entryId, id, entry.category, entry.position, entry.song_id, entry.artist_name, entry.play_count]
+        `INSERT INTO listening_stat_entries
+           (snapshot_id, key, label, subtitle, rank, previous_rank, rank_change,
+            play_count, total_duration_seconds, song_id, thumbnail_url)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [
+          snap.id, entry.key, entry.label, entry.subtitle,
+          entry.rank, entry.previousRank, entry.rankChange,
+          entry.playCount, entry.totalDurationSeconds,
+          entry.songId ?? null, entry.thumbnailUrl ?? null
+        ]
       );
     }
 
     return {
-      id,
-      label,
-      createdAt,
-      entries: [...topTrackEntries, ...topArtistEntries, ...topGenreEntries]
+      id: snap.id,
+      statType: snap.stat_type,
+      period: snap.period,
+      label: snap.label,
+      generatedAt: snap.generated_at instanceof Date ? snap.generated_at.toISOString() : String(snap.generated_at),
+      entries
     };
   }
 
   async previousStatsSnapshots(userId: string): Promise<ListeningStatsSnapshot[]> {
-    const snapResult = await this.database.query(
-      `SELECT id, label, created_at
-       FROM app_stats_snapshots
-       WHERE user_id = $1
-       ORDER BY created_at DESC
-       LIMIT 20`,
-      [userId]
+    const result = await this.database.query(
+      `SELECT id, stat_type, period, label, generated_at
+       FROM listening_stat_snapshots
+       ORDER BY generated_at DESC
+       LIMIT 20`
     );
 
-    const snapRows = this.rows(snapResult) as Array<{ id: string; label: string; created_at: Date | string }>;
-
+    const snaps = this.rows(result) as SnapshotRow[];
     const snapshots: ListeningStatsSnapshot[] = [];
 
-    for (const row of snapRows) {
+    for (const snap of snaps) {
       const entryResult = await this.database.query(
-        `SELECT category, position, song_id, artist_name, play_count
-         FROM app_stats_snapshot_entries
+        `SELECT key, label, subtitle, rank, previous_rank, rank_change,
+                play_count, total_duration_seconds, song_id, thumbnail_url
+         FROM listening_stat_entries
          WHERE snapshot_id = $1
-         ORDER BY category, position`,
-        [row.id]
+         ORDER BY rank`,
+        [snap.id]
       );
 
-      const entryRows = this.rows(entryResult) as Array<{
-        category: string; position: string | number; song_id: string | null; artist_name: string; play_count: string | number;
-      }>;
-
       snapshots.push({
-        id: row.id,
-        label: row.label,
-        createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
-        entries: entryRows.map((e) => ({
-          songId: e.song_id ?? "",
-          title: e.artist_name,
-          artistName: e.artist_name,
-          playCount: Number(e.play_count),
-          position: Number(e.position)
-        }))
+        id: snap.id,
+        statType: snap.stat_type,
+        period: snap.period,
+        label: snap.label,
+        generatedAt: snap.generated_at instanceof Date ? snap.generated_at.toISOString() : String(snap.generated_at),
+        entries: this.mapStatsEntries(this.rows(entryResult))
       });
     }
 
     return snapshots;
   }
 
-  async placementHistory(userId: string, songId: string): Promise<PlacementPoint[]> {
+  async placementHistory(userId: string, key: string): Promise<PlacementPoint[]> {
     const result = await this.database.query(
-      `SELECT ss.id, ss.label, ss.created_at, sse.position
-       FROM app_stats_snapshot_entries sse
-       JOIN app_stats_snapshots ss ON ss.id = sse.snapshot_id
-       WHERE ss.user_id = $1 AND sse.song_id = $2 AND sse.category = 'TRACK'
-       ORDER BY ss.created_at ASC`,
-      [userId, songId]
+      `SELECT ss.id, ss.generated_at, se.rank
+       FROM listening_stat_entries se
+       JOIN listening_stat_snapshots ss ON ss.id = se.snapshot_id
+       WHERE se.key = $1
+       ORDER BY ss.generated_at ASC`,
+      [key]
     );
 
     const rows = this.rows(result) as Array<{
-      id: string; label: string; created_at: Date | string; position: string | number;
+      id: string; generated_at: Date | string; rank: string | number;
     }>;
 
     return rows.map((row) => ({
       snapshotId: row.id,
-      label: row.label,
-      createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
-      position: Number(row.position)
+      generatedAt: row.generated_at instanceof Date ? row.generated_at.toISOString() : String(row.generated_at),
+      rank: Number(row.rank)
     }));
   }
 

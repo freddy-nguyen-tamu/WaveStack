@@ -855,13 +855,7 @@ export function App() {
           path="/stats"
           element={
             <section aria-label="Stats">
-              <StatsPage
-                onPlay={playSong}
-                playlists={playlists}
-                onCreatePlaylist={(name) => createPlaylist(name)}
-                onAddToPlaylist={(playlistId, song) => addToPlaylist(playlistId, song)}
-                getSongById={(id) => songById.get(id)}
-              />
+              <StatsPage />
             </section>
           }
         />

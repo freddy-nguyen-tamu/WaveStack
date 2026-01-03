@@ -1,189 +1,94 @@
-import { Injectable, Logger } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
-import { google } from "googleapis";
+import { Injectable, Logger } from '@nestjs/common';
+import { google, drive_v3 } from 'googleapis';
+import { OAuth2Client } from 'google-auth-library';
 
-export type ListeningHabitExportPayload = {
-  userId: string;
-  generatedAt: string;
-  period: "DAY" | "WEEK" | "MONTH" | "YEAR" | "ALL";
-  events: Array<{
-    songId: string;
-    artistName: string;
-    title: string;
-    durationSeconds: number;
-    completedPlayRatio: number;
-    startedAt: string;
-  }>;
-  summaries: Record<string, unknown>;
-};
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 
 @Injectable()
 export class DrivePrivateExportService {
   private readonly logger = new Logger(DrivePrivateExportService.name);
+  private drive: drive_v3.Drive | null = null;
+  private rootFolderId: string | null = null;
 
-  constructor(private readonly config: ConfigService) {}
-
-  isEnabled(): boolean {
-    return this.config.get<string>("GOOGLE_DRIVE_PRIVATE_EXPORT_ENABLED") === "true";
-  }
-
-  getFolderId(): string {
-    return this.config.get<string>("LISTENING_HABITS_GOOGLE_DRIVE_FOLDER_ID") ?? "";
-  }
-
-  getCredentialsPath(): string {
-    return this.config.get<string>("GOOGLE_APPLICATION_CREDENTIALS") ?? "";
-  }
-
-  async assertWritable(): Promise<{
-    ok: boolean;
-    message: string;
-    folderId: string;
-    credentialsPath: string;
-    testFileId?: string;
-    webViewLink?: string;
-  }> {
-    const folderId = this.getFolderId();
-    const credentialsPath = this.getCredentialsPath();
-
-    if (!this.isEnabled()) {
-      return {
-        ok: false,
-        folderId,
-        credentialsPath,
-        message: "GOOGLE_DRIVE_PRIVATE_EXPORT_ENABLED is not true."
-      };
-    }
-
-    if (!folderId || folderId === "TODO_FILL_LATER") {
-      return {
-        ok: false,
-        folderId,
-        credentialsPath,
-        message: "LISTENING_HABITS_GOOGLE_DRIVE_FOLDER_ID is missing or still TODO_FILL_LATER."
-      };
-    }
-
-    if (!credentialsPath) {
-      return {
-        ok: false,
-        folderId,
-        credentialsPath,
-        message: "GOOGLE_APPLICATION_CREDENTIALS is missing."
-      };
-    }
-
-    try {
-      const drive = await this.getDriveClient();
-
-      const result = await drive.files.create({
-        requestBody: {
-          name: `wavestack-private-drive-write-test-${Date.now()}.json`,
-          parents: [folderId],
-          mimeType: "application/json"
-        },
-        media: {
-          mimeType: "application/json",
-          body: JSON.stringify(
-            {
-              ok: true,
-              source: "WaveStack private Drive write test",
-              createdAt: new Date().toISOString()
-            },
-            null,
-            2
-          )
-        },
-        fields: "id,name,webViewLink"
-      });
-
-      return {
-        ok: true,
-        folderId,
-        credentialsPath,
-        testFileId: result.data.id ?? undefined,
-        webViewLink: result.data.webViewLink ?? undefined,
-        message: `Successfully wrote ${result.data.name ?? "test file"} to the private Drive folder.`
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-
-      this.logger.error(`Private Drive write test failed: ${message}`);
-
-      return {
-        ok: false,
-        folderId,
-        credentialsPath,
-        message
-      };
-    }
-  }
-
-  async exportListeningHabits(payload: ListeningHabitExportPayload): Promise<{
-    ok: boolean;
-    fileId?: string;
-    webViewLink?: string;
-    message: string;
-  }> {
-    if (!this.isEnabled()) {
-      return {
-        ok: false,
-        message: "Google Drive private export is disabled."
-      };
-    }
-
-    const folderId = this.getFolderId();
-
-    if (!folderId || folderId === "TODO_FILL_LATER") {
-      return {
-        ok: false,
-        message: "Listening habits Drive folder ID is missing."
-      };
-    }
-
-    try {
-      const drive = await this.getDriveClient();
-      const safeDate = new Date().toISOString().replace(/[:.]/g, "-");
-      const fileName = `wavestack-listening-habits-${payload.userId}-${payload.period.toLowerCase()}-${safeDate}.json`;
-
-      const result = await drive.files.create({
-        requestBody: {
-          name: fileName,
-          parents: [folderId],
-          mimeType: "application/json"
-        },
-        media: {
-          mimeType: "application/json",
-          body: JSON.stringify(payload, null, 2)
-        },
-        fields: "id,name,webViewLink"
-      });
-
-      return {
-        ok: true,
-        fileId: result.data.id ?? undefined,
-        webViewLink: result.data.webViewLink ?? undefined,
-        message: `Exported listening habits to ${result.data.name ?? fileName}.`
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Listening habit Drive export failed: ${message}`);
-
-      return {
-        ok: false,
-        message
-      };
-    }
-  }
-
-  private async getDriveClient() {
-    const auth = new google.auth.GoogleAuth({
-      scopes: ["https://www.googleapis.com/auth/drive.file"]
+  async initialize(accessToken: string, refreshToken: string): Promise<void> {
+    const oauth = new OAuth2Client({
+      clientId: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
     });
+    oauth.setCredentials({ access_token: accessToken, refresh_token: refreshToken });
+    this.drive = google.drive({ version: 'v3', auth: oauth as unknown as string });
+    this.rootFolderId = null;
+  }
 
-    return google.drive({
-      version: "v3",
-      auth
+  private async assertDrive(): Promise<drive_v3.Drive> {
+    if (!this.drive) throw new Error('Drive not initialized');
+    return this.drive;
+  }
+
+  private async getOrCreateFolder(
+    drive: drive_v3.Drive,
+    name: string,
+    parentId: string | null,
+  ): Promise<string> {
+    const query = `mimeType='application/vnd.google-apps.folder' and name='${name.replace(/'/g, "\\'")}' and trashed=false` +
+      (parentId ? ` and '${parentId}' in parents` : '');
+    const res = await drive.files.list({ q: query, fields: 'files(id)', pageSize: 1 });
+    if (res.data.files && res.data.files.length > 0) {
+      return res.data.files[0].id!;
+    }
+    const meta: drive_v3.Schema$File = { name, mimeType: 'application/vnd.google-apps.folder' };
+    if (parentId) meta.parents = [parentId];
+    const created = await drive.files.create({ requestBody: meta, fields: 'id' });
+    return created.data.id!;
+  }
+
+  async ensureRootFolder(): Promise<string> {
+    const drive = await this.assertDrive();
+    if (this.rootFolderId) return this.rootFolderId;
+    this.rootFolderId = await this.getOrCreateFolder(drive, 'Listening_habits', null);
+    return this.rootFolderId;
+  }
+
+  async ensureUserFolder(userId: string): Promise<string> {
+    const drive = await this.assertDrive();
+    const rootId = await this.ensureRootFolder();
+    const usersFolderId = await this.getOrCreateFolder(drive, 'users', rootId);
+    return await this.getOrCreateFolder(drive, userId, usersFolderId);
+  }
+
+  async exportData(
+    userId: string,
+    content: string,
+    filename: string,
+    mimeType: string = 'text/csv',
+  ): Promise<string> {
+    const drive = await this.assertDrive();
+    const userFolderId = await this.ensureUserFolder(userId);
+
+    const res = await drive.files.create({
+      requestBody: {
+        name: filename,
+        parents: [userFolderId],
+      },
+      media: { mimeType, body: content },
+      fields: 'id, webViewLink',
     });
+    return res.data.webViewLink || `https://drive.google.com/file/d/${res.data.id}`;
+  }
+
+  async listExports(userId: string): Promise<{ id: string; name: string; webViewLink: string | null; createdTime: string | null }[]> {
+    const drive = await this.assertDrive();
+    const userFolderId = await this.ensureUserFolder(userId);
+    const res = await drive.files.list({
+      q: `'${userFolderId}' in parents and trashed=false`,
+      fields: 'files(id, name, webViewLink, createdTime)',
+      orderBy: 'createdTime desc',
+    });
+    return (res.data.files || []).map(f => ({
+      id: f.id!,
+      name: f.name!,
+      webViewLink: f.webViewLink || null,
+      createdTime: f.createdTime || null,
+    }));
   }
 }

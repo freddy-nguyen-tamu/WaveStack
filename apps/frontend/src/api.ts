@@ -236,16 +236,18 @@ export const LISTENING_HABIT_SUMMARY_QUERY = gql`
 `;
 
 export const TOP_TRACKS_QUERY = gql`
-  ${SONG_CARD_FIELDS}
-
   query TopTracks($period: String!, $limit: Int) {
     topTracks(period: $period, limit: $limit) {
-      songId
-      title
-      artistName
+      key
+      label
+      subtitle
+      rank
+      previousRank
+      rankChange
       playCount
-      position
-      previousPosition
+      totalDurationSeconds
+      songId
+      thumbnailUrl
     }
   }
 `;
@@ -253,12 +255,15 @@ export const TOP_TRACKS_QUERY = gql`
 export const TOP_ARTISTS_QUERY = gql`
   query TopArtists($period: String!, $limit: Int) {
     topArtists(period: $period, limit: $limit) {
-      songId
-      title
-      artistName
+      key
+      label
+      subtitle
+      rank
+      previousRank
+      rankChange
       playCount
-      position
-      previousPosition
+      totalDurationSeconds
+      thumbnailUrl
     }
   }
 `;
@@ -266,12 +271,14 @@ export const TOP_ARTISTS_QUERY = gql`
 export const TOP_GENRES_QUERY = gql`
   query TopGenres($period: String!, $limit: Int) {
     topGenres(period: $period, limit: $limit) {
-      songId
-      title
-      artistName
+      key
+      label
+      subtitle
+      rank
+      previousRank
+      rankChange
       playCount
-      position
-      previousPosition
+      totalDurationSeconds
     }
   }
 `;
@@ -282,25 +289,32 @@ export const RECENTLY_PLAYED_DETAILED_QUERY = gql`
       songId
       title
       artistName
-      playedAt
+      durationSeconds
       completedPlayRatio
+      startedAt
     }
   }
 `;
 
 export const SAVE_STATS_SNAPSHOT_MUTATION = gql`
-  mutation SaveStatsSnapshot($label: String!, $period: String!) {
-    saveStatsSnapshot(label: $label, period: $period) {
+  mutation SaveStatsSnapshot($statType: String!, $period: String!, $label: String!) {
+    saveStatsSnapshot(statType: $statType, period: $period, label: $label) {
       id
+      statType
+      period
       label
-      createdAt
+      generatedAt
       entries {
-        songId
-        title
-        artistName
+        key
+        label
+        subtitle
+        rank
+        previousRank
+        rankChange
         playCount
-        position
-        previousPosition
+        totalDurationSeconds
+        songId
+        thumbnailUrl
       }
     }
   }
@@ -310,27 +324,32 @@ export const PREVIOUS_STATS_SNAPSHOTS_QUERY = gql`
   query PreviousStatsSnapshots {
     previousStatsSnapshots {
       id
+      statType
+      period
       label
-      createdAt
+      generatedAt
       entries {
-        songId
-        title
-        artistName
+        key
+        label
+        subtitle
+        rank
+        previousRank
+        rankChange
         playCount
-        position
-        previousPosition
+        totalDurationSeconds
+        songId
+        thumbnailUrl
       }
     }
   }
 `;
 
 export const PLACEMENT_HISTORY_QUERY = gql`
-  query PlacementHistory($songId: String!) {
-    placementHistory(songId: $songId) {
+  query PlacementHistory($key: String!) {
+    placementHistory(key: $key) {
       snapshotId
-      label
-      createdAt
-      position
+      generatedAt
+      rank
     }
   }
 `;
@@ -341,8 +360,16 @@ export const TEST_PRIVATE_DRIVE_WRITE_MUTATION = gql`
       ok
       message
       folderId
-      credentialsPath
-      fileId
+      webViewLink
+    }
+  }
+`;
+
+export const EXPORT_LISTENING_HABITS_MUTATION = gql`
+  mutation ExportListeningHabits($period: String) {
+    exportListeningHabits(period: $period) {
+      ok
+      message
       webViewLink
     }
   }
@@ -356,17 +383,6 @@ export const REPAIR_EMBEDDED_LYRICS_FOR_SONG_MUTATION = gql`
       attemptedCount
       repairedCount
       failedCount
-    }
-  }
-`;
-
-export const EXPORT_LISTENING_HABITS_MUTATION = gql`
-  mutation ExportListeningHabits($period: String) {
-    exportListeningHabits(period: $period) {
-      ok
-      message
-      fileId
-      webViewLink
     }
   }
 `;

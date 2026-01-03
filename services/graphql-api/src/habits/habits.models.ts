@@ -48,25 +48,34 @@ export type HabitPeriod = "DAY" | "WEEK" | "MONTH" | "YEAR";
 @ObjectType()
 export class ListeningStatsEntry {
   @Field()
-  songId!: string;
+  key!: string;
 
   @Field()
-  title!: string;
+  label!: string;
 
   @Field()
-  artistName!: string;
+  subtitle!: string;
 
-  @Field({ nullable: true })
-  albumTitle?: string;
+  @Field(() => Int)
+  rank!: number;
+
+  @Field(() => Int)
+  previousRank!: number;
+
+  @Field(() => Int)
+  rankChange!: number;
 
   @Field(() => Int)
   playCount!: number;
 
-  @Field(() => Int, { nullable: true })
-  previousPosition?: number;
+  @Field(() => Float)
+  totalDurationSeconds!: number;
 
-  @Field(() => Int, { nullable: true })
-  position?: number;
+  @Field({ nullable: true })
+  songId?: string;
+
+  @Field({ nullable: true })
+  thumbnailUrl?: string;
 }
 
 @ObjectType()
@@ -80,14 +89,14 @@ export class RecentlyPlayedEntry {
   @Field()
   artistName!: string;
 
-  @Field({ nullable: true })
-  albumTitle?: string;
-
-  @Field()
-  playedAt!: string;
+  @Field(() => Int)
+  durationSeconds!: number;
 
   @Field(() => Float)
   completedPlayRatio!: number;
+
+  @Field()
+  startedAt!: string;
 }
 
 @ObjectType()
@@ -96,10 +105,16 @@ export class ListeningStatsSnapshot {
   id!: string;
 
   @Field()
+  statType!: string;
+
+  @Field()
+  period!: string;
+
+  @Field()
   label!: string;
 
   @Field()
-  createdAt!: string;
+  generatedAt!: string;
 
   @Field(() => [ListeningStatsEntry])
   entries!: ListeningStatsEntry[];
@@ -111,11 +126,8 @@ export class PlacementPoint {
   snapshotId!: string;
 
   @Field()
-  label!: string;
+  generatedAt!: string;
 
-  @Field()
-  createdAt!: string;
-
-  @Field(() => Int, { nullable: true })
-  position?: number;
+  @Field(() => Int)
+  rank!: number;
 }

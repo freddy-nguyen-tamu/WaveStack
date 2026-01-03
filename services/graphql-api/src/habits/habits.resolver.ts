@@ -105,22 +105,19 @@ export class HabitsResolver {
   @Mutation(() => ListeningStatsSnapshot)
   async saveStatsSnapshot(
     @Context() context: GqlContext,
-    @Args("label") label: string,
-    @Args("period") period: string
+    @Args("statType") statType: string,
+    @Args("period") period: string,
+    @Args("label") label: string
   ): Promise<ListeningStatsSnapshot> {
     const userId = this.resolveUserId(context);
     if (!userId) {
-      return { id: "", label: "", createdAt: new Date().toISOString(), entries: [] };
+      return { id: "", statType: "", period: "", label: "", generatedAt: new Date().toISOString(), entries: [] };
     }
 
     const statsPeriod = period as "FOUR_WEEKS" | "SIX_MONTHS" | "TWELVE_MONTHS" | "ALL_TIME";
-    const [tracks, artists, genres] = await Promise.all([
-      this.habitsService.topTracks(userId, statsPeriod, 50),
-      this.habitsService.topArtists(userId, statsPeriod, 50),
-      this.habitsService.topGenres(userId, statsPeriod, 50)
-    ]);
+    const entries = await this.habitsService.topTracks(userId, statsPeriod, 50);
 
-    return this.habitsService.saveStatsSnapshot(userId, label, tracks, artists, genres);
+    return this.habitsService.saveStatsSnapshot(userId, statType, period, label, entries);
   }
 
   @Query(() => [ListeningStatsSnapshot])
@@ -135,11 +132,11 @@ export class HabitsResolver {
   @Query(() => [PlacementPoint])
   async placementHistory(
     @Context() context: GqlContext,
-    @Args("songId") songId: string
+    @Args("key") key: string
   ): Promise<PlacementPoint[]> {
     const userId = this.resolveUserId(context);
     if (!userId) return [];
-    return this.habitsService.placementHistory(userId, songId);
+    return this.habitsService.placementHistory(userId, key);
   }
 
   @Query(() => [HabitSummaryEntry])
