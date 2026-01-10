@@ -66,6 +66,19 @@ jobs:
             exit 1
           }
 
+          # Inject Groq secrets into .env (if GitHub secret is set)
+          if [ -n "${{ secrets.GROQ_API_KEY }}" ]; then sed -i '/^GROQ_API_KEY=/d' .env; echo "GROQ_API_KEY=${{ secrets.GROQ_API_KEY}}" >> .env; fi
+          if [ -n "${{ secrets.GROQ_API_KEY1 }}" ]; then sed -i '/^GROQ_API_KEY1=/d' .env; echo "GROQ_API_KEY1=${{ secrets.GROQ_API_KEY1}}" >> .env; fi
+          if [ -n "${{ secrets.GROQ_API_KEY2 }}" ]; then sed -i '/^GROQ_API_KEY2=/d' .env; echo "GROQ_API_KEY2=${{ secrets.GROQ_API_KEY2}}" >> .env; fi
+          if [ -n "${{ secrets.GROQ_API_KEY3 }}" ]; then sed -i '/^GROQ_API_KEY3=/d' .env; echo "GROQ_API_KEY3=${{ secrets.GROQ_API_KEY3}}" >> .env; fi
+          if [ -n "${{ secrets.GROQ_API_KEY4 }}" ]; then sed -i '/^GROQ_API_KEY4=/d' .env; echo "GROQ_API_KEY4=${{ secrets.GROQ_API_KEY4}}" >> .env; fi
+          if [ -n "${{ secrets.GROQ_API_KEY5 }}" ]; then sed -i '/^GROQ_API_KEY5=/d' .env; echo "GROQ_API_KEY5=${{ secrets.GROQ_API_KEY5}}" >> .env; fi
+          if [ -n "${{ secrets.GROQ_API_KEY6 }}" ]; then sed -i '/^GROQ_API_KEY6=/d' .env; echo "GROQ_API_KEY6=${{ secrets.GROQ_API_KEY6}}" >> .env; fi
+          if [ -n "${{ secrets.GROQ_API_KEY7 }}" ]; then sed -i '/^GROQ_API_KEY7=/d' .env; echo "GROQ_API_KEY7=${{ secrets.GROQ_API_KEY7}}" >> .env; fi
+          if [ -n "${{ secrets.GROQ_API_KEY8 }}" ]; then sed -i '/^GROQ_API_KEY8=/d' .env; echo "GROQ_API_KEY8=${{ secrets.GROQ_API_KEY8}}" >> .env; fi
+          if [ -n "${{ secrets.GROQ_API_KEY9 }}" ]; then sed -i '/^GROQ_API_KEY9=/d' .env; echo "GROQ_API_KEY9=${{ secrets.GROQ_API_KEY9}}" >> .env; fi
+          if [ -n "${{ secrets.GROQ_MODEL }}" ]; then sed -i '/^GROQ_MODEL=/d' .env; echo "GROQ_MODEL=${{ secrets.GROQ_MODEL}}" >> .env; fi
+
           sudo docker compose config >/dev/null
           sudo docker compose up --build -d
           sudo docker compose ps

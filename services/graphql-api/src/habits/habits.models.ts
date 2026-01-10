@@ -131,3 +131,60 @@ export class PlacementPoint {
   @Field(() => Int)
   rank!: number;
 }
+
+@ObjectType()
+export class TasteJudgeResult {
+  @Field()
+  ok!: boolean;
+
+  @Field()
+  verdictTitle!: string;
+
+  @Field()
+  roast!: string;
+
+  @Field()
+  summary!: string;
+
+  @Field(() => [String])
+  badges!: string[];
+
+  @Field(() => Int)
+  tasteScore!: number;
+
+  @Field(() => Int)
+  obscurityScore!: number;
+
+  @Field(() => Int)
+  chaosScore!: number;
+
+  @Field()
+  generatedAt!: string;
+}
+
+@ObjectType()
+export class TasteComparisonResult {
+  @Field(() => Int)
+  userPlayCount!: number;
+
+  @Field(() => Int)
+  libraryUserCount!: number;
+
+  @Field(() => Int)
+  obscurityScore!: number;
+
+  @Field(() => Int)
+  mainstreamScore!: number;
+
+  @Field(() => Int)
+  uniquenessScore!: number;
+
+  @Field(() => Int)
+  overlapScore!: number;
+
+  @Field(() => [ListeningStatsEntry])
+  rareArtists!: ListeningStatsEntry[];
+
+  @Field(() => [ListeningStatsEntry])
+  commonArtists!: ListeningStatsEntry[];
+}

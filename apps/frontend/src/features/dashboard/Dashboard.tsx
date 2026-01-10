@@ -4,6 +4,7 @@ import type { HabitSummaryEntry, RecommendResult, Song } from "../../App";
 import { formatSeconds, getSongCardSize, getWeightedSongLength } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
 import { SongMetadataModal } from "./SongMetadataModal";
+import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
 
 type DashboardProps = {
   loading: boolean;
@@ -78,6 +79,15 @@ export function Dashboard({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [selectedSong]);
+
+  const recommendationSentinelRef = useInfiniteScroll({
+    enabled: Boolean(onLoadMoreRecommendations),
+    loading: Boolean(loadingMoreRecommendations),
+    hasMore: Boolean(hasMoreRecommendations),
+    onLoadMore: () => {
+      onLoadMoreRecommendations?.();
+    }
+  });
 
   const periodLabels: Record<string, string> = {
     DAY: "Today",
@@ -189,16 +199,18 @@ export function Dashboard({
         <p>No song suggestions available.</p>
       )}
 
-      {onLoadMoreRecommendations && hasMoreRecommendations ? (
-        <div className="load-more-row">
-          <button
-            type="button"
-            onClick={onLoadMoreRecommendations}
-            disabled={loadingMoreRecommendations}
-          >
-            {loadingMoreRecommendations ? "Loading more..." : "Load more recommendations"}
-          </button>
-        </div>
+      <div
+        ref={recommendationSentinelRef}
+        className="infinite-scroll-sentinel"
+        aria-hidden="true"
+      />
+
+      {loadingMoreRecommendations ? (
+        <p className="infinite-scroll-status">Loading more recommendations...</p>
+      ) : null}
+
+      {!hasMoreRecommendations ? (
+        <p className="infinite-scroll-status">You reached the end of the recommendation wall.</p>
       ) : null}
 
       {selectedSong ? (

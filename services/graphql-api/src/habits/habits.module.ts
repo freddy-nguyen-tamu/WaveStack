@@ -6,9 +6,10 @@ import { DatabaseModule } from "../database/database.module";
 import { HabitsService } from "./habits.service";
 import { HabitsResolver } from "./habits.resolver";
 import { DrivePrivateExportService } from "./drive-private-export.service";
+import { GroqTasteService } from "./groq-taste.service";
 
 @Module({
   imports: [ConfigModule, DatabaseModule, MusicModule, AuthModule],
-  providers: [HabitsService, HabitsResolver, DrivePrivateExportService]
+  providers: [HabitsService, HabitsResolver, DrivePrivateExportService, GroqTasteService]
 })
 export class HabitsModule {}

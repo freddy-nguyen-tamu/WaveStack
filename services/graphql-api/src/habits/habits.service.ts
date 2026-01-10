@@ -8,9 +8,12 @@ import {
   ListeningStatsSnapshot,
   PlacementPoint,
   RecentlyPlayedEntry,
-  RecommendSongResult
+  RecommendSongResult,
+  TasteComparisonResult,
+  TasteJudgeResult
 } from "./habits.models";
 import { DrivePrivateExportService } from "./drive-private-export.service";
+import { GroqTasteService } from "./groq-taste.service";
 
 type QueryRows<T> = { rows: T[] } | T[];
 
@@ -53,7 +56,8 @@ export class HabitsService {
   constructor(
     private readonly database: DatabaseService,
     private readonly musicService: MusicService,
-    private readonly drivePrivateExport: DrivePrivateExportService
+    private readonly drivePrivateExport: DrivePrivateExportService,
+    private readonly groqTasteService: GroqTasteService
   ) {}
 
   async recordListen(
@@ -611,6 +615,265 @@ export class HabitsService {
       generatedAt: row.generated_at instanceof Date ? row.generated_at.toISOString() : String(row.generated_at),
       rank: Number(row.rank)
     }));
+  }
+
+  private statsPeriodWhere(period: string): string {
+    if (period === "ALL_TIME") return "";
+    const map: Record<string, string> = {
+      FOUR_WEEKS: "AND started_at >= now() - interval '28 days'",
+      SIX_MONTHS: "AND started_at >= now() - interval '182 days'",
+      TWELVE_MONTHS: "AND started_at >= now() - interval '365 days'",
+    };
+    return map[period] ?? "";
+  }
+
+  async judgeTaste(userId: string, period = "ALL_TIME"): Promise<TasteJudgeResult> {
+    const [topTracks, topArtists, topGenres, recent, comparison] = await Promise.all([
+      this.topTracks(userId, period as StatsPeriod, 25),
+      this.topArtists(userId, period as StatsPeriod, 25),
+      this.topGenres(userId, period as StatsPeriod, 25),
+      this.recentlyPlayedDetailed(userId, period as StatsPeriod, 30),
+      this.tasteComparison(userId, period)
+    ]);
+
+    if (!topTracks.length && !topArtists.length) {
+      return {
+        ok: false,
+        verdictTitle: "Not enough data",
+        roast: "I wanted to judge your taste, but your listening history is basically an empty chair.",
+        summary: "Play more songs while signed in, then come back for judgment.",
+        badges: ["Too mysterious"],
+        tasteScore: 0,
+        obscurityScore: 0,
+        chaosScore: 0,
+        generatedAt: new Date().toISOString()
+      };
+    }
+
+    const promptPayload = {
+      period,
+      topTracks: topTracks.map((entry) => ({
+        rank: entry.rank,
+        title: entry.label,
+        artist: entry.subtitle,
+        plays: entry.playCount
+      })),
+      topArtists: topArtists.map((entry) => ({
+        rank: entry.rank,
+        artist: entry.label,
+        plays: entry.playCount
+      })),
+      topGenres: topGenres.map((entry) => ({
+        rank: entry.rank,
+        genre: entry.label,
+        plays: entry.playCount
+      })),
+      recent: recent.slice(0, 15).map((entry) => ({
+        title: entry.title,
+        artist: entry.artistName
+      })),
+      comparison: {
+        obscurityScore: comparison.obscurityScore,
+        mainstreamScore: comparison.mainstreamScore,
+        uniquenessScore: comparison.uniquenessScore,
+        overlapScore: comparison.overlapScore
+      }
+    };
+
+    const response = await this.groqTasteService.chat(
+      [
+        {
+          role: "system",
+          content: [
+            "You are WaveStack's playful music taste judge.",
+            "Be funny, sharp, and specific, but do not be cruel.",
+            "Do not mention Spotify.",
+            "Do not mention Groq.",
+            "Do not include markdown fences.",
+            "Return only valid JSON with these keys:",
+            "verdictTitle, roast, summary, badges, tasteScore, obscurityScore, chaosScore.",
+            "badges must be an array of 3 to 6 short strings.",
+            "scores must be integers from 0 to 100."
+          ].join(" ")
+        },
+        {
+          role: "user",
+          content: `Judge this WaveStack listening profile:\n${JSON.stringify(promptPayload, null, 2)}`
+        }
+      ],
+      {
+        maxTokens: 900,
+        temperature: 0.85
+      }
+    );
+
+    const parsed = this.parseTasteJudgeJson(response, comparison);
+
+    return {
+      ...parsed,
+      ok: true,
+      generatedAt: new Date().toISOString()
+    };
+  }
+
+  async tasteComparison(userId: string, period = "ALL_TIME"): Promise<TasteComparisonResult> {
+    const periodWhere = this.statsPeriodWhere(period);
+
+    const userPlayCountResult = await this.database.query(
+      `SELECT COUNT(*)::int AS count
+       FROM app_listening_events e
+       WHERE e.user_id = $1 ${periodWhere}`,
+      [userId]
+    );
+
+    const libraryUserCountResult = await this.database.query(
+      `SELECT COUNT(DISTINCT user_id)::int AS count
+       FROM app_listening_events`
+    );
+
+    const rareArtistsResult = await this.database.query(
+      `WITH user_artists AS (
+         SELECT
+           lower(COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')) AS artist_key,
+           COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist') AS artist_name,
+           COUNT(*)::int AS user_plays,
+           COALESCE(SUM(e.duration_seconds), 0)::float8 AS total_duration_seconds
+         FROM app_listening_events e
+         WHERE e.user_id = $1 ${periodWhere}
+         GROUP BY lower(COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')), COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')
+       ),
+       global_artists AS (
+         SELECT
+           lower(COALESCE(NULLIF(artist_name, ''), 'Unknown Artist')) AS artist_key,
+           COUNT(DISTINCT user_id)::int AS listener_count,
+           COUNT(*)::int AS global_plays
+         FROM app_listening_events
+         GROUP BY lower(COALESCE(NULLIF(artist_name, ''), 'Unknown Artist'))
+       )
+       SELECT
+         ua.artist_key AS key,
+         ua.artist_name AS label,
+         ga.listener_count::text || ' listener(s) in WaveStack' AS subtitle,
+         ROW_NUMBER() OVER (ORDER BY ga.listener_count ASC, ua.user_plays DESC, ua.artist_name ASC)::int AS rank,
+         0 AS previous_rank,
+         0 AS rank_change,
+         ua.user_plays AS play_count,
+         ua.total_duration_seconds,
+         NULL::text AS song_id,
+         NULL::text AS thumbnail_url
+       FROM user_artists ua
+       INNER JOIN global_artists ga ON ga.artist_key = ua.artist_key
+       ORDER BY ga.listener_count ASC, ua.user_plays DESC, ua.artist_name ASC
+       LIMIT 10`,
+      [userId]
+    );
+
+    const commonArtistsResult = await this.database.query(
+      `WITH user_artists AS (
+         SELECT
+           lower(COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')) AS artist_key,
+           COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist') AS artist_name,
+           COUNT(*)::int AS user_plays,
+           COALESCE(SUM(e.duration_seconds), 0)::float8 AS total_duration_seconds
+         FROM app_listening_events e
+         WHERE e.user_id = $1 ${periodWhere}
+         GROUP BY lower(COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')), COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')
+       ),
+       global_artists AS (
+         SELECT
+           lower(COALESCE(NULLIF(artist_name, ''), 'Unknown Artist')) AS artist_key,
+           COUNT(DISTINCT user_id)::int AS listener_count,
+           COUNT(*)::int AS global_plays
+         FROM app_listening_events
+         GROUP BY lower(COALESCE(NULLIF(artist_name, ''), 'Unknown Artist'))
+       )
+       SELECT
+         ua.artist_key AS key,
+         ua.artist_name AS label,
+         ga.listener_count::text || ' listener(s) in WaveStack' AS subtitle,
+         ROW_NUMBER() OVER (ORDER BY ga.listener_count DESC, ua.user_plays DESC, ua.artist_name ASC)::int AS rank,
+         0 AS previous_rank,
+         0 AS rank_change,
+         ua.user_plays AS play_count,
+         ua.total_duration_seconds,
+         NULL::text AS song_id,
+         NULL::text AS thumbnail_url
+       FROM user_artists ua
+       INNER JOIN global_artists ga ON ga.artist_key = ua.artist_key
+       ORDER BY ga.listener_count DESC, ua.user_plays DESC, ua.artist_name ASC
+       LIMIT 10`,
+      [userId]
+    );
+
+    const userPlayCount = Number((this.rows(userPlayCountResult)[0] as { count?: number })?.count ?? 0);
+    const libraryUserCount = Number((this.rows(libraryUserCountResult)[0] as { count?: number })?.count ?? 0);
+
+    const rareArtists = this.mapStatsEntries(this.rows(rareArtistsResult) as StatsEntryRow[]);
+    const commonArtists = this.mapStatsEntries(this.rows(commonArtistsResult) as StatsEntryRow[]);
+
+    const rareWeight = rareArtists.reduce((sum, entry, index) => sum + Math.max(0, 10 - index) * entry.playCount, 0);
+    const commonWeight = commonArtists.reduce((sum, entry, index) => sum + Math.max(0, 10 - index) * entry.playCount, 0);
+    const totalWeight = Math.max(1, rareWeight + commonWeight);
+
+    const obscurityScore = Math.max(0, Math.min(100, Math.round((rareWeight / totalWeight) * 100)));
+    const mainstreamScore = 100 - obscurityScore;
+    const uniquenessScore = Math.max(0, Math.min(100, Math.round((rareArtists.length / Math.max(1, rareArtists.length + commonArtists.length)) * 100)));
+    const overlapScore = Math.max(0, Math.min(100, Math.round((commonArtists.length / Math.max(1, rareArtists.length + commonArtists.length)) * 100)));
+
+    return {
+      userPlayCount,
+      libraryUserCount,
+      obscurityScore,
+      mainstreamScore,
+      uniquenessScore,
+      overlapScore,
+      rareArtists,
+      commonArtists
+    };
+  }
+
+  private parseTasteJudgeJson(raw: string, comparison: TasteComparisonResult): Omit<TasteJudgeResult, "ok" | "generatedAt"> {
+    const fallback = {
+      verdictTitle: "Chaotic but committed",
+      roast: raw.slice(0, 900),
+      summary: "WaveStack could not parse a structured verdict, but the judge still had thoughts.",
+      badges: ["Unfiltered", "Algorithm confused", "Playlist gremlin"],
+      tasteScore: Math.max(0, Math.min(100, 100 - comparison.mainstreamScore + 30)),
+      obscurityScore: comparison.obscurityScore,
+      chaosScore: Math.max(0, Math.min(100, comparison.uniquenessScore + 20))
+    };
+
+    try {
+      const cleaned = raw
+        .replace(/^```json/i, "")
+        .replace(/^```/i, "")
+        .replace(/```$/i, "")
+        .trim();
+
+      const parsed = JSON.parse(cleaned) as Partial<typeof fallback>;
+
+      return {
+        verdictTitle: String(parsed.verdictTitle || fallback.verdictTitle),
+        roast: String(parsed.roast || fallback.roast),
+        summary: String(parsed.summary || fallback.summary),
+        badges: Array.isArray(parsed.badges) ? parsed.badges.map(String).slice(0, 6) : fallback.badges,
+        tasteScore: this.clampScore(parsed.tasteScore, fallback.tasteScore),
+        obscurityScore: this.clampScore(parsed.obscurityScore, comparison.obscurityScore),
+        chaosScore: this.clampScore(parsed.chaosScore, fallback.chaosScore)
+      };
+    } catch {
+      return fallback;
+    }
+  }
+
+  private clampScore(value: unknown, fallback: number): number {
+    const numberValue = Number(value);
+
+    if (!Number.isFinite(numberValue)) {
+      return fallback;
+    }
+
+    return Math.max(0, Math.min(100, Math.round(numberValue)));
   }
 
   private rows<T>(result: QueryRows<T>): T[] {

@@ -375,6 +375,58 @@ export const EXPORT_LISTENING_HABITS_MUTATION = gql`
   }
 `;
 
+export const LISTENING_STATS_ENTRY_FIELDS = gql`
+  fragment ListeningStatsEntryFields on ListeningStatsEntry {
+    key
+    label
+    subtitle
+    rank
+    previousRank
+    rankChange
+    playCount
+    totalDurationSeconds
+    songId
+    thumbnailUrl
+  }
+`;
+
+export const TASTE_COMPARISON_QUERY = gql`
+  ${LISTENING_STATS_ENTRY_FIELDS}
+
+  query TasteComparison($period: String) {
+    tasteComparison(period: $period) {
+      userPlayCount
+      libraryUserCount
+      obscurityScore
+      mainstreamScore
+      uniquenessScore
+      overlapScore
+      rareArtists {
+        ...ListeningStatsEntryFields
+      }
+      commonArtists {
+        ...ListeningStatsEntryFields
+      }
+    }
+  }
+`;
+
+export const JUDGE_TASTE_MUTATION = gql`
+  mutation JudgeTaste($period: String) {
+    judgeTaste(period: $period) {
+      ok
+      verdictTitle
+      roast
+      summary
+      badges
+      tasteScore
+      obscurityScore
+      chaosScore
+      generatedAt
+    }
+  }
+`;
+
 export const REPAIR_EMBEDDED_LYRICS_FOR_SONG_MUTATION = gql`
   mutation RepairEmbeddedLyricsForSong($songId: String!) {
     repairEmbeddedLyricsForSong(songId: $songId) {

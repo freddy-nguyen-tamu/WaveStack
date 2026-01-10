@@ -8,7 +8,9 @@ import {
   ListeningStatsSnapshot,
   PlacementPoint,
   RecentlyPlayedEntry,
-  RecommendSongResult
+  RecommendSongResult,
+  TasteComparisonResult,
+  TasteJudgeResult
 } from "./habits.models";
 
 type GqlContext = {
@@ -191,5 +193,52 @@ export class HabitsResolver {
     }
 
     return this.habitsService.exportToDrive(userId, period ?? "ALL");
+  }
+
+  @Query(() => TasteComparisonResult)
+  tasteComparison(
+    @Context() context: GqlContext,
+    @Args("period", { nullable: true }) period?: string
+  ): Promise<TasteComparisonResult> {
+    const userId = this.resolveUserId(context);
+
+    if (!userId) {
+      return Promise.resolve({
+        userPlayCount: 0,
+        libraryUserCount: 0,
+        obscurityScore: 0,
+        mainstreamScore: 0,
+        uniquenessScore: 0,
+        overlapScore: 0,
+        rareArtists: [],
+        commonArtists: []
+      });
+    }
+
+    return this.habitsService.tasteComparison(userId, period ?? "ALL_TIME");
+  }
+
+  @Mutation(() => TasteJudgeResult)
+  judgeTaste(
+    @Context() context: GqlContext,
+    @Args("period", { nullable: true }) period?: string
+  ): Promise<TasteJudgeResult> {
+    const userId = this.resolveUserId(context);
+
+    if (!userId) {
+      return Promise.resolve({
+        ok: false,
+        verdictTitle: "Sign in first",
+        roast: "I cannot judge a ghost. Sign in and play some music first.",
+        summary: "WaveStack needs logged-in listening events before judging taste.",
+        badges: ["Invisible listener"],
+        tasteScore: 0,
+        obscurityScore: 0,
+        chaosScore: 0,
+        generatedAt: new Date().toISOString()
+      });
+    }
+
+    return this.habitsService.judgeTaste(userId, period ?? "ALL_TIME");
   }
 }

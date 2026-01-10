@@ -1740,6 +1740,339 @@ body.modal-open {
   to { transform: rotate(360deg); }
 }
 
+/* ------------------------------------------------------------------ */
+/* WaveStack fun analytics                                             */
+/* ------------------------------------------------------------------ */
+
+.stats-visual-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 1rem;
+}
+
+.stats-pie-card,
+.taste-judge-card,
+.taste-comparison-card,
+.stats-receipt-controls {
+  display: grid;
+  gap: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 1.25rem;
+  padding: 1rem;
+  background:
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.14), transparent 16rem),
+    rgba(2, 6, 23, 0.58);
+}
+
+.stats-pie-card h3,
+.taste-judge-card h3,
+.taste-comparison-card h3,
+.stats-receipt-controls h3 {
+  margin: 0;
+}
+
+.stats-pie-card__body {
+  display: grid;
+  grid-template-columns: minmax(9rem, 13rem) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: center;
+}
+
+.stats-pie-card__chart {
+  display: grid;
+  width: min(13rem, 100%);
+  aspect-ratio: 1;
+  place-items: center;
+  border-radius: 999px;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+    0 24px 70px rgba(0, 0, 0, 0.32);
+}
+
+.stats-pie-card__chart span {
+  width: 42%;
+  aspect-ratio: 1;
+  border-radius: 999px;
+  background: #020617;
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.14);
+}
+
+.stats-pie-card__legend {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0;
+  list-style: none;
+}
+
+.stats-pie-card__legend li {
+  display: grid;
+  grid-template-columns: 0.85rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.stats-pie-card__legend li > span {
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 999px;
+}
+
+.stats-pie-card__legend strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-pie-card__legend small {
+  color: #a1a1aa;
+}
+
+.taste-judge-card__button {
+  justify-self: start;
+}
+
+.taste-terminal {
+  min-height: 8rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 1rem;
+  padding: 1rem;
+  background: rgba(248, 250, 252, 0.94);
+  color: #111827;
+  font-family: "Courier New", monospace;
+}
+
+.taste-terminal p {
+  margin: 0 0 0.45rem;
+}
+
+.taste-terminal__cursor {
+  display: inline-block;
+  width: 0.7rem;
+  height: 1rem;
+  background: #111827;
+  animation: blink 0.9s steps(2, start) infinite;
+}
+
+@keyframes blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+.taste-verdict {
+  display: grid;
+  gap: 0.75rem;
+  border-radius: 1rem;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.74);
+}
+
+.taste-verdict__title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.taste-verdict__title h4 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+.taste-verdict__roast {
+  margin: 0;
+  color: #fef3c7;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.taste-score-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: 0.7rem;
+}
+
+.taste-score-pill {
+  display: grid;
+  gap: 0.1rem;
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  border-radius: 0.9rem;
+  padding: 0.75rem;
+  background: rgba(37, 99, 235, 0.12);
+  text-align: center;
+}
+
+.taste-score-pill strong {
+  color: #bfdbfe;
+  font-size: 1.8rem;
+}
+
+.taste-score-pill span {
+  color: #cbd5e1;
+}
+
+.taste-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.taste-badges span {
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  border-radius: 999px;
+  padding: 0.35rem 0.65rem;
+  background: rgba(251, 191, 36, 0.12);
+  color: #fde68a;
+  font-weight: 800;
+}
+
+.taste-comparison-bars {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.taste-comparison-bar {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.taste-comparison-bar div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.taste-comparison-bar meter {
+  width: 100%;
+  height: 0.8rem;
+}
+
+.taste-comparison-lists {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 1rem;
+}
+
+.taste-comparison-lists h4 {
+  margin: 0 0 0.6rem;
+}
+
+.taste-comparison-lists ol {
+  display: grid;
+  gap: 0.45rem;
+  padding-left: 1.2rem;
+}
+
+.taste-comparison-lists li {
+  margin: 0;
+}
+
+.taste-comparison-lists span {
+  display: block;
+  color: #a1a1aa;
+  font-size: 0.85rem;
+}
+
+.stats-receipt {
+  display: grid;
+  justify-items: center;
+}
+
+.stats-receipt__paper {
+  width: min(100%, 32rem);
+  border-radius: 0.25rem;
+  padding: 2rem 1.4rem;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(226, 232, 240, 0.9)),
+    #f8fafc;
+  color: #111827;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.35);
+  font-family: "Courier New", monospace;
+}
+
+.stats-receipt--brat .stats-receipt__paper {
+  background: #a3ff12;
+  color: #111827;
+}
+
+.stats-receipt__paper h3 {
+  margin: 0;
+  text-align: center;
+  font-family: inherit;
+  font-size: 2rem;
+  letter-spacing: 0.03em;
+}
+
+.stats-receipt__paper p {
+  margin: 0.3rem 0;
+}
+
+.stats-receipt__rule {
+  border-top: 1px dashed currentColor;
+  margin: 0.8rem 0;
+  opacity: 0.6;
+}
+
+.stats-receipt__header,
+.stats-receipt__paper li {
+  display: grid;
+  grid-template-columns: 3rem minmax(0, 1fr) 4rem;
+  gap: 0.5rem;
+}
+
+.stats-receipt__paper ol {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0;
+  list-style: none;
+}
+
+.stats-receipt__paper li {
+  margin: 0;
+}
+
+.stats-receipt__paper li strong {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.infinite-scroll-sentinel {
+  width: 100%;
+  height: 2px;
+}
+
+.infinite-scroll-status {
+  margin: 0;
+  padding: 0.75rem;
+  color: #93c5fd;
+  text-align: center;
+}
+
+.stats-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.stats-tabs__button {
+  padding: 0.4rem 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 2rem;
+  background: rgba(30, 41, 59, 0.5);
+  color: #cbd5e1;
+  cursor: pointer;
+}
+
+.stats-tabs__button--active {
+  background: rgba(59, 130, 246, 0.25);
+  border-color: rgba(59, 130, 246, 0.45);
+  color: #bfdbfe;
+}
+
+.stats-loading {
+  padding: 0.75rem;
+  color: #93c5fd;
+}
+
 /* Mobile responsive for stats page */
 @media (max-width: 860px) {
   .ranking-list__item {
@@ -1767,5 +2100,14 @@ body.modal-open {
 
   .stats-page__save-row input {
     max-width: 100%;
+  }
+
+  .stats-pie-card__body {
+    grid-template-columns: 1fr;
+    justify-items: center;
+  }
+
+  .stats-receipt__paper {
+    padding: 1.4rem 0.9rem;
   }
 }

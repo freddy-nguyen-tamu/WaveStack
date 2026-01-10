@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@apollo/client";
+import { useInfiniteScroll } from "./hooks/useInfiniteScroll";
 import { Activity, Clock, Heart, Library, ListMusic, Search, TrendingUp, UserCircle } from "lucide-react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import {
@@ -133,6 +134,69 @@ function readPlaylists(): ClientPlaylist[] {
 
 function uniqueSongsById(songs: Song[]): Song[] {
   return Array.from(new Map(songs.map((song) => [song.id, song])).values());
+}
+
+function LibraryPage({
+  songs,
+  librarySongs,
+  libraryCursor,
+  playlists,
+  selectedPlaylistId,
+  favoriteIds,
+  onSelectedPlaylistChange,
+  onCreatePlaylist,
+  onAddToPlaylist,
+  onPlay,
+  onQueue,
+  onToggleFavorite,
+  onLoadMoreLibrary
+}: {
+  songs: Song[];
+  librarySongs: Song[];
+  libraryCursor: string | null;
+  playlists: ClientPlaylist[];
+  selectedPlaylistId: string;
+  favoriteIds: string[];
+  onSelectedPlaylistChange: (id: string) => void;
+  onCreatePlaylist: (name: string) => void;
+  onAddToPlaylist: (id: string, song: Song) => void;
+  onPlay: (song: Song) => void;
+  onQueue: (song: Song) => void;
+  onToggleFavorite: (song: Song) => void;
+  onLoadMoreLibrary: () => void;
+}) {
+  const sentinelRef = useInfiniteScroll({
+    enabled: Boolean(libraryCursor),
+    loading: false,
+    hasMore: Boolean(libraryCursor),
+    onLoadMore: () => { onLoadMoreLibrary(); }
+  });
+
+  return (
+    <section aria-label="Library">
+      <SearchPanel
+        pageKey="Library"
+        title="Library"
+        songs={librarySongs.length ? librarySongs : songs}
+        playlists={playlists}
+        selectedPlaylistId={selectedPlaylistId}
+        favoriteIds={favoriteIds}
+        emptyMessage="No songs found."
+        onSelectedPlaylistChange={onSelectedPlaylistChange}
+        onCreatePlaylist={onCreatePlaylist}
+        onAddToPlaylist={onAddToPlaylist}
+        onPlay={onPlay}
+        onQueue={onQueue}
+        onToggleFavorite={onToggleFavorite}
+      />
+
+      <div ref={sentinelRef} className="infinite-scroll-sentinel" aria-hidden="true" />
+
+      {!libraryCursor && librarySongs.length > 0 ? (
+        <p className="infinite-scroll-status">End of library.</p>
+      ) : null}
+    </section>
+  );
 }
 
 export function App() {
@@ -790,33 +854,21 @@ export function App() {
         />
         <Route
           path="/library"
-          element={
-            <section aria-label="Library">
-              <SearchPanel
-                pageKey="Library"
-                title="Library"
-                songs={librarySongs.length ? librarySongs : songs}
-                playlists={playlists}
-                selectedPlaylistId={selectedPlaylistId}
-                favoriteIds={favoriteIds}
-                emptyMessage="No songs found."
-                onSelectedPlaylistChange={setSelectedPlaylistId}
-                onCreatePlaylist={createPlaylist}
-                onAddToPlaylist={addToPlaylist}
-                onPlay={playSong}
-                onQueue={queueSong}
-                onToggleFavorite={toggleFavorite}
-              />
-
-              {libraryCursor ? (
-                <div className="load-more-row">
-                  <button type="button" onClick={() => void loadMoreLibrary()}>
-                    Load more songs
-                  </button>
-                </div>
-              ) : null}
-            </section>
-          }
+          element={<LibraryPage
+            songs={songs}
+            librarySongs={librarySongs}
+            libraryCursor={libraryCursor}
+            playlists={playlists}
+            selectedPlaylistId={selectedPlaylistId}
+            favoriteIds={favoriteIds}
+            onSelectedPlaylistChange={setSelectedPlaylistId}
+            onCreatePlaylist={createPlaylist}
+            onAddToPlaylist={addToPlaylist}
+            onPlay={playSong}
+            onQueue={queueSong}
+            onToggleFavorite={toggleFavorite}
+            onLoadMoreLibrary={() => void loadMoreLibrary()}
+          />}
         />
         <Route
           path="/search"

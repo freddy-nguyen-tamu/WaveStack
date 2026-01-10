@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useLazyQuery, useMutation } from "@apollo/client";
+import { useLazyQuery, useMutation, useQuery } from "@apollo/client";
 import {
   ArrowDown,
   ArrowUp,
@@ -19,6 +19,10 @@ import {
   TOP_GENRES_QUERY,
   TOP_TRACKS_QUERY
 } from "../../api";
+import { StatsPieChart } from "./components/StatsPieChart";
+import { StatsReceipt } from "./components/StatsReceipt";
+import { TasteComparisonPanel } from "./components/TasteComparisonPanel";
+import { TasteJudgePanel } from "./components/TasteJudgePanel";
 
 type StatsEntry = {
   key: string;
@@ -49,7 +53,21 @@ const PERIODS = [
   { key: "ALL_TIME", label: "All time" }
 ] as const;
 
+const PERIOD_LABEL_MAP: Record<string, string> = {
+  FOUR_WEEKS: "4 weeks",
+  SIX_MONTHS: "6 months",
+  TWELVE_MONTHS: "12 months",
+  ALL_TIME: "All time"
+};
+
 type Tab = "TRACKS" | "ARTISTS" | "GENRES" | "RECENT";
+
+const TAB_LABELS: Record<Tab, string> = {
+  TRACKS: "Top Tracks",
+  ARTISTS: "Top Artists",
+  GENRES: "Top Genres",
+  RECENT: "Recently Played"
+};
 
 type DriveExportPanelProps = {
   period: string;
@@ -91,6 +109,8 @@ function DriveExportPanel({ period }: DriveExportPanelProps) {
 export function StatsPage() {
   const [period, setPeriod] = useState<string>("FOUR_WEEKS");
   const [tab, setTab] = useState<Tab>("TRACKS");
+  const [receiptMode, setReceiptMode] = useState<"normal" | "brat">("normal");
+  const [receiptLength, setReceiptLength] = useState<10 | 50>(10);
 
   const [topTracksQuery, { data: tracksData, loading: tracksLoading }] = useLazyQuery(TOP_TRACKS_QUERY, { fetchPolicy: "cache-and-network" });
   const [topArtistsQuery, { data: artistsData, loading: artistsLoading }] = useLazyQuery(TOP_ARTISTS_QUERY, { fetchPolicy: "cache-and-network" });
@@ -110,6 +130,15 @@ export function StatsPage() {
       void recentQuery({ variables: { period, limit: 50 } });
     }
   }, [period, topTracksQuery, topArtistsQuery, topGenresQuery, recentQuery]);
+
+  const tabEntries = useMemo(() => {
+    switch (tab) {
+      case "TRACKS": return trackEntries;
+      case "ARTISTS": return artistEntries;
+      case "GENRES": return genreEntries;
+      default: return [];
+    }
+  }, [tab, trackEntries, artistEntries, genreEntries]);
 
   function RankChange({ entry }: { entry: StatsEntry }) {
     if (entry.rankChange === 0) {
@@ -262,6 +291,82 @@ export function StatsPage() {
           </>
         )}
       </section>
+
+      <div className="stats-visual-grid">
+        <StatsPieChart
+          title="Artist pie"
+          entries={(artistEntries ?? []).map((entry) => ({
+            label: entry.label,
+            value: entry.playCount
+          }))}
+        />
+
+        <StatsPieChart
+          title="Genre pie"
+          entries={(genreEntries ?? []).map((entry) => ({
+            label: entry.label,
+            value: entry.playCount
+          }))}
+        />
+      </div>
+
+      <TasteComparisonPanel period={period} />
+
+      <TasteJudgePanel period={period} />
+
+      <section className="stats-receipt-controls">
+        <div>
+          <p className="eyebrow">Receipt mode</p>
+          <h3>Customize receipt</h3>
+        </div>
+
+        <div className="stats-tabs">
+          <button
+            type="button"
+            className={receiptMode === "normal" ? "stats-tabs__button stats-tabs__button--active" : "stats-tabs__button"}
+            onClick={() => setReceiptMode("normal")}
+          >
+            Normal
+          </button>
+          <button
+            type="button"
+            className={receiptMode === "brat" ? "stats-tabs__button stats-tabs__button--active" : "stats-tabs__button"}
+            onClick={() => setReceiptMode("brat")}
+          >
+            Brat Edition
+          </button>
+        </div>
+
+        <div className="stats-tabs">
+          <button
+            type="button"
+            className={receiptLength === 10 ? "stats-tabs__button stats-tabs__button--active" : "stats-tabs__button"}
+            onClick={() => setReceiptLength(10)}
+          >
+            Top 10
+          </button>
+          <button
+            type="button"
+            className={receiptLength === 50 ? "stats-tabs__button stats-tabs__button--active" : "stats-tabs__button"}
+            onClick={() => setReceiptLength(50)}
+          >
+            Top 50
+          </button>
+        </div>
+      </section>
+
+      <StatsReceipt
+        title={TAB_LABELS[tab]}
+        periodLabel={PERIOD_LABEL_MAP[period] ?? period}
+        entries={tabEntries.map((entry) => ({
+          label: entry.label,
+          subtitle: entry.subtitle,
+          playCount: entry.playCount,
+          totalDurationSeconds: entry.totalDurationSeconds
+        }))}
+        mode={receiptMode}
+        length={receiptLength}
+      />
 
       <DriveExportPanel period={period} />
 
