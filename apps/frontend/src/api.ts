@@ -215,12 +215,17 @@ export const RECORD_LISTEN_MUTATION = gql`
 export const RECOMMENDED_SONGS_QUERY = gql`
   ${SONG_CARD_FIELDS}
 
-  query RecommendedSongs($limit: Int, $offset: Int, $favoriteSongIds: [String!], $recentSongIds: [String!]) {
-    recommendedSongs(limit: $limit, offset: $offset, favoriteSongIds: $favoriteSongIds, recentSongIds: $recentSongIds) {
-      song {
-        ...SongCardFields
+  query RecommendedSongs($limit: Int, $offset: Int, $favoriteSongIds: [String!], $recentSongIds: [String!], $excludedSongIds: [String!]) {
+    recommendedSongs(limit: $limit, offset: $offset, favoriteSongIds: $favoriteSongIds, recentSongIds: $recentSongIds, excludedSongIds: $excludedSongIds) {
+      nodes {
+        song {
+          ...SongCardFields
+        }
+        reason
       }
-      reason
+      totalCount
+      hasNextPage
+      nextOffset
     }
   }
 `;

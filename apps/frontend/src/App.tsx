@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "@apollo/client";
+import { useApolloClient, useMutation, useQuery } from "@apollo/client";
 import { useInfiniteScroll } from "./hooks/useInfiniteScroll";
 import { Activity, Clock, Heart, Library, ListMusic, Search, TrendingUp, UserCircle } from "lucide-react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
@@ -51,9 +51,28 @@ export type AuthUser = {
   avatarUrl?: string | null;
 };
 
+export type RepeatMode = "none" | "all" | "one";
+
 export type RecommendResult = {
   song: Song;
   reason: string;
+};
+
+type RecommendedSongsPageData = {
+  recommendedSongs: {
+    nodes: RecommendResult[];
+    totalCount: number;
+    hasNextPage: boolean;
+    nextOffset: number;
+  };
+};
+
+type RecommendedSongsPageVariables = {
+  limit?: number;
+  offset?: number;
+  favoriteSongIds?: string[];
+  recentSongIds?: string[];
+  excludedSongIds?: string[];
 };
 
 export type HabitSummaryEntry = {
@@ -224,14 +243,37 @@ export function App() {
     return window.localStorage.getItem("wavestack:auth-token");
   });
 
+  const RECOMMENDATION_PAGE_SIZE = 24;
+
   const [recommendedData, setRecommendedData] = useState<RecommendResult[] | null>(null);
   const [habitSummaries, setHabitSummaries] = useState<Record<string, HabitSummaryEntry[]>>({});
   const [recordListen] = useMutation(RECORD_LISTEN_MUTATION);
   const lastListenRef = useRef("");
   const hasToken = Boolean(authToken);
+
+  const [shuffleEnabled, setShuffleEnabled] = useState(false);
+  const [repeatMode, setRepeatMode] = useState<RepeatMode>("none");
+  const [playHistory, setPlayHistory] = useState<Song[]>([]);
+  const [dismissedRecommendationIds, setDismissedRecommendationIds] = useState<string[]>([]);
   const [recommendationOffset, setRecommendationOffset] = useState(0);
-  const [loadingMoreRecommendations, setLoadingMoreRecommendations] = useState(false);
   const [hasMoreRecommendations, setHasMoreRecommendations] = useState(true);
+  const [loadingMoreRecommendations, setLoadingMoreRecommendations] = useState(false);
+  const apolloClient = useApolloClient();
+
+  const dismissedRecommendationSet = useMemo(
+    () => new Set(dismissedRecommendationIds),
+    [dismissedRecommendationIds]
+  );
+
+  const visibleRecommendations = useMemo(
+    () => recommendedData ? recommendedData.filter((item) => !dismissedRecommendationSet.has(item.song.id)) : [],
+    [dismissedRecommendationSet, recommendedData]
+  );
+
+  const recommendationSongs = useMemo(
+    () => visibleRecommendations.map((item) => item.song),
+    [visibleRecommendations]
+  );
 
   const [libraryCursor, setLibraryCursor] = useState<string | null>(null);
   const [librarySongs, setLibrarySongs] = useState<Song[]>([]);
@@ -381,7 +423,174 @@ export function App() {
     setRecentSongIds((items) => [song.id, ...items.filter((id) => id !== song.id)].slice(0, 50));
   }
 
+  function rememberPlayedSong(song: Song) {
+    setPlayHistory((items) => {
+      const withoutDuplicate = items.filter((item) => item.id !== song.id);
+      return [song, ...withoutDuplicate].slice(0, 100);
+    });
+  }
+
+  function dismissRecommendation(songId: string) {
+    setDismissedRecommendationIds((ids) => (ids.includes(songId) ? ids : [...ids, songId]));
+    setRecommendedData((items) => items ? items.filter((item) => item.song.id !== songId) : null);
+  }
+
+  function pickFromSongs(songsToPickFrom: Song[]): Song | null {
+    if (!songsToPickFrom.length) {
+      return null;
+    }
+
+    if (!shuffleEnabled) {
+      return songsToPickFrom[0];
+    }
+
+    return songsToPickFrom[Math.floor(Math.random() * songsToPickFrom.length)];
+  }
+
+  function consumeQueueNext(): Song | null {
+    if (!queue.length) {
+      return null;
+    }
+
+    const nextSong = pickFromSongs(queue);
+
+    if (!nextSong) {
+      return null;
+    }
+
+    setQueue((items) => items.filter((item) => item.id !== nextSong.id));
+    return nextSong;
+  }
+
+  function consumeRecommendationNext(): Song | null {
+    const nextSong = pickFromSongs(recommendationSongs);
+
+    if (!nextSong) {
+      return null;
+    }
+
+    dismissRecommendation(nextSong.id);
+    return nextSong;
+  }
+
+  function fallbackLibraryNext(): Song | null {
+    const candidates = songs.filter((song) => song.id !== activeSong?.id);
+
+    if (!candidates.length) {
+      return null;
+    }
+
+    return pickFromSongs(candidates);
+  }
+
+  function startSong(song: Song, options: { rememberCurrent?: boolean } = {}) {
+    if (activeSong && options.rememberCurrent !== false) {
+      rememberPlayedSong(activeSong);
+    }
+
+    setActiveSong(song);
+    setPlaySignal((value) => value + 1);
+  }
+
+  async function ensureMoreRecommendationsIfNeeded() {
+    if (loadingMoreRecommendations || !hasMoreRecommendations) {
+      return;
+    }
+
+    await loadMoreRecommendations();
+  }
+
+  async function playNextFromPolicy(reason: "ended" | "manual") {
+    if (!activeSong) {
+      const firstRecommendation = consumeRecommendationNext();
+      const firstFallback = firstRecommendation ?? fallbackLibraryNext();
+
+      if (firstFallback) {
+        startSong(firstFallback, { rememberCurrent: false });
+      }
+
+      return;
+    }
+
+    if (reason === "ended") {
+      dismissRecommendation(activeSong.id);
+    }
+
+    if (repeatMode === "one" && reason === "ended") {
+      setPlaySignal((value) => value + 1);
+      return;
+    }
+
+    const queuedNext = consumeQueueNext();
+
+    if (queuedNext) {
+      startSong(queuedNext);
+      return;
+    }
+
+    let recommendationNext = consumeRecommendationNext();
+
+    if (!recommendationNext && hasMoreRecommendations) {
+      await ensureMoreRecommendationsIfNeeded();
+      recommendationNext = consumeRecommendationNext();
+    }
+
+    if (recommendationNext) {
+      startSong(recommendationNext);
+      return;
+    }
+
+    if (repeatMode === "all") {
+      const fromHistory = playHistory.length ? pickFromSongs([...playHistory].reverse()) : null;
+      const fromLibrary = fromHistory ?? fallbackLibraryNext();
+
+      if (fromLibrary) {
+        startSong(fromLibrary);
+        return;
+      }
+    }
+
+    const fallbackNext = fallbackLibraryNext();
+
+    if (fallbackNext) {
+      startSong(fallbackNext);
+    }
+  }
+
+  function playPreviousFromHistory() {
+    const previous = playHistory[0];
+
+    if (!previous) {
+      return;
+    }
+
+    setPlayHistory((items) => items.slice(1));
+
+    if (activeSong) {
+      setQueue((items) => [activeSong, ...items.filter((item) => item.id !== activeSong.id)]);
+    }
+
+    setActiveSong(previous);
+    setPlaySignal((value) => value + 1);
+  }
+
+  function toggleShuffle() {
+    setShuffleEnabled((value) => !value);
+  }
+
+  function cycleRepeatMode() {
+    setRepeatMode((value) => {
+      if (value === "none") return "all";
+      if (value === "all") return "one";
+      return "none";
+    });
+  }
+
   function playSong(song: Song) {
+    if (activeSong?.id !== song.id && activeSong) {
+      rememberPlayedSong(activeSong);
+    }
+
     setActiveSong(song);
     rememberRecent(song);
     setPlaySignal((value) => value + 1);
@@ -389,12 +598,15 @@ export function App() {
   }
 
   function queueSong(song: Song) {
-    if (queue.some((item) => item.id === song.id)) {
-      showNotice(`${formatSongDisplayName(song)} is already in the queue.`);
-      return;
-    }
+    setQueue((items) => {
+      if (items.some((item) => item.id === song.id) || activeSong?.id === song.id) {
+        showNotice(`${formatSongDisplayName(song)} is already in the queue.`);
+        return items;
+      }
 
-    setQueue((items) => [...items, song]);
+      return [...items, song];
+    });
+
     showNotice(`Queued: ${formatSongDisplayName(song)}`);
   }
 
@@ -549,38 +761,24 @@ export function App() {
       return;
     }
 
+    setRecommendationOffset(0);
+    setHasMoreRecommendations(true);
+    setRecommendedData([]);
+    void loadInitialRecommendations();
+
     const timer = setTimeout(async () => {
-      try {
-        const response = await fetch(import.meta.env.VITE_GRAPHQL_URL ?? "http://localhost:3000/graphql", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${getAuthToken()}`
-          },
-          body: JSON.stringify({
-            query: RECOMMENDED_SONGS_QUERY.loc?.source?.body ?? "",
-            variables: {
-              limit: 24,
-              favoriteSongIds: favoriteIds,
-              recentSongIds
-            }
-          })
-        });
+      const periods = ["DAY", "WEEK", "MONTH", "YEAR"] as const;
 
-        const json = await response.json() as { data?: { recommendedSongs?: RecommendResult[] } };
+      for (const period of periods) {
+        try {
+          const token = getAuthToken();
+          if (!token) return;
 
-        if (json.data?.recommendedSongs) {
-          setRecommendedData(json.data.recommendedSongs);
-        }
-
-        const periods = ["DAY", "WEEK", "MONTH", "YEAR"] as const;
-
-        for (const period of periods) {
-          const summaryResponse = await fetch(import.meta.env.VITE_GRAPHQL_URL ?? "http://localhost:3000/graphql", {
+          const response = await fetch(import.meta.env.VITE_GRAPHQL_URL ?? "http://localhost:3000/graphql", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              Authorization: `Bearer ${getAuthToken()}`
+              Authorization: `Bearer ${token}`
             },
             body: JSON.stringify({
               query: LISTENING_HABIT_SUMMARY_QUERY.loc?.source?.body ?? "",
@@ -588,7 +786,7 @@ export function App() {
             })
           });
 
-          const summaryJson = await summaryResponse.json() as { data?: { listeningHabitSummary?: HabitSummaryEntry[] } };
+          const summaryJson = await response.json() as { data?: { listeningHabitSummary?: HabitSummaryEntry[] } };
 
           const summaryPeriodData = summaryJson.data?.listeningHabitSummary;
           if (summaryPeriodData) {
@@ -601,14 +799,14 @@ export function App() {
               return next;
             });
           }
+        } catch {
+          // silently fail — non-critical data
         }
-      } catch {
-        // silently fail — non-critical data
       }
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [authToken, favoriteIds, recentSongIds]);
+  }, [authToken, favoriteIds.join("|"), recentSongIds.join("|")]);
 
   useEffect(() => {
     if (!authUser || !currentSong) return;
@@ -633,83 +831,75 @@ export function App() {
     return () => clearTimeout(timer);
   }, [authUser, currentSong, recordListen]);
 
-  async function loadMoreRecommendations() {
-    const token = getAuthToken();
-    if (!token || loadingMoreRecommendations) return;
-
-    setLoadingMoreRecommendations(true);
-    const nextOffset = recommendationOffset + 24;
-
-    try {
-      const response = await fetch(import.meta.env.VITE_GRAPHQL_URL ?? "http://localhost:3000/graphql", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          query: RECOMMENDED_SONGS_QUERY.loc?.source?.body ?? "",
-          variables: {
-            limit: 24,
-            offset: nextOffset,
-            favoriteSongIds: favoriteIds,
-            recentSongIds
-          }
-        })
-      });
-
-      const json = await response.json() as { data?: { recommendedSongs?: RecommendResult[] } };
-      const newItems = json.data?.recommendedSongs;
-
-      if (newItems && newItems.length > 0) {
-        setRecommendedData((prev) => {
-          const existing = prev ?? [];
-          const existingIds = new Set(existing.map((r) => r.song.id));
-          const deduped = newItems.filter((r) => !existingIds.has(r.song.id));
-          return [...existing, ...deduped];
-        });
-        setRecommendationOffset(nextOffset);
-        setHasMoreRecommendations(newItems.length >= 24);
-      } else {
-        setHasMoreRecommendations(false);
+  async function fetchRecommendedPage(offset: number): Promise<{
+    nodes: RecommendResult[];
+    hasNextPage: boolean;
+    nextOffset: number;
+  }> {
+    const result = await apolloClient.query<RecommendedSongsPageData, RecommendedSongsPageVariables>({
+      query: RECOMMENDED_SONGS_QUERY,
+      fetchPolicy: "network-only",
+      variables: {
+        limit: RECOMMENDATION_PAGE_SIZE,
+        offset,
+        favoriteSongIds: favoriteIds,
+        recentSongIds,
+        excludedSongIds: dismissedRecommendationIds
       }
+    });
+
+    return {
+      nodes: result.data.recommendedSongs.nodes ?? [],
+      hasNextPage: result.data.recommendedSongs.hasNextPage,
+      nextOffset: result.data.recommendedSongs.nextOffset
+    };
+  }
+
+  async function loadInitialRecommendations() {
+    try {
+      const page = await fetchRecommendedPage(0);
+      setRecommendedData(page.nodes);
+      setRecommendationOffset(page.nextOffset);
+      setHasMoreRecommendations(page.hasNextPage);
     } catch {
+      setRecommendedData([]);
+      setRecommendationOffset(0);
       setHasMoreRecommendations(false);
-    } finally {
-      setLoadingMoreRecommendations(false);
     }
   }
 
-  async function refetchRecommended() {
-    const token = getAuthToken();
-    if (!token) return;
+  async function loadMoreRecommendations() {
+    if (loadingMoreRecommendations || !hasMoreRecommendations) {
+      return;
+    }
+
+    setLoadingMoreRecommendations(true);
 
     try {
-      const response = await fetch(import.meta.env.VITE_GRAPHQL_URL ?? "http://localhost:3000/graphql", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          query: RECOMMENDED_SONGS_QUERY.loc?.source?.body ?? "",
-          variables: {
-            limit: 24,
-            offset: 0,
-            favoriteSongIds: favoriteIds,
-            recentSongIds
+      const page = await fetchRecommendedPage(recommendationOffset);
+
+      setRecommendedData((current) => {
+        const map = new Map<string, RecommendResult>();
+
+        for (const item of current ?? []) {
+          if (!dismissedRecommendationSet.has(item.song.id)) {
+            map.set(item.song.id, item);
           }
-        })
+        }
+
+        for (const item of page.nodes) {
+          if (!dismissedRecommendationSet.has(item.song.id)) {
+            map.set(item.song.id, item);
+          }
+        }
+
+        return Array.from(map.values());
       });
 
-      const json = await response.json() as { data?: { recommendedSongs?: RecommendResult[] } };
-      if (json.data?.recommendedSongs) {
-        setRecommendedData(json.data.recommendedSongs);
-        setRecommendationOffset(0);
-        setHasMoreRecommendations(json.data.recommendedSongs.length >= 24);
-      }
-    } catch {
-      // silently fail
+      setRecommendationOffset(page.nextOffset);
+      setHasMoreRecommendations(page.hasNextPage);
+    } finally {
+      setLoadingMoreRecommendations(false);
     }
   }
 
@@ -819,14 +1009,18 @@ export function App() {
           queue={queue}
           playSignal={playSignal}
           isFavorite={favoriteIds.includes(currentSong.id)}
+          shuffleEnabled={shuffleEnabled}
+          repeatMode={repeatMode}
+          canGoPrevious={playHistory.length > 0}
           onToggleFavorite={() => toggleFavorite(currentSong)}
+          onToggleShuffle={toggleShuffle}
+          onCycleRepeatMode={cycleRepeatMode}
           onQueueChange={setQueue}
-          onActiveSongChange={(song) => {
-            setActiveSong(song);
-            rememberRecent(song);
-            showNotice(`Selected: ${formatSongDisplayName(song)}`);
-          }}
+          onActiveSongChange={(song) => startSong(song)}
           onOpenDetails={setDetailsSong}
+          onNext={() => void playNextFromPolicy("manual")}
+          onPrevious={playPreviousFromHistory}
+          onEnded={() => void playNextFromPolicy("ended")}
         />
       </section>
 
@@ -841,7 +1035,7 @@ export function App() {
                 songs={songs}
                 favorites={favoriteSongs}
                 recentlyPlayed={recentSongs}
-                recommendedData={recommendedData}
+                recommendations={visibleRecommendations}
                 habitSummaries={habitSummaries}
                 onPlay={playSong}
                 userName={authUser?.displayName}

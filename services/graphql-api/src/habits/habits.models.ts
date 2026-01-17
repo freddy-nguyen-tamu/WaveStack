@@ -2,6 +2,21 @@ import { Field, Float, Int, ObjectType } from "@nestjs/graphql";
 import { Song } from "../music/music.models";
 
 @ObjectType()
+export class RecommendedSongsPage {
+  @Field(() => [RecommendSongResult])
+  nodes!: RecommendSongResult[];
+
+  @Field(() => Int)
+  totalCount!: number;
+
+  @Field()
+  hasNextPage!: boolean;
+
+  @Field(() => Int)
+  nextOffset!: number;
+}
+
+@ObjectType()
 export class RecommendSongResult {
   @Field(() => Song)
   song!: Song;

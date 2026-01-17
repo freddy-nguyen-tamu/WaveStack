@@ -5,11 +5,14 @@ import {
   Pause,
   Play,
   PlusCircle,
+  Repeat,
+  Repeat1,
+  Shuffle,
   SkipBack,
   SkipForward,
   Volume2
 } from "lucide-react";
-import type { Song } from "../../App";
+import type { RepeatMode, Song } from "../../App";
 import { formatSeconds, formatSongDisplayName } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
 
@@ -18,10 +21,18 @@ type PlayerProps = {
   queue: Song[];
   playSignal: number;
   isFavorite: boolean;
+  shuffleEnabled: boolean;
+  repeatMode: RepeatMode;
+  canGoPrevious: boolean;
   onToggleFavorite: () => void;
+  onToggleShuffle: () => void;
+  onCycleRepeatMode: () => void;
   onQueueChange: (songs: Song[]) => void;
   onActiveSongChange: (song: Song) => void;
   onOpenDetails: (song: Song) => void;
+  onNext: () => void;
+  onPrevious: () => void;
+  onEnded: () => void;
 };
 
 export function Player({
@@ -29,10 +40,18 @@ export function Player({
   queue,
   playSignal,
   isFavorite,
+  shuffleEnabled,
+  repeatMode,
+  canGoPrevious,
   onToggleFavorite,
+  onToggleShuffle,
+  onCycleRepeatMode,
   onQueueChange,
   onActiveSongChange,
-  onOpenDetails
+  onOpenDetails,
+  onNext,
+  onPrevious,
+  onEnded
 }: PlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
@@ -49,6 +68,15 @@ export function Player({
   const displayName = formatSongDisplayName(activeSong);
   const safeDuration = duration || activeSong.durationSeconds || 0;
   const progressPercent = safeDuration > 0 ? Math.min(100, (currentTime / safeDuration) * 100) : 0;
+
+  const repeatLabel =
+    repeatMode === "one"
+      ? "Repeat one"
+      : repeatMode === "all"
+        ? "Repeat list"
+        : "No repeat";
+
+  const RepeatIcon = repeatMode === "one" ? Repeat1 : Repeat;
 
   useEffect(() => {
     if (!audioRef.current) return;
@@ -174,49 +202,12 @@ export function Player({
     await playCurrent();
   }
 
-  function findCurrentQueueIndex() {
-    return queue.findIndex((song) => song.id === activeSong.id);
-  }
-
   function skip() {
-    if (!queue.length) {
-      setMessage("Queue is empty. Add songs before skipping.");
-      return;
-    }
-
-    if (queue.length === 1) {
-      setMessage("Only one song is in the queue.");
-      return;
-    }
-
-    const currentIndex = findCurrentQueueIndex();
-    const nextSong = queue[currentIndex + 1] ?? queue[0];
-
-    setHasPlaybackHistory(true);
-    setPendingAutoplay(isPlaying);
-    onActiveSongChange(nextSong);
-    onQueueChange(queue);
-    setMessage(`Skipped to: ${formatSongDisplayName(nextSong)}`);
+    onNext();
   }
 
   function previous() {
-    if (!queue.length) {
-      setMessage("Queue is empty.");
-      return;
-    }
-
-    if (queue.length === 1) {
-      setMessage("Only one song is in the queue.");
-      return;
-    }
-
-    const currentIndex = findCurrentQueueIndex();
-    const previousSong = currentIndex <= 0 ? queue[queue.length - 1] : queue[currentIndex - 1];
-
-    setHasPlaybackHistory(true);
-    setPendingAutoplay(isPlaying);
-    onActiveSongChange(previousSong);
-    setMessage(`Returned to: ${formatSongDisplayName(previousSong)}`);
+    onPrevious();
   }
 
   function favorite() {
@@ -269,7 +260,7 @@ export function Player({
           }}
           onEnded={() => {
             setIsPlaying(false);
-            skip();
+            onEnded();
           }}
         />
 
@@ -282,12 +273,20 @@ export function Player({
             {isPlaying ? " Pause" : " Play"}
           </button>
 
-          <button type="button" onClick={previous} aria-label="Previous song" disabled={queue.length <= 1}>
+          <button type="button" onClick={previous} aria-label="Previous song" disabled={!canGoPrevious}>
             <SkipBack aria-hidden="true" /> Previous
           </button>
 
-          <button type="button" onClick={skip} aria-label="Skip song" disabled={queue.length <= 1}>
-            <SkipForward aria-hidden="true" /> Skip
+          <button type="button" onClick={skip} aria-label="Next song">
+            <SkipForward aria-hidden="true" /> Next
+          </button>
+
+          <button type="button" onClick={onToggleShuffle} aria-pressed={shuffleEnabled} aria-label="Toggle shuffle">
+            <Shuffle aria-hidden="true" /> Shuffle
+          </button>
+
+          <button type="button" onClick={onCycleRepeatMode} aria-pressed={repeatMode !== "none"} aria-label={repeatLabel}>
+            <RepeatIcon aria-hidden="true" /> {repeatLabel}
           </button>
 
           <button type="button" onClick={favorite} aria-pressed={isFavorite}>
@@ -356,16 +355,37 @@ export function Player({
 
             <div className="mini-player__center">
               <div className="mini-player__controls">
-                <button type="button" onClick={previous} aria-label="Previous song" disabled={queue.length <= 1}>
+                <button
+                  type="button"
+                  aria-label="Toggle shuffle"
+                  aria-pressed={shuffleEnabled}
+                  onClick={onToggleShuffle}
+                  className={shuffleEnabled ? "mini-player__mode-button mini-player__mode-button--active" : "mini-player__mode-button"}
+                >
+                  <Shuffle aria-hidden="true" />
+                </button>
+
+                <button type="button" aria-label="Previous song" onClick={previous} disabled={!canGoPrevious}>
                   <SkipBack aria-hidden="true" />
                 </button>
 
-                <button type="button" className="mini-player__play" onClick={togglePlay} aria-label={isPlaying ? "Pause" : "Play"}>
+                <button type="button" className="mini-player__play" aria-label={isPlaying ? "Pause" : "Play"} onClick={togglePlay}>
                   {isPlaying ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
                 </button>
 
-                <button type="button" onClick={skip} aria-label="Next song" disabled={queue.length <= 1}>
+                <button type="button" aria-label="Next song" onClick={skip}>
                   <SkipForward aria-hidden="true" />
+                </button>
+
+                <button
+                  type="button"
+                  aria-label={repeatLabel}
+                  aria-pressed={repeatMode !== "none"}
+                  onClick={onCycleRepeatMode}
+                  className={repeatMode !== "none" ? "mini-player__mode-button mini-player__mode-button--active" : "mini-player__mode-button"}
+                  title={repeatLabel}
+                >
+                  <RepeatIcon aria-hidden="true" />
                 </button>
               </div>
 

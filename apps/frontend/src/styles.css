@@ -2073,6 +2073,80 @@ body.modal-open {
   color: #93c5fd;
 }
 
+/* ------------------------------------------------------------------ */
+/* Playback modes: shuffle and repeat                                 */
+/* ------------------------------------------------------------------ */
+
+.player-actions button[aria-pressed="true"],
+.mini-player__mode-button--active {
+  border-color: rgba(96, 165, 250, 0.95) !important;
+  background: rgba(37, 99, 235, 0.34) !important;
+  color: #bfdbfe !important;
+}
+
+.mini-player__mode-button {
+  width: 2.2rem;
+  height: 2.2rem;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #e5e7eb;
+}
+
+.mini-player__mode-button:hover:not(:disabled) {
+  transform: scale(1.08);
+  background: transparent;
+  color: #fff;
+}
+
+.mini-player__mode-button[aria-pressed="true"] {
+  border-radius: 999px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Stats page visual-first layout                                      */
+/* ------------------------------------------------------------------ */
+
+.stats-page__controls {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.stats-page__visuals {
+  display: grid;
+  gap: 1rem;
+}
+
+.stats-page__snapshots {
+  order: 1;
+}
+
+.stats-page__content--details {
+  margin-top: 2rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+  padding-top: 1rem;
+}
+
+.stats-page__content--details .ranking-list {
+  max-height: none;
+}
+
+.stats-page__content--details h3 {
+  margin-top: 0;
+}
+
+.stats-page__header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.stats-page__header-row h3 {
+  margin: 0;
+}
+
 /* Mobile responsive for stats page */
 @media (max-width: 860px) {
   .ranking-list__item {

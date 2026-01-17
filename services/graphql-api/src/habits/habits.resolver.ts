@@ -9,6 +9,7 @@ import {
   PlacementPoint,
   RecentlyPlayedEntry,
   RecommendSongResult,
+  RecommendedSongsPage,
   TasteComparisonResult,
   TasteJudgeResult
 } from "./habits.models";
@@ -43,20 +44,23 @@ export class HabitsResolver {
     }
   }
 
-  @Query(() => [RecommendSongResult])
+  @Query(() => RecommendedSongsPage)
   async recommendedSongs(
     @Context() context: GqlContext,
     @Args("limit", { type: () => Int, nullable: true }) limit?: number,
     @Args("offset", { type: () => Int, nullable: true }) offset?: number,
     @Args("favoriteSongIds", { type: () => [String], nullable: true }) favoriteSongIds?: string[],
-    @Args("recentSongIds", { type: () => [String], nullable: true }) recentSongIds?: string[]
-  ): Promise<RecommendSongResult[]> {
+    @Args("recentSongIds", { type: () => [String], nullable: true }) recentSongIds?: string[],
+    @Args("excludedSongIds", { type: () => [String], nullable: true }) excludedSongIds?: string[]
+  ): Promise<RecommendedSongsPage> {
     const userId = this.resolveUserId(context);
 
-    return this.habitsService.recommendSongs(userId, limit ?? 24, {
+    return this.habitsService.recommendSongsPage(userId, {
+      limit: limit ?? 24,
+      offset: offset ?? 0,
       favoriteSongIds: favoriteSongIds ?? [],
       recentSongIds: recentSongIds ?? [],
-      offset: offset ?? 0
+      excludedSongIds: excludedSongIds ?? []
     });
   }
 

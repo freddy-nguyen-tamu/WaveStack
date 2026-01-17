@@ -11,7 +11,7 @@ type DashboardProps = {
   songs: Song[];
   favorites: Song[];
   recentlyPlayed: Song[];
-  recommendedData: RecommendResult[] | null;
+  recommendations?: RecommendResult[];
   habitSummaries: Record<string, HabitSummaryEntry[]>;
   onPlay: (song: Song) => void;
   userName?: string;
@@ -25,7 +25,7 @@ export function Dashboard({
   songs,
   favorites,
   recentlyPlayed,
-  recommendedData,
+  recommendations = [],
   habitSummaries,
   onPlay,
   userName,
@@ -38,14 +38,12 @@ export function Dashboard({
   const reasonBySongId = useMemo(() => {
     const map = new Map<string, string>();
 
-    if (recommendedData) {
-      for (const item of recommendedData) {
-        map.set(item.song.id, item.reason);
-      }
+    for (const item of recommendations) {
+      map.set(item.song.id, item.reason);
     }
 
     return map;
-  }, [recommendedData]);
+  }, [recommendations]);
 
   const suggestions = useMemo(() => {
     return [...songs].sort((a, b) => {
@@ -86,7 +84,8 @@ export function Dashboard({
     hasMore: Boolean(hasMoreRecommendations),
     onLoadMore: () => {
       onLoadMoreRecommendations?.();
-    }
+    },
+    rootMargin: "1000px"
   });
 
   const periodLabels: Record<string, string> = {
@@ -209,7 +208,7 @@ export function Dashboard({
         <p className="infinite-scroll-status">Loading more recommendations...</p>
       ) : null}
 
-      {!hasMoreRecommendations ? (
+      {!hasMoreRecommendations && recommendations.length > 0 ? (
         <p className="infinite-scroll-status">You reached the end of the recommendation wall.</p>
       ) : null}
 

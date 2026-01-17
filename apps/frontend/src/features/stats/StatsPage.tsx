@@ -262,113 +262,120 @@ export function StatsPage() {
         ))}
       </div>
 
-      <section className="stats-page__content" aria-label="Statistics content">
+      {/* 1. VISUAL SUMMARY FIRST */}
+      <section className="stats-page__visuals">
+        <div className="stats-visual-grid">
+          <StatsPieChart
+            title="Artist pie"
+            entries={(artistEntries ?? []).map((entry) => ({
+              label: entry.label,
+              value: entry.playCount
+            }))}
+          />
+
+          <StatsPieChart
+            title="Genre pie"
+            entries={(genreEntries ?? []).map((entry) => ({
+              label: entry.label,
+              value: entry.playCount
+            }))}
+          />
+        </div>
+
+        <TasteComparisonPanel period={period} />
+
+        <TasteJudgePanel period={period} />
+
+        <section className="stats-receipt-controls">
+          <div>
+            <p className="eyebrow">Receipt mode</p>
+            <h3>Customize receipt</h3>
+          </div>
+
+          <div className="stats-tabs">
+            <button
+              type="button"
+              className={receiptMode === "normal" ? "stats-tabs__button stats-tabs__button--active" : "stats-tabs__button"}
+              onClick={() => setReceiptMode("normal")}
+            >
+              Normal
+            </button>
+            <button
+              type="button"
+              className={receiptMode === "brat" ? "stats-tabs__button stats-tabs__button--active" : "stats-tabs__button"}
+              onClick={() => setReceiptMode("brat")}
+            >
+              Brat Edition
+            </button>
+          </div>
+
+          <div className="stats-tabs">
+            <button
+              type="button"
+              className={receiptLength === 10 ? "stats-tabs__button stats-tabs__button--active" : "stats-tabs__button"}
+              onClick={() => setReceiptLength(10)}
+            >
+              Top 10
+            </button>
+            <button
+              type="button"
+              className={receiptLength === 50 ? "stats-tabs__button stats-tabs__button--active" : "stats-tabs__button"}
+              onClick={() => setReceiptLength(50)}
+            >
+              Top 50
+            </button>
+          </div>
+        </section>
+
+        <StatsReceipt
+          title={TAB_LABELS[tab]}
+          periodLabel={PERIOD_LABEL_MAP[period] ?? period}
+          entries={tabEntries.map((entry) => ({
+            label: entry.label,
+            subtitle: entry.subtitle,
+            playCount: entry.playCount,
+            totalDurationSeconds: entry.totalDurationSeconds
+          }))}
+          mode={receiptMode}
+          length={receiptLength}
+        />
+
+        <DriveExportPanel period={period} />
+      </section>
+
+      {/* 2. DETAILED LIST LAST */}
+      <section className="stats-page__content stats-page__content--details" aria-label="Detailed ranking">
+        <div className="stats-page__header-row">
+          <div>
+            <p className="eyebrow">Detailed ranking</p>
+            <h3>{TAB_LABELS[tab]}</h3>
+          </div>
+        </div>
+
         {tab === "TRACKS" && (
           <>
-            <h3>Top Tracks</h3>
             {tracksLoading ? <p className="stats-page__loading">Loading...</p> : renderRankingList(trackEntries)}
           </>
         )}
 
         {tab === "ARTISTS" && (
           <>
-            <h3>Top Artists</h3>
             {artistsLoading ? <p className="stats-page__loading">Loading...</p> : renderRankingList(artistEntries)}
           </>
         )}
 
         {tab === "GENRES" && (
           <>
-            <h3>Top Genres</h3>
             {genresLoading ? <p className="stats-page__loading">Loading...</p> : renderRankingList(genreEntries)}
           </>
         )}
 
         {tab === "RECENT" && (
           <>
-            <h3>Recently Played</h3>
             {recentLoading ? <p className="stats-page__loading">Loading...</p> : renderRecentlyPlayed()}
           </>
         )}
       </section>
-
-      <div className="stats-visual-grid">
-        <StatsPieChart
-          title="Artist pie"
-          entries={(artistEntries ?? []).map((entry) => ({
-            label: entry.label,
-            value: entry.playCount
-          }))}
-        />
-
-        <StatsPieChart
-          title="Genre pie"
-          entries={(genreEntries ?? []).map((entry) => ({
-            label: entry.label,
-            value: entry.playCount
-          }))}
-        />
-      </div>
-
-      <TasteComparisonPanel period={period} />
-
-      <TasteJudgePanel period={period} />
-
-      <section className="stats-receipt-controls">
-        <div>
-          <p className="eyebrow">Receipt mode</p>
-          <h3>Customize receipt</h3>
-        </div>
-
-        <div className="stats-tabs">
-          <button
-            type="button"
-            className={receiptMode === "normal" ? "stats-tabs__button stats-tabs__button--active" : "stats-tabs__button"}
-            onClick={() => setReceiptMode("normal")}
-          >
-            Normal
-          </button>
-          <button
-            type="button"
-            className={receiptMode === "brat" ? "stats-tabs__button stats-tabs__button--active" : "stats-tabs__button"}
-            onClick={() => setReceiptMode("brat")}
-          >
-            Brat Edition
-          </button>
-        </div>
-
-        <div className="stats-tabs">
-          <button
-            type="button"
-            className={receiptLength === 10 ? "stats-tabs__button stats-tabs__button--active" : "stats-tabs__button"}
-            onClick={() => setReceiptLength(10)}
-          >
-            Top 10
-          </button>
-          <button
-            type="button"
-            className={receiptLength === 50 ? "stats-tabs__button stats-tabs__button--active" : "stats-tabs__button"}
-            onClick={() => setReceiptLength(50)}
-          >
-            Top 50
-          </button>
-        </div>
-      </section>
-
-      <StatsReceipt
-        title={TAB_LABELS[tab]}
-        periodLabel={PERIOD_LABEL_MAP[period] ?? period}
-        entries={tabEntries.map((entry) => ({
-          label: entry.label,
-          subtitle: entry.subtitle,
-          playCount: entry.playCount,
-          totalDurationSeconds: entry.totalDurationSeconds
-        }))}
-        mode={receiptMode}
-        length={receiptLength}
-      />
-
-      <DriveExportPanel period={period} />
 
       <div className="bottom-player-spacer" aria-hidden="true" />
     </article>
