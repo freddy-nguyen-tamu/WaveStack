@@ -1,8 +1,10 @@
 import { Args, Context, Int, Mutation, Query, Resolver } from "@nestjs/graphql";
 import { AuthService } from "../auth/auth.service";
 import { HabitsService } from "./habits.service";
+import { GroqTasteService } from "./groq-taste.service";
 import {
   DriveExportResult,
+  GroqDebugStatus,
   HabitSummaryEntry,
   ListeningStatsEntry,
   ListeningStatsSnapshot,
@@ -26,7 +28,8 @@ type GqlContext = {
 export class HabitsResolver {
   constructor(
     private readonly habitsService: HabitsService,
-    private readonly authService: AuthService
+    private readonly authService: AuthService,
+    private readonly groqTasteService: GroqTasteService
   ) {}
 
   private resolveUserId(context: GqlContext): string | null {
@@ -244,5 +247,16 @@ export class HabitsResolver {
     }
 
     return this.habitsService.judgeTaste(userId, period ?? "ALL_TIME");
+  }
+
+  @Query(() => GroqDebugStatus)
+  groqDebugStatus(): GroqDebugStatus {
+    const configuredKeyNames = this.groqTasteService.configuredKeyNames();
+
+    return {
+      model: this.groqTasteService.configuredModel(),
+      configuredKeyCount: configuredKeyNames.length,
+      configuredKeyNames
+    };
   }
 }

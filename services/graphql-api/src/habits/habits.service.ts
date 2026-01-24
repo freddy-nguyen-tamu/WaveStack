@@ -770,6 +770,8 @@ export class HabitsService {
   }
 
   async judgeTaste(userId: string, period = "ALL_TIME"): Promise<TasteJudgeResult> {
+    const generatedAt = new Date().toISOString();
+
     const [topTracks, topArtists, topGenres, recent, comparison] = await Promise.all([
       this.topTracks(userId, period as StatsPeriod, 25),
       this.topArtists(userId, period as StatsPeriod, 25),
@@ -788,7 +790,7 @@ export class HabitsService {
         tasteScore: 0,
         obscurityScore: 0,
         chaosScore: 0,
-        generatedAt: new Date().toISOString()
+        generatedAt
       };
     }
 
@@ -822,40 +824,59 @@ export class HabitsService {
       }
     };
 
-    const response = await this.groqTasteService.chat(
-      [
+    try {
+      const response = await this.groqTasteService.chat(
+        [
+          {
+            role: "system",
+            content: [
+              "You are WaveStack's playful music taste judge.",
+              "Be funny, sharp, and specific, but do not be cruel.",
+              "Do not mention Spotify.",
+              "Do not mention Groq.",
+              "Do not include markdown fences.",
+              "Return only valid JSON with these keys:",
+              "verdictTitle, roast, summary, badges, tasteScore, obscurityScore, chaosScore.",
+              "badges must be an array of 3 to 6 short strings.",
+              "scores must be integers from 0 to 100."
+            ].join(" ")
+          },
+          {
+            role: "user",
+            content: `Judge this WaveStack listening profile:\n${JSON.stringify(promptPayload, null, 2)}`
+          }
+        ],
         {
-          role: "system",
-          content: [
-            "You are WaveStack's playful music taste judge.",
-            "Be funny, sharp, and specific, but do not be cruel.",
-            "Do not mention Spotify.",
-            "Do not mention Groq.",
-            "Do not include markdown fences.",
-            "Return only valid JSON with these keys:",
-            "verdictTitle, roast, summary, badges, tasteScore, obscurityScore, chaosScore.",
-            "badges must be an array of 3 to 6 short strings.",
-            "scores must be integers from 0 to 100."
-          ].join(" ")
-        },
-        {
-          role: "user",
-          content: `Judge this WaveStack listening profile:\n${JSON.stringify(promptPayload, null, 2)}`
+          maxTokens: 900,
+          temperature: 0.85,
+          timeoutMs: 45000
         }
-      ],
-      {
-        maxTokens: 900,
-        temperature: 0.85
-      }
-    );
+      );
 
-    const parsed = this.parseTasteJudgeJson(response, comparison);
+      const parsed = this.parseTasteJudgeJson(response, comparison);
 
-    return {
-      ...parsed,
-      ok: true,
-      generatedAt: new Date().toISOString()
-    };
+      return {
+        ...parsed,
+        ok: true,
+        generatedAt
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      this.logger.error(`judgeTaste failed: ${message}`);
+
+      return {
+        ok: false,
+        verdictTitle: "Judge failed to load",
+        roast: "The judge walked on stage, looked at the API keys, and left.",
+        summary: message,
+        badges: ["API issue", "Try again", "Check server logs"],
+        tasteScore: 0,
+        obscurityScore: comparison.obscurityScore,
+        chaosScore: comparison.uniquenessScore,
+        generatedAt
+      };
+    }
   }
 
   async tasteComparison(userId: string, period = "ALL_TIME"): Promise<TasteComparisonResult> {

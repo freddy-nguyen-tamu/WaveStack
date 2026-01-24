@@ -178,6 +178,18 @@ export class TasteJudgeResult {
 }
 
 @ObjectType()
+export class GroqDebugStatus {
+  @Field()
+  model!: string;
+
+  @Field(() => Int)
+  configuredKeyCount!: number;
+
+  @Field(() => [String])
+  configuredKeyNames!: string[];
+}
+
+@ObjectType()
 export class TasteComparisonResult {
   @Field(() => Int)
   userPlayCount!: number;

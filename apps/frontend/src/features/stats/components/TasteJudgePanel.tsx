@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "@apollo/client";
-import { Brain, Sparkles } from "lucide-react";
+import { AlertTriangle, Brain, Sparkles } from "lucide-react";
 import { JUDGE_TASTE_MUTATION } from "../../../api";
 
 type TasteJudgeResult = {
@@ -24,14 +24,23 @@ const loadingLines = [
   "Training on objectively good music...",
   "Checking if the aux cord should be revoked...",
   "Comparing vibes against WaveStack history...",
-  "Generating verdict..."
+  "Waiting for the judge to stop being dramatic..."
 ];
 
 export function TasteJudgePanel({ period }: TasteJudgePanelProps) {
   const [visibleLines, setVisibleLines] = useState<string[]>([]);
-  const [judgeTaste, { data, loading }] = useMutation<{
+  const [uiError, setUiError] = useState("");
+
+  const [judgeTaste, { data, loading, error }] = useMutation<{
     judgeTaste: TasteJudgeResult;
-  }>(JUDGE_TASTE_MUTATION);
+  }>(JUDGE_TASTE_MUTATION, {
+    onError: (mutationError) => {
+      setUiError(mutationError.message);
+    },
+    onCompleted: () => {
+      setUiError("");
+    }
+  });
 
   useEffect(() => {
     if (!loading) {
@@ -39,11 +48,16 @@ export function TasteJudgePanel({ period }: TasteJudgePanelProps) {
     }
 
     setVisibleLines([]);
+    setUiError("");
 
     let index = 0;
 
     const interval = window.setInterval(() => {
-      setVisibleLines((items) => [...items, loadingLines[index]].slice(-5));
+      setVisibleLines((items) => {
+        const line = loadingLines[index] ?? "Still judging...";
+        return [...items, line].slice(-5);
+      });
+
       index += 1;
 
       if (index >= loadingLines.length) {
@@ -55,8 +69,15 @@ export function TasteJudgePanel({ period }: TasteJudgePanelProps) {
   }, [loading]);
 
   const result = data?.judgeTaste;
-
   const badges = useMemo(() => result?.badges ?? [], [result]);
+
+  async function runJudge() {
+    setUiError("");
+
+    await judgeTaste({
+      variables: { period }
+    });
+  }
 
   return (
     <section className="taste-judge-card">
@@ -64,15 +85,15 @@ export function TasteJudgePanel({ period }: TasteJudgePanelProps) {
         <p className="eyebrow">AI taste judge</p>
         <h3>How questionable is your WaveStack taste?</h3>
         <p>
-          A playful Groq-powered judge reviews your listening habits and returns
-          a roast, badges, and scores. The backend sends summarized stats only.
+          A playful Groq-powered judge reviews summarized listening stats and
+          returns a roast, badges, and scores.
         </p>
       </div>
 
       <button
         type="button"
         className="taste-judge-card__button"
-        onClick={() => void judgeTaste({ variables: { period } })}
+        onClick={() => void runJudge()}
         disabled={loading}
       >
         <Brain aria-hidden="true" />
@@ -88,10 +109,20 @@ export function TasteJudgePanel({ period }: TasteJudgePanelProps) {
         </div>
       ) : null}
 
-      {result ? (
-        <div className="taste-verdict">
+      {uiError || error ? (
+        <div className="taste-verdict taste-verdict--error" role="alert">
           <div className="taste-verdict__title">
-            <Sparkles aria-hidden="true" />
+            <AlertTriangle aria-hidden="true" />
+            <h4>Judge failed</h4>
+          </div>
+          <p>{uiError || error?.message}</p>
+        </div>
+      ) : null}
+
+      {result ? (
+        <div className={result.ok ? "taste-verdict" : "taste-verdict taste-verdict--error"}>
+          <div className="taste-verdict__title">
+            {result.ok ? <Sparkles aria-hidden="true" /> : <AlertTriangle aria-hidden="true" />}
             <h4>{result.verdictTitle}</h4>
           </div>
 

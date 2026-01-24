@@ -432,6 +432,16 @@ export const JUDGE_TASTE_MUTATION = gql`
   }
 `;
 
+export const GROQ_DEBUG_STATUS_QUERY = gql`
+  query GroqDebugStatus {
+    groqDebugStatus {
+      model
+      configuredKeyCount
+      configuredKeyNames
+    }
+  }
+`;
+
 export const REPAIR_EMBEDDED_LYRICS_FOR_SONG_MUTATION = gql`
   mutation RepairEmbeddedLyricsForSong($songId: String!) {
     repairEmbeddedLyricsForSong(songId: $songId) {
