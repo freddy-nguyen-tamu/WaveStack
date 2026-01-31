@@ -524,14 +524,13 @@ export class HabitsService {
   }
 
   private statsPeriodIntervalSql(period: StatsPeriod): string {
-    const map: Record<StatsPeriod, string> = {
-      FOUR_WEEKS: "interval '28 days'",
-      SIX_MONTHS: "interval '182 days'",
-      TWELVE_MONTHS: "interval '365 days'",
-      ALL_TIME: "interval '9999 days'"
-    };
-
-    return map[period];
+    switch (period) {
+      case "FOUR_WEEKS": return "interval '28 days'";
+      case "SIX_MONTHS": return "interval '182 days'";
+      case "TWELVE_MONTHS": return "interval '365 days'";
+      case "ALL_TIME": return "interval '36500 days'";
+      default: return "interval '28 days'";
+    }
   }
 
   async topTracks(userId: string, period: StatsPeriod, limit = 50): Promise<ListeningStatsEntry[]> {
@@ -539,19 +538,25 @@ export class HabitsService {
 
     const result = await this.database.query(
       `SELECT
-         song_id AS key,
-         COALESCE(NULLIF(title, ''), 'Unknown') AS label,
-         COALESCE(NULLIF(artist_name, ''), 'Unknown') AS subtitle,
+         ale.song_id AS key,
+         COALESCE(NULLIF(ale.title, ''), 'Unknown') AS label,
+         COALESCE(NULLIF(ale.artist_name, ''), 'Unknown') AS subtitle,
          ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC)::int AS rank,
          0 AS previous_rank,
          0 AS rank_change,
          COUNT(*)::int AS play_count,
-         COALESCE(SUM(duration_seconds), 0)::float8 AS total_duration_seconds,
-         song_id AS song_id,
-         NULL AS thumbnail_url
-       FROM app_listening_events
-       WHERE user_id = $1 AND started_at >= now() - ${interval}
-       GROUP BY song_id, title, artist_name
+         COALESCE(SUM(ale.duration_seconds), 0)::float8 AS total_duration_seconds,
+         ale.song_id AS song_id,
+         COALESCE(
+           NULLIF(dt.local_thumbnail_url, ''),
+           NULLIF(dt.thumbnail_url, ''),
+           NULLIF(dt.drive_thumbnail_url, ''),
+           NULLIF(dt.embedded_artwork_url, '')
+         ) AS thumbnail_url
+       FROM app_listening_events ale
+       LEFT JOIN drive_tracks dt ON dt.id = ale.song_id OR dt.drive_file_id = ale.song_id
+       WHERE ale.user_id = $1 AND ale.started_at >= now() - ${interval}
+       GROUP BY ale.song_id, ale.title, ale.artist_name, dt.local_thumbnail_url, dt.thumbnail_url, dt.drive_thumbnail_url, dt.embedded_artwork_url
        ORDER BY play_count DESC
        LIMIT $2`,
       [userId, limit]
@@ -604,7 +609,7 @@ export class HabitsService {
        FROM (
          SELECT unnest(dt.genre_names) AS genre_name
          FROM app_listening_events ale
-         JOIN drive_tracks dt ON dt.file_id = ale.song_id
+         LEFT JOIN drive_tracks dt ON dt.id = ale.song_id OR dt.drive_file_id = ale.song_id
          WHERE ale.user_id = $1 AND ale.started_at >= now() - ${interval}
        ) sub
        GROUP BY genre_name
@@ -865,11 +870,15 @@ export class HabitsService {
 
       this.logger.error(`judgeTaste failed: ${message}`);
 
+      const dbHint = message.includes("column") || message.includes("relation")
+        ? " (possible database schema mismatch — try clearing cache or running migrations)"
+        : "";
+
       return {
         ok: false,
         verdictTitle: "Judge failed to load",
         roast: "The judge walked on stage, looked at the API keys, and left.",
-        summary: message,
+        summary: message + dbHint,
         badges: ["API issue", "Try again", "Check server logs"],
         tasteScore: 0,
         obscurityScore: comparison.obscurityScore,
