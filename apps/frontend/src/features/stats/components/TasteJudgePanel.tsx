@@ -123,11 +123,14 @@ export function TasteJudgePanel({ period }: TasteJudgePanelProps) {
         <div className={result.ok ? "taste-verdict" : "taste-verdict taste-verdict--error"}>
           <div className="taste-verdict__title">
             {result.ok ? <Sparkles aria-hidden="true" /> : <AlertTriangle aria-hidden="true" />}
-            <h4>{result.verdictTitle}</h4>
+            <div>
+              <p className="eyebrow">{result.ok ? "Verdict ready" : "Judge unavailable"}</p>
+              <h4>{result.verdictTitle}</h4>
+            </div>
           </div>
 
           <p className="taste-verdict__roast">{result.roast}</p>
-          <p>{result.summary}</p>
+          <p className="taste-verdict__summary">{result.summary}</p>
 
           <div className="taste-score-grid">
             <ScorePill label="Taste" value={result.tasteScore} />
@@ -135,11 +138,15 @@ export function TasteJudgePanel({ period }: TasteJudgePanelProps) {
             <ScorePill label="Chaos" value={result.chaosScore} />
           </div>
 
-          <div className="taste-badges">
+          <div className="taste-badges" aria-label="Taste badges">
             {badges.map((badge) => (
               <span key={badge}>{badge}</span>
             ))}
           </div>
+
+          <p className="taste-verdict__timestamp">
+            Judged {new Date(result.generatedAt).toLocaleString()}
+          </p>
         </div>
       ) : null}
     </section>

@@ -46,6 +46,10 @@ export function Dashboard({
   }, [recommendations]);
 
   const suggestions = useMemo(() => {
+    if (recommendations.length > 0) {
+      return recommendations.map((item) => item.song);
+    }
+
     return [...songs].sort((a, b) => {
       const aDuration = getWeightedSongLength(a);
       const bDuration = getWeightedSongLength(b);
@@ -54,7 +58,7 @@ export function Dashboard({
 
       return bScore - aScore;
     });
-  }, [songs]);
+  }, [recommendations, songs]);
 
   useEffect(() => {
     if (!selectedSong) {
@@ -208,7 +212,7 @@ export function Dashboard({
         <p className="infinite-scroll-status">Loading more recommendations...</p>
       ) : null}
 
-      {!hasMoreRecommendations && recommendations.length > 0 ? (
+      {!loadingMoreRecommendations && !hasMoreRecommendations && suggestions.length > 0 ? (
         <p className="infinite-scroll-status">You reached the end of the recommendation wall.</p>
       ) : null}
 

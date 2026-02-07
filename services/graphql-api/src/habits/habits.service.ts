@@ -836,13 +836,20 @@ export class HabitsService {
             role: "system",
             content: [
               "You are WaveStack's playful music taste judge.",
-              "Be funny, sharp, and specific, but do not be cruel.",
+              "Be funny, specific, and a little spicy, but not cruel.",
               "Do not mention Spotify.",
               "Do not mention Groq.",
-              "Do not include markdown fences.",
-              "Return only valid JSON with these keys:",
+              "Do not mention JSON, schema, API, parser, algorithm, or backend.",
+              "Do not include markdown.",
+              "Do not include code fences.",
+              "Do not include labels like 'Verdict:', 'Roast:', 'Summary:', or 'Badges:' inside values.",
+              "Return exactly one JSON object and nothing else.",
+              "The JSON object must have these keys:",
               "verdictTitle, roast, summary, badges, tasteScore, obscurityScore, chaosScore.",
-              "badges must be an array of 3 to 6 short strings.",
+              "verdictTitle must be short and catchy.",
+              "roast must be 1 to 2 fun sentences.",
+              "summary must be 1 friendly sentence.",
+              "badges must be an array of 3 to 6 short fun labels.",
               "scores must be integers from 0 to 100."
             ].join(" ")
           },
@@ -852,8 +859,8 @@ export class HabitsService {
           }
         ],
         {
-          maxTokens: 900,
-          temperature: 0.85,
+          maxTokens: 450,
+          temperature: 0.55,
           timeoutMs: 45000
         }
       );
@@ -1075,30 +1082,40 @@ export class HabitsService {
   }
 
   private parseTasteJudgeJson(raw: string, comparison: TasteComparisonResult): Omit<TasteJudgeResult, "ok" | "generatedAt"> {
+    const cleanedText = this.cleanJudgeText(raw);
+
     const fallback = {
       verdictTitle: "Chaotic but committed",
-      roast: raw.slice(0, 900),
-      summary: "WaveStack could not parse a structured verdict, but the judge still had thoughts.",
-      badges: ["Unfiltered", "Algorithm confused", "Playlist gremlin"],
+      roast: this.toFriendlyRoast(cleanedText),
+      summary: "Your taste has range, drama, and enough left turns to keep WaveStack awake.",
+      badges: ["Deep cuts", "Vibe hopper", "Aux risk"],
       tasteScore: Math.max(0, Math.min(100, 100 - comparison.mainstreamScore + 30)),
       obscurityScore: comparison.obscurityScore,
       chaosScore: Math.max(0, Math.min(100, comparison.uniquenessScore + 20))
     };
 
-    try {
-      const cleaned = raw
-        .replace(/^```json/i, "")
-        .replace(/^```/i, "")
-        .replace(/```$/i, "")
-        .trim();
+    const jsonCandidate = this.extractJsonObject(raw);
 
-      const parsed = JSON.parse(cleaned) as Partial<typeof fallback>;
+    if (!jsonCandidate) {
+      return fallback;
+    }
+
+    try {
+      const parsed = JSON.parse(jsonCandidate) as Partial<{
+        verdictTitle: unknown;
+        roast: unknown;
+        summary: unknown;
+        badges: unknown;
+        tasteScore: unknown;
+        obscurityScore: unknown;
+        chaosScore: unknown;
+      }>;
 
       return {
-        verdictTitle: String(parsed.verdictTitle || fallback.verdictTitle),
-        roast: String(parsed.roast || fallback.roast),
-        summary: String(parsed.summary || fallback.summary),
-        badges: Array.isArray(parsed.badges) ? parsed.badges.map(String).slice(0, 6) : fallback.badges,
+        verdictTitle: this.cleanJudgeText(String(parsed.verdictTitle || fallback.verdictTitle)).slice(0, 90),
+        roast: this.cleanJudgeText(String(parsed.roast || fallback.roast)).slice(0, 420),
+        summary: this.cleanJudgeText(String(parsed.summary || fallback.summary)).slice(0, 260),
+        badges: this.normalizeJudgeBadges(parsed.badges, fallback.badges),
         tasteScore: this.clampScore(parsed.tasteScore, fallback.tasteScore),
         obscurityScore: this.clampScore(parsed.obscurityScore, comparison.obscurityScore),
         chaosScore: this.clampScore(parsed.chaosScore, fallback.chaosScore)
@@ -1106,6 +1123,76 @@ export class HabitsService {
     } catch {
       return fallback;
     }
+  }
+
+  private extractJsonObject(raw: string): string | null {
+    const text = raw.trim();
+
+    const fencedMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+
+    if (fencedMatch?.[1]) {
+      const fenced = fencedMatch[1].trim();
+      const firstBrace = fenced.indexOf("{");
+      const lastBrace = fenced.lastIndexOf("}");
+
+      if (firstBrace >= 0 && lastBrace > firstBrace) {
+        return fenced.slice(firstBrace, lastBrace + 1);
+      }
+    }
+
+    const firstBrace = text.indexOf("{");
+    const lastBrace = text.lastIndexOf("}");
+
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      return text.slice(firstBrace, lastBrace + 1);
+    }
+
+    return null;
+  }
+
+  private cleanJudgeText(value: string): string {
+    return value
+      .replace(/```json/gi, "")
+      .replace(/```/g, "")
+      .replace(/\bVerdict:\s*/gi, "")
+      .replace(/\bRoast:\s*/gi, "")
+      .replace(/\bSummary:\s*/gi, "")
+      .replace(/\bBadges:\s*/gi, "")
+      .replace(/\bTaste Score:\s*\d+\s*(?:\(out of 100\))?/gi, "")
+      .replace(/\bObscurity Score:\s*\d+\s*(?:\(out of 100\))?/gi, "")
+      .replace(/\bChaos Score:\s*\d+\s*(?:\(out of 100\))?/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  private toFriendlyRoast(raw: string): string {
+    const cleaned = this.cleanJudgeText(raw);
+
+    if (!cleaned) {
+      return "Your library is giving mysterious main character energy with a side of playlist goblin.";
+    }
+
+    const withoutJson = cleaned.replace(/\{[\s\S]*\}/g, "").trim();
+
+    if (!withoutJson) {
+      return "Your library is giving mysterious main character energy with a side of playlist goblin.";
+    }
+
+    return withoutJson.slice(0, 360);
+  }
+
+  private normalizeJudgeBadges(value: unknown, fallback: string[]): string[] {
+    if (!Array.isArray(value)) {
+      return fallback;
+    }
+
+    const badges = value
+      .map((item) => this.cleanJudgeText(String(item)))
+      .map((item) => item.replace(/^[-•]\s*/, "").trim())
+      .filter(Boolean)
+      .slice(0, 6);
+
+    return badges.length ? badges : fallback;
   }
 
   private clampScore(value: unknown, fallback: number): number {

@@ -761,10 +761,48 @@ export function App() {
       return;
     }
 
-    setRecommendationOffset(0);
-    setHasMoreRecommendations(true);
-    setRecommendedData([]);
-    void loadInitialRecommendations();
+    let cancelled = false;
+
+    async function run() {
+      setRecommendationOffset(0);
+      setHasMoreRecommendations(true);
+      setRecommendedData([]);
+
+      try {
+        const page = await fetchRecommendedPage(0);
+
+        if (cancelled) {
+          return;
+        }
+
+        setRecommendedData(page.nodes);
+        setRecommendationOffset(page.nextOffset);
+        setHasMoreRecommendations(page.hasNextPage);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        console.error("Failed to load initial recommendations", error);
+        setRecommendedData([]);
+        setRecommendationOffset(0);
+        setHasMoreRecommendations(false);
+      }
+    }
+
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+    // Do not include dismissedRecommendationIds here, or the wall resets every time a song ends.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authToken, favoriteIds.join("|"), recentSongIds.join("|")]);
+
+  useEffect(() => {
+    if (!getAuthToken()) {
+      return;
+    }
 
     const timer = setTimeout(async () => {
       const periods = ["DAY", "WEEK", "MONTH", "YEAR"] as const;
@@ -833,6 +871,7 @@ export function App() {
 
   async function fetchRecommendedPage(offset: number): Promise<{
     nodes: RecommendResult[];
+    totalCount: number;
     hasNextPage: boolean;
     nextOffset: number;
   }> {
@@ -848,10 +887,23 @@ export function App() {
       }
     });
 
+    const page = result.data.recommendedSongs;
+
+    if (import.meta.env.DEV) {
+      console.log("recommendedSongs page", {
+        offset,
+        received: page.nodes?.length ?? 0,
+        totalCount: page.totalCount,
+        hasNextPage: page.hasNextPage,
+        nextOffset: page.nextOffset
+      });
+    }
+
     return {
-      nodes: result.data.recommendedSongs.nodes ?? [],
-      hasNextPage: result.data.recommendedSongs.hasNextPage,
-      nextOffset: result.data.recommendedSongs.nextOffset
+      nodes: page.nodes ?? [],
+      totalCount: page.totalCount,
+      hasNextPage: page.hasNextPage,
+      nextOffset: page.nextOffset
     };
   }
 
@@ -861,7 +913,8 @@ export function App() {
       setRecommendedData(page.nodes);
       setRecommendationOffset(page.nextOffset);
       setHasMoreRecommendations(page.hasNextPage);
-    } catch {
+    } catch (error) {
+      console.error("Failed to load initial recommendations", error);
       setRecommendedData([]);
       setRecommendationOffset(0);
       setHasMoreRecommendations(false);
@@ -898,6 +951,9 @@ export function App() {
 
       setRecommendationOffset(page.nextOffset);
       setHasMoreRecommendations(page.hasNextPage);
+    } catch (error) {
+      console.error("Failed to load more recommendations", error);
+      setHasMoreRecommendations(false);
     } finally {
       setLoadingMoreRecommendations(false);
     }
