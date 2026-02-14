@@ -190,6 +190,60 @@ export class GroqDebugStatus {
 }
 
 @ObjectType()
+export class ListeningArchiveResult {
+  @Field()
+  ok!: boolean;
+
+  @Field()
+  message!: string;
+
+  @Field(() => Int)
+  exportedEventCount!: number;
+
+  @Field(() => Int)
+  deletedEventCount!: number;
+
+  @Field(() => Int)
+  driveFileCount!: number;
+
+  @Field()
+  cutoffAt!: string;
+
+  @Field({ nullable: true })
+  driveFolderId?: string;
+
+  @Field({ nullable: true })
+  runId?: string;
+
+  @Field({ nullable: true })
+  errorMessage?: string;
+}
+
+@ObjectType()
+export class ListeningArchiveStatus {
+  @Field(() => Int)
+  rawEventCount!: number;
+
+  @Field(() => Int)
+  archivedRollupRowCount!: number;
+
+  @Field(() => Int)
+  archiveRunCount!: number;
+
+  @Field({ nullable: true })
+  oldestRawEventAt?: string;
+
+  @Field({ nullable: true })
+  latestArchiveRunAt?: string;
+
+  @Field({ nullable: true })
+  latestArchiveStatus?: string;
+
+  @Field({ nullable: true })
+  latestArchiveMessage?: string;
+}
+
+@ObjectType()
 export class TasteComparisonResult {
   @Field(() => Int)
   userPlayCount!: number;

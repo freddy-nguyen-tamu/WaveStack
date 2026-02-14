@@ -534,58 +534,119 @@ export class HabitsService {
   }
 
   async topTracks(userId: string, period: StatsPeriod, limit = 50): Promise<ListeningStatsEntry[]> {
-    const interval = this.statsPeriodIntervalSql(period);
+    const safeLimit = Math.max(1, Math.min(limit, 100));
+    const periodWhere = this.statsPeriodWhereAlias("e", period);
+    const rollupWhere = this.rollupPeriodWhere("r", period);
 
     const result = await this.database.query(
-      `SELECT
-         ale.song_id AS key,
-         COALESCE(NULLIF(ale.title, ''), 'Unknown') AS label,
-         COALESCE(NULLIF(ale.artist_name, ''), 'Unknown') AS subtitle,
-         ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC)::int AS rank,
-         0 AS previous_rank,
-         0 AS rank_change,
-         COUNT(*)::int AS play_count,
-         COALESCE(SUM(ale.duration_seconds), 0)::float8 AS total_duration_seconds,
-         ale.song_id AS song_id,
-         COALESCE(
-           NULLIF(dt.local_thumbnail_url, ''),
-           NULLIF(dt.thumbnail_url, ''),
-           NULLIF(dt.drive_thumbnail_url, ''),
-           NULLIF(dt.embedded_artwork_url, '')
-         ) AS thumbnail_url
-       FROM app_listening_events ale
-       LEFT JOIN drive_tracks dt ON dt.id = ale.song_id OR dt.drive_file_id = ale.song_id
-       WHERE ale.user_id = $1 AND ale.started_at >= now() - ${interval}
-       GROUP BY ale.song_id, ale.title, ale.artist_name, dt.local_thumbnail_url, dt.thumbnail_url, dt.drive_thumbnail_url, dt.embedded_artwork_url
-       ORDER BY play_count DESC
-       LIMIT $2`,
-      [userId, limit]
+      `WITH combined AS (
+        SELECT
+          e.song_id,
+          COALESCE(NULLIF(e.title, ''), 'Unknown Track') AS title,
+          COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist') AS artist_name,
+          1::int AS play_count,
+          COALESCE(e.duration_seconds, 0)::int AS total_duration_seconds
+        FROM app_listening_events e
+        WHERE e.user_id = $1
+          ${periodWhere}
+
+        UNION ALL
+
+        SELECT
+          r.song_id,
+          COALESCE(NULLIF(r.title, ''), 'Unknown Track') AS title,
+          COALESCE(NULLIF(r.artist_name, ''), 'Unknown Artist') AS artist_name,
+          r.play_count::int AS play_count,
+          r.total_duration_seconds::int AS total_duration_seconds
+        FROM app_listening_monthly_rollups r
+        WHERE r.user_id = $1
+          ${rollupWhere}
+      ),
+      grouped AS (
+        SELECT
+          song_id AS key,
+          MAX(title) AS label,
+          MAX(artist_name) AS subtitle,
+          SUM(play_count)::int AS play_count,
+          SUM(total_duration_seconds)::float8 AS total_duration_seconds,
+          song_id
+        FROM combined
+        GROUP BY song_id
+      )
+      SELECT
+        g.key,
+        g.label,
+        g.subtitle,
+        ROW_NUMBER() OVER (ORDER BY g.play_count DESC, g.total_duration_seconds DESC, g.label ASC)::int AS rank,
+        0 AS previous_rank,
+        0 AS rank_change,
+        g.play_count,
+        g.total_duration_seconds,
+        g.song_id,
+        MAX(COALESCE(t.local_thumbnail_url, t.thumbnail_url, t.drive_thumbnail_url, t.embedded_artwork_url)) AS thumbnail_url
+      FROM grouped g
+      LEFT JOIN drive_tracks t ON t.id = g.song_id OR t.drive_file_id = g.song_id
+      GROUP BY g.key, g.label, g.subtitle, g.play_count, g.total_duration_seconds, g.song_id
+      ORDER BY rank ASC
+      LIMIT $2`,
+      [userId, safeLimit]
     );
 
     return this.mapStatsEntries(this.rows(result));
   }
 
   async topArtists(userId: string, period: StatsPeriod, limit = 50): Promise<ListeningStatsEntry[]> {
-    const interval = this.statsPeriodIntervalSql(period);
+    const safeLimit = Math.max(1, Math.min(limit, 100));
+    const periodWhere = this.statsPeriodWhereAlias("e", period);
+    const rollupWhere = this.rollupPeriodWhere("r", period);
 
     const result = await this.database.query(
-      `SELECT
-         COALESCE(NULLIF(artist_name, ''), 'Unknown') AS key,
-         COALESCE(NULLIF(artist_name, ''), 'Unknown') AS label,
-         '' AS subtitle,
-         ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC)::int AS rank,
-         0 AS previous_rank,
-         0 AS rank_change,
-         COUNT(*)::int AS play_count,
-         COALESCE(SUM(duration_seconds), 0)::float8 AS total_duration_seconds,
-         NULL AS song_id,
-         NULL AS thumbnail_url
-       FROM app_listening_events
-       WHERE user_id = $1 AND started_at >= now() - ${interval}
-       GROUP BY artist_name
-       ORDER BY play_count DESC
-       LIMIT $2`,
-      [userId, limit]
+      `WITH combined AS (
+        SELECT
+          COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist') AS artist_name,
+          e.song_id,
+          1::int AS play_count,
+          COALESCE(e.duration_seconds, 0)::int AS total_duration_seconds
+        FROM app_listening_events e
+        WHERE e.user_id = $1
+          ${periodWhere}
+
+        UNION ALL
+
+        SELECT
+          COALESCE(NULLIF(r.artist_name, ''), 'Unknown Artist') AS artist_name,
+          r.song_id,
+          r.play_count::int AS play_count,
+          r.total_duration_seconds::int AS total_duration_seconds
+        FROM app_listening_monthly_rollups r
+        WHERE r.user_id = $1
+          ${rollupWhere}
+      ),
+      grouped AS (
+        SELECT
+          lower(artist_name) AS key,
+          artist_name AS label,
+          COUNT(DISTINCT song_id)::int AS distinct_tracks,
+          SUM(play_count)::int AS play_count,
+          SUM(total_duration_seconds)::float8 AS total_duration_seconds
+        FROM combined
+        GROUP BY lower(artist_name), artist_name
+      )
+      SELECT
+        key,
+        label,
+        distinct_tracks::text || ' track(s)' AS subtitle,
+        ROW_NUMBER() OVER (ORDER BY play_count DESC, total_duration_seconds DESC, label ASC)::int AS rank,
+        0 AS previous_rank,
+        0 AS rank_change,
+        play_count,
+        total_duration_seconds,
+        NULL::text AS song_id,
+        NULL::text AS thumbnail_url
+      FROM grouped
+      ORDER BY rank ASC
+      LIMIT $2`,
+      [userId, safeLimit]
     );
 
     return this.mapStatsEntries(this.rows(result));
@@ -771,6 +832,30 @@ export class HabitsService {
       SIX_MONTHS: "AND started_at >= now() - interval '182 days'",
       TWELVE_MONTHS: "AND started_at >= now() - interval '365 days'",
     };
+    return map[period] ?? "";
+  }
+
+  private statsPeriodWhereAlias(alias: string, period: string): string {
+    if (period === "ALL_TIME") return "";
+
+    const map: Record<string, string> = {
+      FOUR_WEEKS: `AND ${alias}.started_at >= now() - interval '28 days'`,
+      SIX_MONTHS: `AND ${alias}.started_at >= now() - interval '182 days'`,
+      TWELVE_MONTHS: `AND ${alias}.started_at >= now() - interval '365 days'`,
+    };
+
+    return map[period] ?? "";
+  }
+
+  private rollupPeriodWhere(alias: string, period: string): string {
+    if (period === "ALL_TIME") return "";
+
+    const map: Record<string, string> = {
+      FOUR_WEEKS: `AND ${alias}.month_start >= (current_date - interval '28 days')::date`,
+      SIX_MONTHS: `AND ${alias}.month_start >= (current_date - interval '182 days')::date`,
+      TWELVE_MONTHS: `AND ${alias}.month_start >= (current_date - interval '365 days')::date`,
+    };
+
     return map[period] ?? "";
   }
 

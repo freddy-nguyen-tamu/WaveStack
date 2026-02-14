@@ -7,9 +7,12 @@ import { HabitsService } from "./habits.service";
 import { HabitsResolver } from "./habits.resolver";
 import { DrivePrivateExportService } from "./drive-private-export.service";
 import { GroqTasteService } from "./groq-taste.service";
+import { ListeningArchiveService } from "./listening-archive.service";
+import { ListeningArchiveController } from "./listening-archive.controller";
 
 @Module({
   imports: [ConfigModule, DatabaseModule, MusicModule, AuthModule],
-  providers: [HabitsService, HabitsResolver, DrivePrivateExportService, GroqTasteService]
+  controllers: [ListeningArchiveController],
+  providers: [HabitsService, HabitsResolver, DrivePrivateExportService, ListeningArchiveService, GroqTasteService]
 })
 export class HabitsModule {}

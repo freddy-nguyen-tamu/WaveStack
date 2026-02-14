@@ -2,6 +2,41 @@ import { Injectable, Logger } from '@nestjs/common';
 import { google, drive_v3 } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 
+export type ArchivedListeningEvent = {
+  id?: string;
+  userId: string;
+  userEmail?: string;
+  displayName?: string;
+  songId: string;
+  artistName: string;
+  title: string;
+  durationSeconds: number;
+  completedPlayRatio: number;
+  startedAt: string;
+};
+
+export type ListeningArchiveFilePayload = {
+  userId: string;
+  userEmail?: string;
+  displayName?: string;
+  archiveDate: string;
+  events: ArchivedListeningEvent[];
+};
+
+export type ListeningRollupFilePayload = {
+  userId: string;
+  userEmail?: string;
+  displayName?: string;
+  monthStart: string;
+  rows: Array<{
+    songId: string;
+    artistName: string;
+    title: string;
+    playCount: number;
+    totalDurationSeconds: number;
+  }>;
+};
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 
 @Injectable()
@@ -54,6 +89,102 @@ export class DrivePrivateExportService {
     const rootId = await this.ensureRootFolder();
     const usersFolderId = await this.getOrCreateFolder(drive, 'users', rootId);
     return await this.getOrCreateFolder(drive, userId, usersFolderId);
+  }
+
+  async ensureChildFolder(drive: drive_v3.Drive, parentId: string, name: string): Promise<string> {
+    return this.getOrCreateFolder(drive, name, parentId);
+  }
+
+  async writeListeningArchiveFile(payload: ListeningArchiveFilePayload): Promise<{
+    ok: boolean;
+    message: string;
+    folderId?: string;
+    fileId?: string;
+    webViewLink?: string;
+  }> {
+    try {
+      const drive = await this.assertDrive();
+      const userFolderId = await this.ensureUserFolder(payload.userId);
+      const archiveFolderId = await this.ensureChildFolder(drive, userFolderId, "archive");
+
+      const date = new Date(`${payload.archiveDate}T00:00:00.000Z`);
+      const year = String(date.getUTCFullYear());
+      const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+
+      const yearFolderId = await this.ensureChildFolder(drive, archiveFolderId, `year=${year}`);
+      const monthFolderId = await this.ensureChildFolder(drive, yearFolderId, `month=${month}`);
+
+      const fileName = `listening-events-${payload.archiveDate}.jsonl`;
+      const jsonl = payload.events.map((event) => JSON.stringify(event)).join("\n") + "\n";
+
+      const result = await drive.files.create({
+        requestBody: {
+          name: fileName,
+          parents: [monthFolderId],
+          mimeType: "application/x-ndjson"
+        },
+        media: {
+          mimeType: "application/x-ndjson",
+          body: jsonl
+        },
+        fields: "id,name,webViewLink"
+      });
+
+      return {
+        ok: true,
+        message: `Archived ${payload.events.length} listening event(s) to ${fileName}.`,
+        folderId: monthFolderId,
+        fileId: result.data.id ?? undefined,
+        webViewLink: result.data.webViewLink ?? undefined
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Listening archive write failed: ${message}`);
+
+      return { ok: false, message };
+    }
+  }
+
+  async writeListeningRollupFile(payload: ListeningRollupFilePayload): Promise<{
+    ok: boolean;
+    message: string;
+    folderId?: string;
+    fileId?: string;
+    webViewLink?: string;
+  }> {
+    try {
+      const drive = await this.assertDrive();
+      const userFolderId = await this.ensureUserFolder(payload.userId);
+      const rollupsFolderId = await this.ensureChildFolder(drive, userFolderId, "rollups");
+      const month = payload.monthStart.slice(0, 7);
+      const fileName = `listening-rollup-${month}.json`;
+
+      const result = await drive.files.create({
+        requestBody: {
+          name: fileName,
+          parents: [rollupsFolderId],
+          mimeType: "application/json"
+        },
+        media: {
+          mimeType: "application/json",
+          body: JSON.stringify(payload, null, 2)
+        },
+        fields: "id,name,webViewLink"
+      });
+
+      return {
+        ok: true,
+        message: `Wrote monthly listening rollup ${fileName}.`,
+        folderId: rollupsFolderId,
+        fileId: result.data.id ?? undefined,
+        webViewLink: result.data.webViewLink ?? undefined
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Listening rollup write failed: ${message}`);
+
+      return { ok: false, message };
+    }
   }
 
   async exportData(

@@ -4,6 +4,7 @@ import type { AuthUser, HabitSummaryEntry, Song } from "../../App";
 import { EXPORT_LISTENING_HABITS_MUTATION, TEST_PRIVATE_DRIVE_WRITE_MUTATION } from "../../api";
 import { formatSeconds, formatSongDisplayName } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
+import { ListeningArchivePanel } from "./ListeningArchivePanel";
 
 type DriveExportResult = {
   ok: boolean;
@@ -209,6 +210,8 @@ export function ProfilePage({
           </div>
         ) : null}
       </section>
+
+      <ListeningArchivePanel />
     </article>
   );
 }

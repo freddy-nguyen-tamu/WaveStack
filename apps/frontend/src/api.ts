@@ -442,6 +442,36 @@ export const GROQ_DEBUG_STATUS_QUERY = gql`
   }
 `;
 
+export const LISTENING_ARCHIVE_STATUS_QUERY = gql`
+  query ListeningArchiveStatus {
+    listeningArchiveStatus {
+      rawEventCount
+      archivedRollupRowCount
+      archiveRunCount
+      oldestRawEventAt
+      latestArchiveRunAt
+      latestArchiveStatus
+      latestArchiveMessage
+    }
+  }
+`;
+
+export const ARCHIVE_OLD_LISTENING_EVENTS_MUTATION = gql`
+  mutation ArchiveOldListeningEvents($daysToKeep: Int, $dryRun: Boolean) {
+    archiveOldListeningEvents(daysToKeep: $daysToKeep, dryRun: $dryRun) {
+      ok
+      message
+      exportedEventCount
+      deletedEventCount
+      driveFileCount
+      cutoffAt
+      driveFolderId
+      runId
+      errorMessage
+    }
+  }
+`;
+
 export const REPAIR_EMBEDDED_LYRICS_FOR_SONG_MUTATION = gql`
   mutation RepairEmbeddedLyricsForSong($songId: String!) {
     repairEmbeddedLyricsForSong(songId: $songId) {

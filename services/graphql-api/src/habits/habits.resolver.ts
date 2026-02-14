@@ -2,10 +2,13 @@ import { Args, Context, Int, Mutation, Query, Resolver } from "@nestjs/graphql";
 import { AuthService } from "../auth/auth.service";
 import { HabitsService } from "./habits.service";
 import { GroqTasteService } from "./groq-taste.service";
+import { ListeningArchiveService } from "./listening-archive.service";
 import {
   DriveExportResult,
   GroqDebugStatus,
   HabitSummaryEntry,
+  ListeningArchiveResult,
+  ListeningArchiveStatus,
   ListeningStatsEntry,
   ListeningStatsSnapshot,
   PlacementPoint,
@@ -29,7 +32,8 @@ export class HabitsResolver {
   constructor(
     private readonly habitsService: HabitsService,
     private readonly authService: AuthService,
-    private readonly groqTasteService: GroqTasteService
+    private readonly groqTasteService: GroqTasteService,
+    private readonly listeningArchiveService: ListeningArchiveService
   ) {}
 
   private resolveUserId(context: GqlContext): string | null {
@@ -258,5 +262,36 @@ export class HabitsResolver {
       configuredKeyCount: configuredKeyNames.length,
       configuredKeyNames
     };
+  }
+
+  @Query(() => ListeningArchiveStatus)
+  listeningArchiveStatus(): Promise<ListeningArchiveStatus> {
+    return this.listeningArchiveService.status();
+  }
+
+  @Mutation(() => ListeningArchiveResult)
+  archiveOldListeningEvents(
+    @Context() context: GqlContext,
+    @Args("daysToKeep", { type: () => Int, nullable: true }) daysToKeep?: number,
+    @Args("dryRun", { nullable: true }) dryRun?: boolean
+  ): Promise<ListeningArchiveResult> {
+    const userId = this.resolveUserId(context);
+
+    if (!userId) {
+      return Promise.resolve({
+        ok: false,
+        message: "You must be logged in to archive listening habits.",
+        exportedEventCount: 0,
+        deletedEventCount: 0,
+        driveFileCount: 0,
+        cutoffAt: new Date().toISOString(),
+        errorMessage: "Not authenticated"
+      });
+    }
+
+    return this.listeningArchiveService.archiveOldEvents({
+      daysToKeep: daysToKeep ?? 180,
+      dryRun: dryRun ?? true
+    });
   }
 }
