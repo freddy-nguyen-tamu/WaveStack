@@ -60,7 +60,7 @@ export class DrivePrivateExportService {
 
     const auth = new GoogleAuth({
       keyFile,
-      scopes: ["https://www.googleapis.com/auth/drive.file"],
+      scopes: ["https://www.googleapis.com/auth/drive"],
     });
 
     const client = await auth.getClient();
