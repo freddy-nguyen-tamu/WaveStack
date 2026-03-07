@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { google, drive_v3 } from 'googleapis';
-import { GoogleAuth } from 'google-auth-library';
+import { GoogleAuth, OAuth2Client } from 'google-auth-library';
 
 export type ArchivedListeningEvent = {
   id?: string;
@@ -87,6 +87,18 @@ export class DrivePrivateExportService {
     return created.data.id!;
   }
 
+  async getUserDrive(refreshToken: string): Promise<drive_v3.Drive> {
+    const oauth = new OAuth2Client({
+      clientId: process.env.GOOGLE_OAUTH_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET,
+      redirectUri: process.env.GOOGLE_OAUTH_CALLBACK_URL
+    });
+
+    oauth.setCredentials({ refresh_token: refreshToken });
+
+    return google.drive({ version: "v3", auth: oauth as unknown as string });
+  }
+
   async ensureRootFolder(): Promise<string> {
     if (this.rootFolderId) return this.rootFolderId;
 
@@ -159,6 +171,110 @@ export class DrivePrivateExportService {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(`Listening archive write failed: ${message}`);
+
+      return { ok: false, message };
+    }
+  }
+
+  async writeListeningArchiveFileAsUser(
+    payload: ListeningArchiveFilePayload,
+    refreshToken: string
+  ): Promise<{
+    ok: boolean;
+    message: string;
+    folderId?: string;
+    fileId?: string;
+    webViewLink?: string;
+  }> {
+    try {
+      const drive = await this.getUserDrive(refreshToken);
+      const rootId = await this.ensureRootFolder();
+      const usersFolderId = await this.ensureChildFolder(drive, rootId, "users");
+      const userFolderId = await this.ensureChildFolder(drive, usersFolderId, payload.userId);
+      const archiveFolderId = await this.ensureChildFolder(drive, userFolderId, "archive");
+
+      const date = new Date(`${payload.archiveDate}T00:00:00.000Z`);
+      const year = String(date.getUTCFullYear());
+      const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+
+      const yearFolderId = await this.ensureChildFolder(drive, archiveFolderId, `year=${year}`);
+      const monthFolderId = await this.ensureChildFolder(drive, yearFolderId, `month=${month}`);
+
+      const fileName = `listening-events-${payload.archiveDate}.jsonl`;
+      const jsonl = payload.events.map((event) => JSON.stringify(event)).join("\n") + "\n";
+
+      const result = await drive.files.create({
+        requestBody: {
+          name: fileName,
+          parents: [monthFolderId],
+          mimeType: "application/x-ndjson"
+        },
+        media: {
+          mimeType: "application/x-ndjson",
+          body: jsonl
+        },
+        fields: "id,name,webViewLink",
+        supportsAllDrives: true
+      });
+
+      return {
+        ok: true,
+        message: `Archived ${payload.events.length} listening event(s) to ${fileName}.`,
+        folderId: monthFolderId,
+        fileId: result.data.id ?? undefined,
+        webViewLink: result.data.webViewLink ?? undefined
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Listening archive write (user OAuth) failed: ${message}`);
+
+      return { ok: false, message };
+    }
+  }
+
+  async writeListeningRollupFileAsUser(
+    payload: ListeningRollupFilePayload,
+    refreshToken: string
+  ): Promise<{
+    ok: boolean;
+    message: string;
+    folderId?: string;
+    fileId?: string;
+    webViewLink?: string;
+  }> {
+    try {
+      const drive = await this.getUserDrive(refreshToken);
+      const rootId = await this.ensureRootFolder();
+      const usersFolderId = await this.ensureChildFolder(drive, rootId, "users");
+      const userFolderId = await this.ensureChildFolder(drive, usersFolderId, payload.userId);
+      const rollupsFolderId = await this.ensureChildFolder(drive, userFolderId, "rollups");
+      const month = payload.monthStart.slice(0, 7);
+      const fileName = `listening-rollup-${month}.json`;
+
+      const result = await drive.files.create({
+        requestBody: {
+          name: fileName,
+          parents: [rollupsFolderId],
+          mimeType: "application/json"
+        },
+        media: {
+          mimeType: "application/json",
+          body: JSON.stringify(payload, null, 2)
+        },
+        fields: "id,name,webViewLink",
+        supportsAllDrives: true
+      });
+
+      return {
+        ok: true,
+        message: `Wrote monthly listening rollup ${fileName}.`,
+        folderId: rollupsFolderId,
+        fileId: result.data.id ?? undefined,
+        webViewLink: result.data.webViewLink ?? undefined
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Listening rollup write (user OAuth) failed: ${message}`);
 
       return { ok: false, message };
     }

@@ -175,20 +175,37 @@ export class ListeningArchiveService {
 
       await this.upsertMonthlyRollups(candidates);
 
+      const userTokens = await this.getUserRefreshTokens(candidates);
       const groups = this.groupEventsByUserAndDay(candidates);
       let exportedEventCount = 0;
       let driveFileCount = 0;
       let firstDriveFolderId: string | undefined;
 
       for (const group of groups) {
+        const refreshToken = userTokens.get(group.userId);
+
+        if (!refreshToken) {
+          this.logger.warn(`No google_refresh_token for user ${group.userId}, skipping Drive write`);
+          exportedEventCount += group.events.length;
+
+          if (dryRun) {
+            driveFileCount += 1;
+          }
+
+          continue;
+        }
+
         if (!dryRun) {
-          const writeResult = await this.drivePrivateExport.writeListeningArchiveFile({
-            userId: group.userId,
-            userEmail: group.userEmail,
-            displayName: group.displayName,
-            archiveDate: group.archiveDate,
-            events: group.events
-          });
+          const writeResult = await this.drivePrivateExport.writeListeningArchiveFileAsUser(
+            {
+              userId: group.userId,
+              userEmail: group.userEmail,
+              displayName: group.displayName,
+              archiveDate: group.archiveDate,
+              events: group.events
+            },
+            refreshToken
+          );
 
           if (!writeResult.ok) {
             throw new Error(writeResult.message);
@@ -201,7 +218,7 @@ export class ListeningArchiveService {
         driveFileCount += 1;
       }
 
-      await this.writeMonthlyRollupFiles(candidates, dryRun);
+      await this.writeMonthlyRollupFiles(candidates, dryRun, userTokens);
 
       let deletedEventCount = 0;
 
@@ -295,7 +312,37 @@ export class ListeningArchiveService {
     }
   }
 
-  private async writeMonthlyRollupFiles(rows: ArchiveCandidateRow[], dryRun: boolean): Promise<void> {
+  private async getUserRefreshTokens(rows: ArchiveCandidateRow[]): Promise<Map<string, string>> {
+    const userIds = Array.from(new Set(rows.map((r) => r.user_id)));
+
+    if (!userIds.length) {
+      return new Map();
+    }
+
+    const result = await this.database.query(
+      `SELECT id, google_refresh_token
+       FROM app_users
+       WHERE id = ANY($1::uuid[])`,
+      [userIds]
+    );
+
+    const rawRows = this.rows<{ id: string; google_refresh_token: string | null }>(result);
+    const map = new Map<string, string>();
+
+    for (const row of rawRows) {
+      if (row.google_refresh_token) {
+        map.set(row.id, row.google_refresh_token);
+      }
+    }
+
+    return map;
+  }
+
+  private async writeMonthlyRollupFiles(
+    rows: ArchiveCandidateRow[],
+    dryRun: boolean,
+    userTokens: Map<string, string>
+  ): Promise<void> {
     if (dryRun) {
       return;
     }
@@ -321,6 +368,13 @@ export class ListeningArchiveService {
     }
 
     for (const item of usersAndMonths.values()) {
+      const refreshToken = userTokens.get(item.userId);
+
+      if (!refreshToken) {
+        this.logger.warn(`No google_refresh_token for user ${item.userId}, skipping rollup file`);
+        continue;
+      }
+
       const rollupResult = await this.database.query(
         `SELECT
           song_id,
@@ -342,13 +396,16 @@ export class ListeningArchiveService {
         totalDurationSeconds: Number(row.total_duration_seconds)
       }));
 
-      const result = await this.drivePrivateExport.writeListeningRollupFile({
-        userId: item.userId,
-        userEmail: item.userEmail,
-        displayName: item.displayName,
-        monthStart: item.monthStart,
-        rows: rollupRows
-      });
+      const result = await this.drivePrivateExport.writeListeningRollupFileAsUser(
+        {
+          userId: item.userId,
+          userEmail: item.userEmail,
+          displayName: item.displayName,
+          monthStart: item.monthStart,
+          rows: rollupRows
+        },
+        refreshToken
+      );
 
       if (!result.ok) {
         throw new Error(result.message);

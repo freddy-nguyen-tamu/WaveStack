@@ -45,8 +45,10 @@ export class AuthService {
       prompt: "consent",
       scope: [
         "https://www.googleapis.com/auth/userinfo.email",
-        "https://www.googleapis.com/auth/userinfo.profile"
-      ]
+        "https://www.googleapis.com/auth/userinfo.profile",
+        "https://www.googleapis.com/auth/drive.file"
+      ],
+      include_granted_scopes: true
     });
   }
 
@@ -74,26 +76,33 @@ export class AuthService {
     const avatarUrl = payload.picture ?? null;
 
     const existing = await this.database.query<AppUserRow>(
-      "SELECT id, email, display_name, avatar_url FROM app_users WHERE email = $1",
+      "SELECT id, email, display_name, avatar_url, google_refresh_token FROM app_users WHERE email = $1",
       [email]
     );
 
     let userRow: AppUserRow;
 
+    const refreshToken = tokens.refresh_token ?? null;
+
     if (existing.rows.length > 0) {
       userRow = existing.rows[0];
       await this.database.query(
-        "UPDATE app_users SET display_name = $1, avatar_url = COALESCE($2, avatar_url), google_id = $3 WHERE id = $4",
-        [displayName, avatarUrl, googleId, userRow.id]
+        `UPDATE app_users
+         SET display_name = $1,
+             avatar_url = COALESCE($2, avatar_url),
+             google_id = $3,
+             google_refresh_token = COALESCE($5, google_refresh_token)
+         WHERE id = $4`,
+        [displayName, avatarUrl, googleId, userRow.id, refreshToken]
       );
       userRow.display_name = displayName;
       userRow.avatar_url = avatarUrl ?? userRow.avatar_url;
     } else {
       const result = await this.database.query<AppUserRow>(
-        `INSERT INTO app_users (email, display_name, avatar_url, google_id)
-         VALUES ($1, $2, $3, $4)
-         RETURNING id, email, display_name, avatar_url`,
-        [email, displayName, avatarUrl, googleId]
+        `INSERT INTO app_users (email, display_name, avatar_url, google_id, google_refresh_token)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, email, display_name, avatar_url, google_refresh_token`,
+        [email, displayName, avatarUrl, googleId, refreshToken]
       );
       userRow = result.rows[0];
     }
@@ -148,4 +157,5 @@ type AppUserRow = {
   email: string;
   display_name: string;
   avatar_url: string | null;
+  google_refresh_token: string | null;
 };
