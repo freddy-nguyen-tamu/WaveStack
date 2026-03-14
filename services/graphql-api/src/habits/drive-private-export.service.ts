@@ -64,7 +64,7 @@ export class DrivePrivateExportService {
     });
 
     const client = await auth.getClient();
-    this.driveInstance = google.drive({ version: "v3", auth: client as unknown as string });
+    this.driveInstance = google.drive({ version: "v3", auth: client as any });
     this.logger.log("Drive client initialized via service account.");
 
     return this.driveInstance;
@@ -96,7 +96,7 @@ export class DrivePrivateExportService {
 
     oauth.setCredentials({ refresh_token: refreshToken });
 
-    return google.drive({ version: "v3", auth: oauth as unknown as string });
+    return google.drive({ version: "v3", auth: oauth as any });
   }
 
   async ensureRootFolder(): Promise<string> {

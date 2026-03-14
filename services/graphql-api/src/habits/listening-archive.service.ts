@@ -180,18 +180,13 @@ export class ListeningArchiveService {
       let exportedEventCount = 0;
       let driveFileCount = 0;
       let firstDriveFolderId: string | undefined;
+      const archivedEventIds: string[] = [];
 
       for (const group of groups) {
         const refreshToken = userTokens.get(group.userId);
 
         if (!refreshToken) {
           this.logger.warn(`No google_refresh_token for user ${group.userId}, skipping Drive write`);
-          exportedEventCount += group.events.length;
-
-          if (dryRun) {
-            driveFileCount += 1;
-          }
-
           continue;
         }
 
@@ -212,6 +207,12 @@ export class ListeningArchiveService {
           }
 
           firstDriveFolderId = firstDriveFolderId ?? writeResult.folderId;
+
+          archivedEventIds.push(
+            ...group.events
+              .map((event) => event.id)
+              .filter((id): id is string => Boolean(id))
+          );
         }
 
         exportedEventCount += group.events.length;
@@ -223,7 +224,7 @@ export class ListeningArchiveService {
       let deletedEventCount = 0;
 
       if (!dryRun) {
-        const ids = candidates.map((row) => row.id).filter(Boolean);
+        const ids = archivedEventIds;
 
         if (ids.length) {
           const deleteResult = await this.database.query(
