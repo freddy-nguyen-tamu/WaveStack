@@ -305,7 +305,48 @@ export function App() {
     [data]
   );
 
-  const songById = useMemo(() => new Map(songs.map((song) => [song.id, song])), [songs]);
+  const homeRecentSongs = useMemo<Song[]>(
+    () => uniqueSongsById(data?.recentlyPlayed ?? []),
+    [data]
+  );
+
+  const homeRecommendationSongs = useMemo<Song[]>(
+    () => uniqueSongsById(
+      data?.recommendations?.map((item: RecommendResult | Song) =>
+        "song" in item ? item.song : item
+      ) ?? []
+    ),
+    [data]
+  );
+
+  const allKnownSongs = useMemo<Song[]>(() => {
+    return uniqueSongsById([
+      ...songs,
+      ...librarySongs,
+      ...homeRecentSongs,
+      ...homeRecommendationSongs,
+      ...visibleRecommendations.map((item) => item.song),
+      ...queue,
+      ...playHistory,
+      ...(activeSong ? [activeSong] : []),
+      ...(detailsSong ? [detailsSong] : [])
+    ]);
+  }, [
+    songs,
+    librarySongs,
+    homeRecentSongs,
+    homeRecommendationSongs,
+    visibleRecommendations,
+    queue,
+    playHistory,
+    activeSong,
+    detailsSong
+  ]);
+
+  const songById = useMemo(
+    () => new Map(allKnownSongs.map((song) => [song.id, song])),
+    [allKnownSongs]
+  );
 
   const favoriteSongs = useMemo(() => {
     return favoriteIds
@@ -314,10 +355,12 @@ export function App() {
   }, [favoriteIds, songById]);
 
   const recentSongs = useMemo(() => {
-    return recentSongIds
+    const localRecentSongs = recentSongIds
       .map((id) => songById.get(id))
       .filter((song): song is Song => Boolean(song));
-  }, [recentSongIds, songById]);
+
+    return uniqueSongsById([...localRecentSongs, ...homeRecentSongs]);
+  }, [recentSongIds, songById, homeRecentSongs]);
 
   const {
     data: libraryData,
@@ -420,7 +463,8 @@ export function App() {
   }
 
   function rememberRecent(song: Song) {
-    setRecentSongIds((items) => [song.id, ...items.filter((id) => id !== song.id)].slice(0, 50));
+    setRecentSongIds((items) => [song.id, ...items.filter((id) => id !== song.id)].slice(0, 100));
+    rememberPlayedSong(song);
   }
 
   function rememberPlayedSong(song: Song) {
@@ -587,10 +631,6 @@ export function App() {
   }
 
   function playSong(song: Song) {
-    if (activeSong?.id !== song.id && activeSong) {
-      rememberPlayedSong(activeSong);
-    }
-
     setActiveSong(song);
     rememberRecent(song);
     setPlaySignal((value) => value + 1);
