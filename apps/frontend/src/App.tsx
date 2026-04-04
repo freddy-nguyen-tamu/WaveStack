@@ -155,6 +155,23 @@ function uniqueSongsById(songs: Song[]): Song[] {
   return Array.from(new Map(songs.map((song) => [song.id, song])).values());
 }
 
+function readSongCache(): Song[] {
+  try {
+    const value = window.localStorage.getItem("wavestack:song-cache");
+    return value ? JSON.parse(value) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalJson(key: string, value: unknown) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    console.warn(`Could not write ${key}`, error);
+  }
+}
+
 function LibraryPage({
   songs,
   librarySongs,
@@ -229,6 +246,8 @@ export function App() {
   const [notice, setNotice] = useState("");
   const [queueDrawerOpen, setQueueDrawerOpen] = useState(false);
   const [detailsSong, setDetailsSong] = useState<Song | null>(null);
+
+  const [cachedSongs, setCachedSongs] = useState<Song[]>(readSongCache);
 
   const [authUser, setAuthUser] = useState<AuthUser | null>(() => {
     try {
@@ -321,6 +340,7 @@ export function App() {
 
   const allKnownSongs = useMemo<Song[]>(() => {
     return uniqueSongsById([
+      ...cachedSongs,
       ...songs,
       ...librarySongs,
       ...homeRecentSongs,
@@ -332,6 +352,7 @@ export function App() {
       ...(detailsSong ? [detailsSong] : [])
     ]);
   }, [
+    cachedSongs,
     songs,
     librarySongs,
     homeRecentSongs,
@@ -405,6 +426,18 @@ export function App() {
   }, [recentSongIds]);
 
   useEffect(() => {
+    rememberSongObjects(songs);
+  }, [songs]);
+
+  useEffect(() => {
+    rememberSongObjects(librarySongs);
+  }, [librarySongs]);
+
+  useEffect(() => {
+    rememberSongObjects(visibleRecommendations.map((item) => item.song));
+  }, [visibleRecommendations]);
+
+  useEffect(() => {
     if (!detailsSong) {
       document.body.classList.remove("modal-open");
       return;
@@ -427,7 +460,7 @@ export function App() {
   }, [detailsSong]);
 
   useEffect(() => {
-    window.localStorage.setItem("wavestack:playlists", JSON.stringify(playlists));
+    writeLocalJson("wavestack:playlists", playlists);
   }, [playlists]);
 
   useEffect(() => {
@@ -463,7 +496,14 @@ export function App() {
   }
 
   function rememberRecent(song: Song) {
-    setRecentSongIds((items) => [song.id, ...items.filter((id) => id !== song.id)].slice(0, 100));
+    rememberSongObjects([song]);
+
+    setRecentSongIds((items) => {
+      const next = [song.id, ...items.filter((id) => id !== song.id)].slice(0, 100);
+      writeLocalJson("wavestack:recent", next);
+      return next;
+    });
+
     rememberPlayedSong(song);
   }
 
@@ -471,6 +511,14 @@ export function App() {
     setPlayHistory((items) => {
       const withoutDuplicate = items.filter((item) => item.id !== song.id);
       return [song, ...withoutDuplicate].slice(0, 100);
+    });
+  }
+
+  function rememberSongObjects(songsToRemember: Song[]) {
+    setCachedSongs((items) => {
+      const next = uniqueSongsById([...songsToRemember, ...items]).slice(0, 1500);
+      writeLocalJson("wavestack:song-cache", next);
+      return next;
     });
   }
 
@@ -638,6 +686,7 @@ export function App() {
   }
 
   function queueSong(song: Song) {
+    rememberSongObjects([song]);
     setQueue((items) => {
       if (items.some((item) => item.id === song.id) || activeSong?.id === song.id) {
         showNotice(`${formatSongDisplayName(song)} is already in the queue.`);
@@ -657,14 +706,16 @@ export function App() {
   }
 
   function toggleFavorite(song: Song) {
+    rememberSongObjects([song]);
     const isFavorite = favoriteIds.includes(song.id);
 
     setFavoriteIds((items) => {
-      if (items.includes(song.id)) {
-        return items.filter((id) => id !== song.id);
-      }
+      const next = items.includes(song.id)
+        ? items.filter((id) => id !== song.id)
+        : [song.id, ...items];
 
-      return [song.id, ...items];
+      writeLocalJson("wavestack:favorites", next);
+      return next;
     });
 
     showNotice(
@@ -688,18 +739,28 @@ export function App() {
       songIds: []
     };
 
-    setPlaylists((items) => [...items, playlist]);
+    setPlaylists((items) => {
+      const next = [...items, playlist];
+      writeLocalJson("wavestack:playlists", next);
+      return next;
+    });
+
     setSelectedPlaylistId(playlist.id);
     showNotice(`Created playlist: ${playlist.name}`);
   }
 
   function deletePlaylist(playlistId: string) {
     const playlist = playlists.find((item) => item.id === playlistId);
-    setPlaylists((items) => items.filter((item) => item.id !== playlistId));
+    setPlaylists((items) => {
+      const next = items.filter((item) => item.id !== playlistId);
+      writeLocalJson("wavestack:playlists", next);
+      return next;
+    });
     showNotice(playlist ? `Deleted playlist: ${playlist.name}` : "Deleted playlist.");
   }
 
   function addToPlaylist(playlistId: string, song: Song) {
+    rememberSongObjects([song]);
     if (!playlistId) {
       const name = window.prompt("Name your new playlist", "My Playlist");
 
@@ -721,13 +782,18 @@ export function App() {
         songIds: [song.id]
       };
 
-      setPlaylists((items) => [...items, playlist]);
-      setSelectedPlaylistId(playlist.id);
-      showNotice(`Created ${playlist.name} and added ${formatSongDisplayName(song)}.`);
-      return;
-    }
+    setPlaylists((items) => {
+      const next = [...items, playlist];
+      writeLocalJson("wavestack:playlists", next);
+      return next;
+    });
 
-    const playlist = playlists.find((item) => item.id === playlistId);
+    setSelectedPlaylistId(playlist.id);
+    showNotice(`Created ${playlist.name} and added ${formatSongDisplayName(song)}.`);
+    return;
+  }
+
+  const playlist = playlists.find((item) => item.id === playlistId);
 
     if (!playlist) {
       showNotice("Select or create a playlist first.");
@@ -739,8 +805,8 @@ export function App() {
       return;
     }
 
-    setPlaylists((items) =>
-      items.map((item) => {
+    setPlaylists((items) => {
+      const next = items.map((item) => {
         if (item.id !== playlistId) {
           return item;
         }
@@ -749,8 +815,10 @@ export function App() {
           ...item,
           songIds: [...item.songIds, song.id]
         };
-      })
-    );
+      });
+      writeLocalJson("wavestack:playlists", next);
+      return next;
+    });
 
     showNotice(`Added ${formatSongDisplayName(song)} to ${playlist.name}.`);
   }
@@ -759,8 +827,8 @@ export function App() {
     const playlist = playlists.find((item) => item.id === playlistId);
     const song = songById.get(songId);
 
-    setPlaylists((items) =>
-      items.map((item) => {
+    setPlaylists((items) => {
+      const next = items.map((item) => {
         if (item.id !== playlistId) {
           return item;
         }
@@ -769,8 +837,10 @@ export function App() {
           ...item,
           songIds: item.songIds.filter((id) => id !== songId)
         };
-      })
-    );
+      });
+      writeLocalJson("wavestack:playlists", next);
+      return next;
+    });
 
     showNotice(
       playlist && song
@@ -1007,7 +1077,11 @@ export function App() {
       songIds
     };
 
-    setPlaylists((items) => [...items, playlist]);
+    setPlaylists((items) => {
+      const next = [...items, playlist];
+      writeLocalJson("wavestack:playlists", next);
+      return next;
+    });
     setSelectedPlaylistId(playlist.id);
     showNotice(`Created playlist: ${playlist.name}`);
   }
@@ -1177,7 +1251,7 @@ export function App() {
           element={
             <section aria-label="Playlists">
               <PlaylistPanel
-                songs={songs}
+                songs={allKnownSongs}
                 playlists={playlists}
                 selectedPlaylistId={selectedPlaylistId}
                 favoriteIds={favoriteIds}
