@@ -483,3 +483,121 @@ export const REPAIR_EMBEDDED_LYRICS_FOR_SONG_MUTATION = gql`
     }
   }
 `;
+
+export const LIBRARY_STATE_QUERY = gql`
+  ${SONG_CARD_FIELDS}
+
+  query LibraryState {
+    libraryState {
+      favorites {
+        ...SongCardFields
+      }
+      recentlyPlayed {
+        ...SongCardFields
+      }
+      playlists {
+        id
+        name
+        songCount
+        songIds
+        songs {
+          ...SongCardFields
+        }
+        createdAt
+        updatedAt
+      }
+    }
+  }
+`;
+
+export const FAVORITE_SONG_MUTATION = gql`
+  ${SONG_CARD_FIELDS}
+
+  mutation FavoriteSong($songId: String!) {
+    favoriteSong(songId: $songId) {
+      ...SongCardFields
+    }
+  }
+`;
+
+export const UNFAVORITE_SONG_MUTATION = gql`
+  ${SONG_CARD_FIELDS}
+
+  mutation UnfavoriteSong($songId: String!) {
+    unfavoriteSong(songId: $songId) {
+      ...SongCardFields
+    }
+  }
+`;
+
+export const CREATE_USER_PLAYLIST_MUTATION = gql`
+  ${SONG_CARD_FIELDS}
+
+  mutation CreateUserPlaylist($name: String!) {
+    createUserPlaylist(name: $name) {
+      id
+      name
+      songCount
+      songIds
+      songs {
+        ...SongCardFields
+      }
+      createdAt
+      updatedAt
+    }
+  }
+`;
+
+export const DELETE_USER_PLAYLIST_MUTATION = gql`
+  ${SONG_CARD_FIELDS}
+
+  mutation DeleteUserPlaylist($playlistId: String!) {
+    deleteUserPlaylist(playlistId: $playlistId) {
+      id
+      name
+      songCount
+      songIds
+      songs {
+        ...SongCardFields
+      }
+      createdAt
+      updatedAt
+    }
+  }
+`;
+
+export const ADD_SONG_TO_USER_PLAYLIST_MUTATION = gql`
+  ${SONG_CARD_FIELDS}
+
+  mutation AddSongToUserPlaylist($playlistId: String!, $songId: String!) {
+    addSongToUserPlaylist(playlistId: $playlistId, songId: $songId) {
+      id
+      name
+      songCount
+      songIds
+      songs {
+        ...SongCardFields
+      }
+      createdAt
+      updatedAt
+    }
+  }
+`;
+
+export const REMOVE_SONG_FROM_USER_PLAYLIST_MUTATION = gql`
+  ${SONG_CARD_FIELDS}
+
+  mutation RemoveSongFromUserPlaylist($playlistId: String!, $songId: String!) {
+    removeSongFromUserPlaylist(playlistId: $playlistId, songId: $songId) {
+      id
+      name
+      songCount
+      songIds
+      songs {
+        ...SongCardFields
+      }
+      createdAt
+      updatedAt
+    }
+  }
+`;

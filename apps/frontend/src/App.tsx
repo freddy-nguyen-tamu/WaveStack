@@ -9,7 +9,14 @@ import {
     MUSIC_HOME_QUERY,
     RECOMMENDED_SONGS_QUERY,
     RECORD_LISTEN_MUTATION,
-    SONG_PAGE_QUERY
+    SONG_PAGE_QUERY,
+    LIBRARY_STATE_QUERY,
+    FAVORITE_SONG_MUTATION,
+    UNFAVORITE_SONG_MUTATION,
+    CREATE_USER_PLAYLIST_MUTATION,
+    DELETE_USER_PLAYLIST_MUTATION,
+    ADD_SONG_TO_USER_PLAYLIST_MUTATION,
+    REMOVE_SONG_FROM_USER_PLAYLIST_MUTATION
   } from "./api";
 import { Player } from "./features/player/Player";
 import { PlaylistPanel } from "./features/playlists/PlaylistPanel";
@@ -85,6 +92,10 @@ export type ClientPlaylist = {
   id: string;
   name: string;
   songIds: string[];
+  songs?: Song[];
+  songCount?: number;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 type SongPageQueryData = {
@@ -279,6 +290,11 @@ export function App() {
   const [loadingMoreRecommendations, setLoadingMoreRecommendations] = useState(false);
   const apolloClient = useApolloClient();
 
+  const { data: libraryStateData, refetch: refetchLibraryState } = useQuery(LIBRARY_STATE_QUERY, {
+    skip: !hasToken,
+    fetchPolicy: "network-only"
+  });
+
   const dismissedRecommendationSet = useMemo(
     () => new Set(dismissedRecommendationIds),
     [dismissedRecommendationIds]
@@ -348,6 +364,7 @@ export function App() {
       ...visibleRecommendations.map((item) => item.song),
       ...queue,
       ...playHistory,
+      ...playlists.flatMap((playlist) => playlist.songs ?? []),
       ...(activeSong ? [activeSong] : []),
       ...(detailsSong ? [detailsSong] : [])
     ]);
@@ -360,6 +377,7 @@ export function App() {
     visibleRecommendations,
     queue,
     playHistory,
+    playlists,
     activeSong,
     detailsSong
   ]);
@@ -380,7 +398,7 @@ export function App() {
       .map((id) => songById.get(id))
       .filter((song): song is Song => Boolean(song));
 
-    return uniqueSongsById([...localRecentSongs, ...homeRecentSongs]);
+    return uniqueSongsById([...homeRecentSongs, ...localRecentSongs]);
   }, [recentSongIds, songById, homeRecentSongs]);
 
   const {
@@ -486,6 +504,26 @@ export function App() {
       return songs[0];
     });
   }, [songs, songById]);
+
+  useEffect(() => {
+    if (!libraryStateData?.libraryState) {
+      return;
+    }
+
+    const backendFavorites = libraryStateData.libraryState.favorites ?? [];
+    const backendRecent = libraryStateData.libraryState.recentlyPlayed ?? [];
+    const backendPlaylists = libraryStateData.libraryState.playlists ?? [];
+
+    setFavoriteIds(backendFavorites.map((song: Song) => song.id));
+    setRecentSongIds(backendRecent.map((song: Song) => song.id));
+    setPlaylists(backendPlaylists);
+
+    rememberSongObjects([
+      ...backendFavorites,
+      ...backendRecent,
+      ...backendPlaylists.flatMap((playlist: ClientPlaylist) => playlist.songs ?? [])
+    ]);
+  }, [libraryStateData]);
 
   const currentSong = activeSong ?? songs[0] ?? fallbackSongs[0];
   const queueRef = useRef(queue);
@@ -705,27 +743,57 @@ export function App() {
     showNotice(song ? `Removed from queue: ${formatSongDisplayName(song)}` : "Removed song from queue.");
   }
 
-  function toggleFavorite(song: Song) {
+  async function toggleFavorite(song: Song) {
     rememberSongObjects([song]);
     const isFavorite = favoriteIds.includes(song.id);
 
-    setFavoriteIds((items) => {
-      const next = items.includes(song.id)
-        ? items.filter((id) => id !== song.id)
-        : [song.id, ...items];
+    if (!authToken) {
+      setFavoriteIds((items) => {
+        const next = items.includes(song.id)
+          ? items.filter((id) => id !== song.id)
+          : [song.id, ...items];
 
-      writeLocalJson("wavestack:favorites", next);
-      return next;
-    });
+        writeLocalJson("wavestack:favorites", next);
+        return next;
+      });
 
-    showNotice(
-      isFavorite
-        ? `Removed favorite: ${formatSongDisplayName(song)}`
-        : `Added favorite: ${formatSongDisplayName(song)}`
-    );
+      showNotice(
+        isFavorite
+          ? `Removed favorite locally: ${formatSongDisplayName(song)}`
+          : `Added favorite locally: ${formatSongDisplayName(song)}`
+      );
+      return;
+    }
+
+    try {
+      const result = await apolloClient.mutate<{
+        favoriteSong?: Song[];
+        unfavoriteSong?: Song[];
+      }>({
+        mutation: isFavorite ? UNFAVORITE_SONG_MUTATION : FAVORITE_SONG_MUTATION,
+        variables: { songId: song.id },
+        fetchPolicy: "no-cache"
+      });
+
+      const favorites = result.data?.favoriteSong ?? result.data?.unfavoriteSong ?? [];
+
+      setFavoriteIds(favorites.map((item) => item.id));
+      rememberSongObjects(favorites);
+
+      await refetchLibraryState();
+
+      showNotice(
+        isFavorite
+          ? `Removed favorite: ${formatSongDisplayName(song)}`
+          : `Added favorite: ${formatSongDisplayName(song)}`
+      );
+    } catch (error) {
+      console.error("Failed to update favorite", error);
+      showNotice("Could not save favorite to your account.");
+    }
   }
 
-  function createPlaylist(name: string) {
+  async function createPlaylist(name: string) {
     const trimmed = name.trim();
 
     if (!trimmed) {
@@ -733,34 +801,82 @@ export function App() {
       return;
     }
 
-    const playlist: ClientPlaylist = {
-      id: `playlist-${Date.now()}`,
-      name: trimmed,
-      songIds: []
-    };
+    if (!authToken) {
+      const playlist: ClientPlaylist = {
+        id: `playlist-${Date.now()}`,
+        name: trimmed,
+        songIds: [],
+        songs: [],
+        songCount: 0
+      };
 
-    setPlaylists((items) => {
-      const next = [...items, playlist];
-      writeLocalJson("wavestack:playlists", next);
-      return next;
-    });
+      setPlaylists((items) => {
+        const next = [...items, playlist];
+        writeLocalJson("wavestack:playlists", next);
+        return next;
+      });
 
-    setSelectedPlaylistId(playlist.id);
-    showNotice(`Created playlist: ${playlist.name}`);
+      setSelectedPlaylistId(playlist.id);
+      showNotice(`Created local playlist: ${playlist.name}`);
+      return;
+    }
+
+    try {
+      const result = await apolloClient.mutate<{ createUserPlaylist: ClientPlaylist[] }>({
+        mutation: CREATE_USER_PLAYLIST_MUTATION,
+        variables: { name: trimmed },
+        fetchPolicy: "no-cache"
+      });
+
+      const next = result.data?.createUserPlaylist ?? [];
+      setPlaylists(next);
+      setSelectedPlaylistId(next[0]?.id ?? "");
+      rememberSongObjects(next.flatMap((playlist) => playlist.songs ?? []));
+      await refetchLibraryState();
+
+      showNotice(`Created playlist: ${trimmed}`);
+    } catch (error) {
+      console.error("Failed to create playlist", error);
+      showNotice("Could not create playlist in your account.");
+    }
   }
 
-  function deletePlaylist(playlistId: string) {
+  async function deletePlaylist(playlistId: string) {
     const playlist = playlists.find((item) => item.id === playlistId);
-    setPlaylists((items) => {
-      const next = items.filter((item) => item.id !== playlistId);
-      writeLocalJson("wavestack:playlists", next);
-      return next;
-    });
-    showNotice(playlist ? `Deleted playlist: ${playlist.name}` : "Deleted playlist.");
+
+    if (!authToken) {
+      setPlaylists((items) => {
+        const next = items.filter((item) => item.id !== playlistId);
+        writeLocalJson("wavestack:playlists", next);
+        return next;
+      });
+
+      showNotice(playlist ? `Deleted local playlist: ${playlist.name}` : "Deleted local playlist.");
+      return;
+    }
+
+    try {
+      const result = await apolloClient.mutate<{ deleteUserPlaylist: ClientPlaylist[] }>({
+        mutation: DELETE_USER_PLAYLIST_MUTATION,
+        variables: { playlistId },
+        fetchPolicy: "no-cache"
+      });
+
+      const next = result.data?.deleteUserPlaylist ?? [];
+      setPlaylists(next);
+      setSelectedPlaylistId(next[0]?.id ?? "");
+      await refetchLibraryState();
+
+      showNotice(playlist ? `Deleted playlist: ${playlist.name}` : "Deleted playlist.");
+    } catch (error) {
+      console.error("Failed to delete playlist", error);
+      showNotice("Could not delete playlist from your account.");
+    }
   }
 
-  function addToPlaylist(playlistId: string, song: Song) {
+  async function addToPlaylist(playlistId: string, song: Song) {
     rememberSongObjects([song]);
+
     if (!playlistId) {
       const name = window.prompt("Name your new playlist", "My Playlist");
 
@@ -776,24 +892,65 @@ export function App() {
         return;
       }
 
-      const playlist: ClientPlaylist = {
-        id: `playlist-${Date.now()}`,
-        name: trimmed,
-        songIds: [song.id]
-      };
+      if (!authToken) {
+        const playlist: ClientPlaylist = {
+          id: `playlist-${Date.now()}`,
+          name: trimmed,
+          songIds: [song.id],
+          songs: [song],
+          songCount: 1
+        };
 
-    setPlaylists((items) => {
-      const next = [...items, playlist];
-      writeLocalJson("wavestack:playlists", next);
-      return next;
-    });
+        setPlaylists((items) => {
+          const next = [...items, playlist];
+          writeLocalJson("wavestack:playlists", next);
+          return next;
+        });
 
-    setSelectedPlaylistId(playlist.id);
-    showNotice(`Created ${playlist.name} and added ${formatSongDisplayName(song)}.`);
-    return;
-  }
+        setSelectedPlaylistId(playlist.id);
+        showNotice(`Created local playlist ${playlist.name} and added ${formatSongDisplayName(song)}.`);
+        return;
+      }
 
-  const playlist = playlists.find((item) => item.id === playlistId);
+      try {
+        const createResult = await apolloClient.mutate<{ createUserPlaylist: ClientPlaylist[] }>({
+          mutation: CREATE_USER_PLAYLIST_MUTATION,
+          variables: { name: trimmed },
+          fetchPolicy: "no-cache"
+        });
+
+        const created = createResult.data?.createUserPlaylist?.[0];
+
+        if (!created) {
+          showNotice("Could not create playlist.");
+          return;
+        }
+
+        const addResult = await apolloClient.mutate<{ addSongToUserPlaylist: ClientPlaylist[] }>({
+          mutation: ADD_SONG_TO_USER_PLAYLIST_MUTATION,
+          variables: {
+            playlistId: created.id,
+            songId: song.id
+          },
+          fetchPolicy: "no-cache"
+        });
+
+        const next = addResult.data?.addSongToUserPlaylist ?? [];
+        setPlaylists(next);
+        setSelectedPlaylistId(created.id);
+        rememberSongObjects(next.flatMap((playlist) => playlist.songs ?? []));
+        await refetchLibraryState();
+
+        showNotice(`Created ${trimmed} and added ${formatSongDisplayName(song)}.`);
+        return;
+      } catch (error) {
+        console.error("Failed to create playlist and add song", error);
+        showNotice("Could not save playlist to your account.");
+        return;
+      }
+    }
+
+    const playlist = playlists.find((item) => item.id === playlistId);
 
     if (!playlist) {
       showNotice("Select or create a playlist first.");
@@ -805,48 +962,106 @@ export function App() {
       return;
     }
 
-    setPlaylists((items) => {
-      const next = items.map((item) => {
-        if (item.id !== playlistId) {
-          return item;
-        }
+    if (!authToken) {
+      setPlaylists((items) => {
+        const next = items.map((item) => {
+          if (item.id !== playlistId) {
+            return item;
+          }
 
-        return {
-          ...item,
-          songIds: [...item.songIds, song.id]
-        };
+          return {
+            ...item,
+            songIds: [...item.songIds, song.id],
+            songs: [...(item.songs ?? []), song],
+            songCount: (item.songCount ?? item.songIds.length) + 1
+          };
+        });
+
+        writeLocalJson("wavestack:playlists", next);
+        return next;
       });
-      writeLocalJson("wavestack:playlists", next);
-      return next;
-    });
 
-    showNotice(`Added ${formatSongDisplayName(song)} to ${playlist.name}.`);
+      showNotice(`Added ${formatSongDisplayName(song)} to local playlist ${playlist.name}.`);
+      return;
+    }
+
+    try {
+      const result = await apolloClient.mutate<{ addSongToUserPlaylist: ClientPlaylist[] }>({
+        mutation: ADD_SONG_TO_USER_PLAYLIST_MUTATION,
+        variables: {
+          playlistId,
+          songId: song.id
+        },
+        fetchPolicy: "no-cache"
+      });
+
+      const next = result.data?.addSongToUserPlaylist ?? [];
+      setPlaylists(next);
+      rememberSongObjects(next.flatMap((item) => item.songs ?? []));
+      await refetchLibraryState();
+
+      showNotice(`Added ${formatSongDisplayName(song)} to ${playlist.name}.`);
+    } catch (error) {
+      console.error("Failed to add song to playlist", error);
+      showNotice("Could not add song to your account playlist.");
+    }
   }
 
-  function removeFromPlaylist(playlistId: string, songId: string) {
+  async function removeFromPlaylist(playlistId: string, songId: string) {
     const playlist = playlists.find((item) => item.id === playlistId);
     const song = songById.get(songId);
 
-    setPlaylists((items) => {
-      const next = items.map((item) => {
-        if (item.id !== playlistId) {
-          return item;
-        }
+    if (!authToken) {
+      setPlaylists((items) => {
+        const next = items.map((item) => {
+          if (item.id !== playlistId) {
+            return item;
+          }
 
-        return {
-          ...item,
-          songIds: item.songIds.filter((id) => id !== songId)
-        };
+          return {
+            ...item,
+            songIds: item.songIds.filter((id) => id !== songId),
+            songs: (item.songs ?? []).filter((playlistSong) => playlistSong.id !== songId),
+            songCount: Math.max(0, (item.songCount ?? item.songIds.length) - 1)
+          };
+        });
+
+        writeLocalJson("wavestack:playlists", next);
+        return next;
       });
-      writeLocalJson("wavestack:playlists", next);
-      return next;
-    });
 
-    showNotice(
-      playlist && song
-        ? `Removed ${formatSongDisplayName(song)} from ${playlist.name}.`
-        : "Removed song from playlist."
-    );
+      showNotice(
+        playlist && song
+          ? `Removed ${formatSongDisplayName(song)} from local playlist ${playlist.name}.`
+          : "Removed song from local playlist."
+      );
+      return;
+    }
+
+    try {
+      const result = await apolloClient.mutate<{ removeSongFromUserPlaylist: ClientPlaylist[] }>({
+        mutation: REMOVE_SONG_FROM_USER_PLAYLIST_MUTATION,
+        variables: {
+          playlistId,
+          songId
+        },
+        fetchPolicy: "no-cache"
+      });
+
+      const next = result.data?.removeSongFromUserPlaylist ?? [];
+      setPlaylists(next);
+      rememberSongObjects(next.flatMap((item) => item.songs ?? []));
+      await refetchLibraryState();
+
+      showNotice(
+        playlist && song
+          ? `Removed ${formatSongDisplayName(song)} from ${playlist.name}.`
+          : "Removed song from playlist."
+      );
+    } catch (error) {
+      console.error("Failed to remove song from playlist", error);
+      showNotice("Could not remove song from your account playlist.");
+    }
   }
 
   function logout() {
@@ -1069,21 +1284,59 @@ export function App() {
     }
   }
 
-  function createPlaylistFromSongIds(songIds: string[]) {
+  async function createPlaylistFromSongIds(songIds: string[]) {
     const name = `Chart ${new Date().toLocaleDateString()}`;
-    const playlist: ClientPlaylist = {
-      id: `playlist-${Date.now()}`,
-      name,
-      songIds
-    };
 
-    setPlaylists((items) => {
-      const next = [...items, playlist];
-      writeLocalJson("wavestack:playlists", next);
-      return next;
-    });
-    setSelectedPlaylistId(playlist.id);
-    showNotice(`Created playlist: ${playlist.name}`);
+    if (!authToken) {
+      const playlist: ClientPlaylist = {
+        id: `playlist-${Date.now()}`,
+        name,
+        songIds
+      };
+
+      setPlaylists((items) => {
+        const next = [...items, playlist];
+        writeLocalJson("wavestack:playlists", next);
+        return next;
+      });
+      setSelectedPlaylistId(playlist.id);
+      showNotice(`Created local playlist: ${playlist.name}`);
+      return;
+    }
+
+    try {
+      const createResult = await apolloClient.mutate<{ createUserPlaylist: ClientPlaylist[] }>({
+        mutation: CREATE_USER_PLAYLIST_MUTATION,
+        variables: { name },
+        fetchPolicy: "no-cache"
+      });
+
+      const created = createResult.data?.createUserPlaylist?.[0];
+
+      if (!created) {
+        showNotice("Could not create playlist.");
+        return;
+      }
+
+      for (const songId of songIds) {
+        await apolloClient.mutate({
+          mutation: ADD_SONG_TO_USER_PLAYLIST_MUTATION,
+          variables: {
+            playlistId: created.id,
+            songId
+          },
+          fetchPolicy: "no-cache"
+        });
+      }
+
+      await refetchLibraryState();
+
+      setSelectedPlaylistId(created.id);
+      showNotice(`Created playlist: ${created.name}`);
+    } catch (error) {
+      console.error("Failed to create playlist from song IDs", error);
+      showNotice("Could not create playlist in your account.");
+    }
   }
 
   function renderSongsPage(title: string, pageSongs: Song[], emptyMessage: string) {

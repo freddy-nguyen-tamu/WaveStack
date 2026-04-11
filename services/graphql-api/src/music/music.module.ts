@@ -33,6 +33,6 @@ import { LyricsRepairService } from "./lyrics-repair.service";
     DriveLyricsService,
     LyricsRepairService
   ],
-  exports: [MusicService, DriveTrackRepository]
+  exports: [MusicService, DriveTrackRepository, GoogleDriveService]
 })
 export class MusicModule {}
