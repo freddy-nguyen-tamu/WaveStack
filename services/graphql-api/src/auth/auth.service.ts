@@ -5,6 +5,21 @@ import { OAuth2Client } from "google-auth-library";
 import { DatabaseService } from "../database/database.service";
 import { AuthUser } from "./auth.models";
 
+type GoogleUserInfo = {
+  id: string;
+  email: string;
+  name?: string;
+  picture?: string;
+};
+
+type AppUserRow = {
+  id: string;
+  email: string;
+  display_name: string;
+  avatar_url: string | null;
+  google_refresh_token: string | null;
+};
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -18,28 +33,29 @@ export class AuthService {
     return this.config.get<string>("JWT_SECRET") ?? "dev-secret-do-not-use-in-production";
   }
 
-  private get oauthClientId(): string {
-    return this.config.get<string>("GOOGLE_OAUTH_CLIENT_ID") ?? "";
-  }
+  private getOAuthClient(): OAuth2Client {
+    const clientId = this.config.get<string>("GOOGLE_OAUTH_CLIENT_ID");
+    const clientSecret = this.config.get<string>("GOOGLE_OAUTH_CLIENT_SECRET");
+    const callbackUrl = this.config.get<string>("GOOGLE_OAUTH_CALLBACK_URL");
 
-  private get oauthClientSecret(): string {
-    return this.config.get<string>("GOOGLE_OAUTH_CLIENT_SECRET") ?? "";
-  }
+    if (!clientId) {
+      throw new Error("GOOGLE_OAUTH_CLIENT_ID is missing.");
+    }
 
-  private get oauthCallbackUrl(): string {
-    return this.config.get<string>("GOOGLE_OAUTH_CALLBACK_URL") ?? "";
-  }
+    if (!clientSecret) {
+      throw new Error("GOOGLE_OAUTH_CLIENT_SECRET is missing.");
+    }
 
-  createOAuth2Client() {
-    return new OAuth2Client({
-      clientId: this.oauthClientId,
-      clientSecret: this.oauthClientSecret,
-      redirectUri: this.oauthCallbackUrl
-    });
+    if (!callbackUrl) {
+      throw new Error("GOOGLE_OAUTH_CALLBACK_URL is missing.");
+    }
+
+    return new OAuth2Client({ clientId, clientSecret, redirectUri: callbackUrl });
   }
 
   getGoogleAuthUrl(): string {
-    const client = this.createOAuth2Client();
+    const client = this.getOAuthClient();
+
     return client.generateAuthUrl({
       access_type: "offline",
       prompt: "consent",
@@ -47,67 +63,73 @@ export class AuthService {
         "https://www.googleapis.com/auth/userinfo.email",
         "https://www.googleapis.com/auth/userinfo.profile",
         "https://www.googleapis.com/auth/drive.file"
-      ],
-      include_granted_scopes: true
+      ]
     });
   }
 
-  async authenticateWithGoogleCode(code: string): Promise<{ token: string; user: AuthUser }> {
-    const client = this.createOAuth2Client();
-    const { tokens } = await client.getToken(code);
+  async handleGoogleCallback(code: string): Promise<{
+    token: string;
+    user: AuthUser;
+  }> {
+    const client = this.getOAuthClient();
 
-    if (!tokens.id_token) {
-      throw new UnauthorizedException("No id_token returned from Google");
+    this.logger.log("[Google OAuth] Exchanging code for tokens");
+
+    const { tokens } = await client.getToken(code);
+    client.setCredentials(tokens);
+
+    if (!tokens.access_token) {
+      throw new Error("No access_token returned from Google");
     }
 
-    const ticket = await client.verifyIdToken({
-      idToken: tokens.id_token,
-      audience: this.oauthClientId
+    this.logger.log("[Google OAuth] Fetching user info from Google");
+
+    const userInfoResponse = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+      headers: { authorization: `Bearer ${tokens.access_token}` }
     });
 
-    const payload = ticket.getPayload();
-    if (!payload || !payload.email) {
-      throw new UnauthorizedException("Invalid Google token payload");
+    if (!userInfoResponse.ok) {
+      throw new Error(`Could not fetch Google user info: ${userInfoResponse.status}`);
     }
 
-    const googleId = payload.sub;
-    const email = payload.email;
-    const displayName = payload.name ?? email.split("@")[0];
-    const avatarUrl = payload.picture ?? null;
+    const googleUser = (await userInfoResponse.json()) as GoogleUserInfo;
 
-    const existing = await this.database.query<AppUserRow>(
-      "SELECT id, email, display_name, avatar_url, google_refresh_token FROM app_users WHERE email = $1",
-      [email]
-    );
+    if (!googleUser.email) {
+      throw new Error("Google account did not return an email address.");
+    }
 
-    let userRow: AppUserRow;
-
+    const email = googleUser.email;
+    const displayName = googleUser.name ?? email.split("@")[0];
+    const avatarUrl = googleUser.picture ?? null;
     const refreshToken = tokens.refresh_token ?? null;
 
-    if (existing.rows.length > 0) {
-      userRow = existing.rows[0];
-      await this.database.query(
-        `UPDATE app_users
-         SET display_name = $1,
-             avatar_url = COALESCE($2, avatar_url),
-             google_id = $3,
-             google_refresh_token = COALESCE($5, google_refresh_token)
-         WHERE id = $4`,
-        [displayName, avatarUrl, googleId, userRow.id, refreshToken]
-      );
-      userRow.display_name = displayName;
-      userRow.avatar_url = avatarUrl ?? userRow.avatar_url;
-    } else {
-      const result = await this.database.query<AppUserRow>(
-        `INSERT INTO app_users (email, display_name, avatar_url, google_id, google_refresh_token)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, email, display_name, avatar_url, google_refresh_token`,
-        [email, displayName, avatarUrl, googleId, refreshToken]
-      );
-      userRow = result.rows[0];
+    this.logger.log(`[Google OAuth] Upserting user ${email}`);
+
+    const userResult = await this.database.query<AppUserRow>(
+      `INSERT INTO app_users (
+        email, display_name, avatar_url, google_id, google_refresh_token
+      ) VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (email)
+      DO UPDATE SET
+        display_name = EXCLUDED.display_name,
+        avatar_url = EXCLUDED.avatar_url,
+        google_id = COALESCE(app_users.google_id, EXCLUDED.google_id),
+        google_refresh_token = COALESCE(EXCLUDED.google_refresh_token, app_users.google_refresh_token)
+      RETURNING id, email, display_name, avatar_url, google_refresh_token`,
+      [email, displayName, avatarUrl, googleUser.id, refreshToken]
+    );
+
+    const userRow = userResult.rows[0];
+
+    if (!userRow) {
+      throw new Error("Could not create or load WaveStack user.");
     }
 
-    const token = this.createToken(userRow.id, userRow.email);
+    const token = jwt.sign({ userId: userRow.id, email: userRow.email }, this.jwtSecret, {
+      expiresIn: "7d"
+    });
+
+    this.logger.log(`[Google OAuth] Login successful for ${email}`);
 
     return {
       token,
@@ -118,6 +140,14 @@ export class AuthService {
         avatarUrl: userRow.avatar_url ?? undefined
       }
     };
+  }
+
+  createOAuth2Client() {
+    return this.getOAuthClient();
+  }
+
+  async authenticateWithGoogleCode(code: string): Promise<{ token: string; user: AuthUser }> {
+    return this.handleGoogleCallback(code);
   }
 
   async me(userId: string): Promise<AuthUser | null> {
@@ -146,16 +176,4 @@ export class AuthService {
       throw new UnauthorizedException("Invalid or expired token");
     }
   }
-
-  private createToken(userId: string, email: string): string {
-    return jwt.sign({ userId, email }, this.jwtSecret, { expiresIn: "7d" });
-  }
 }
-
-type AppUserRow = {
-  id: string;
-  email: string;
-  display_name: string;
-  avatar_url: string | null;
-  google_refresh_token: string | null;
-};

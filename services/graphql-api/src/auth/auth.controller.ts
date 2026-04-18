@@ -1,6 +1,6 @@
 import { Controller, Get, Query, Res } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { Response } from "express";
+import type { Response } from "express";
 import { AuthService } from "./auth.service";
 
 @Controller("auth")
@@ -11,32 +11,49 @@ export class AuthController {
   ) {}
 
   @Get("google/url")
-  getGoogleAuthUrl(): { url: string } {
+  getGoogleUrl() {
     return { url: this.authService.getGoogleAuthUrl() };
   }
 
   @Get("google/callback")
-  async googleCallback(@Query("code") code: string, @Res() res: Response): Promise<void> {
+  async googleCallback(
+    @Query("code") code: string | undefined,
+    @Query("error") error: string | undefined,
+    @Res() response: Response
+  ) {
     const frontendOrigin =
-      this.config.get<string>("FRONTEND_ORIGIN") ?? "https://wavestack.duckdns.org";
+      this.config.get<string>("FRONTEND_PUBLIC_ORIGIN") ??
+      this.config.get<string>("FRONTEND_ORIGIN") ??
+      "https://wavestack.duckdns.org";
+
+    const profileUrl = new URL("/profile", frontendOrigin);
+
+    if (error) {
+      profileUrl.searchParams.set("authError", error);
+      return response.redirect(profileUrl.toString());
+    }
 
     if (!code) {
-      const url = new URL("/oauth-callback", frontendOrigin);
-      url.searchParams.set("error", "Missing authorization code");
-      res.redirect(url.toString());
-      return;
+      profileUrl.searchParams.set("authError", "missing_code");
+      return response.redirect(profileUrl.toString());
     }
 
     try {
-      const { token } = await this.authService.authenticateWithGoogleCode(code);
-      const url = new URL("/oauth-callback", frontendOrigin);
-      url.searchParams.set("token", token);
-      res.redirect(url.toString());
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "OAuth authentication failed";
-      const url = new URL("/oauth-callback", frontendOrigin);
-      url.searchParams.set("error", message);
-      res.redirect(url.toString());
+      const result = await this.authService.handleGoogleCallback(code);
+
+      profileUrl.searchParams.set("token", result.token);
+      profileUrl.searchParams.set(
+        "user",
+        Buffer.from(JSON.stringify(result.user), "utf8").toString("base64url")
+      );
+
+      return response.redirect(profileUrl.toString());
+    } catch (callbackError) {
+      const message =
+        callbackError instanceof Error ? callbackError.message : String(callbackError);
+
+      profileUrl.searchParams.set("authError", message.slice(0, 160));
+      return response.redirect(profileUrl.toString());
     }
   }
 }

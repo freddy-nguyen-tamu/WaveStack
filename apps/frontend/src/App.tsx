@@ -115,34 +115,7 @@ type SongPageQueryVariables = {
   query?: string | null;
 };
 
-const fallbackSongs: Song[] = [
-  {
-    id: "demo-1",
-    title: "Cloudline",
-    artistName: "The Latency",
-    albumTitle: "Regions",
-    durationSeconds: 213,
-    streamUrl: "/demo/cloudline.mp3",
-    genreNames: ["electronic", "ambient"],
-    thumbnailUrl: "https://images.unsplash.com/photo-1493246507139-91e8fad9978e?auto=format&fit=crop&w=900&q=80",
-    driveThumbnailUrl: undefined,
-    embeddedArtworkUrl: undefined,
-    lyrics: "Instrumental demo track."
-  },
-  {
-    id: "demo-2",
-    title: "Packet Chorus",
-    artistName: "Blue Queue",
-    albumTitle: "Async Hearts",
-    durationSeconds: 188,
-    streamUrl: "/demo/packet-chorus.mp3",
-    genreNames: ["indie", "pop"],
-    thumbnailUrl: "https://images.unsplash.com/photo-1511379938547-c1f69419868d?auto=format&fit=crop&w=900&q=80",
-    driveThumbnailUrl: undefined,
-    embeddedArtworkUrl: undefined,
-    lyrics: "Demo lyrics placeholder."
-  }
-];
+const fallbackSongs: Song[] = [];
 
 function readStringArray(key: string): string[] {
   try {
@@ -272,6 +245,52 @@ export function App() {
   const [authToken, setAuthToken] = useState<string | null>(() => {
     return window.localStorage.getItem("wavestack:auth-token");
   });
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const token = url.searchParams.get("token") ?? url.searchParams.get("authToken");
+    const userParam = url.searchParams.get("user");
+    const authError = url.searchParams.get("authError");
+
+    if (!token && !authError) {
+      return;
+    }
+
+    if (authError) {
+      showNotice(`Google login failed: ${authError}`);
+      url.searchParams.delete("authError");
+      window.history.replaceState({}, document.title, url.pathname);
+      return;
+    }
+
+    try {
+      let parsedUser: AuthUser | null = null;
+
+      if (userParam) {
+        const normalized = userParam.replace(/-/g, "+").replace(/_/g, "/");
+        const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), "=");
+        const json = atob(padded);
+        parsedUser = JSON.parse(json);
+      }
+
+      window.localStorage.setItem("wavestack:auth-token", token!);
+
+      if (parsedUser) {
+        window.localStorage.setItem("wavestack:auth-user", JSON.stringify(parsedUser));
+        setAuthUser(parsedUser);
+      }
+
+      setAuthToken(token!);
+      showNotice("Signed in with Google.");
+    } catch (error) {
+      console.error("Could not parse Google login callback", error);
+      showNotice("Google login returned invalid user data.");
+    } finally {
+      url.searchParams.delete("token");
+      url.searchParams.delete("user");
+      window.history.replaceState({}, document.title, url.pathname);
+    }
+  }, []);
 
   const RECOMMENDATION_PAGE_SIZE = 24;
 
@@ -525,7 +544,7 @@ export function App() {
     ]);
   }, [libraryStateData]);
 
-  const currentSong = activeSong ?? songs[0] ?? fallbackSongs[0];
+  const currentSong = activeSong ?? songs[0] ?? null;
   const queueRef = useRef(queue);
   queueRef.current = queue;
 
@@ -1426,26 +1445,28 @@ export function App() {
         </section>
       ) : null}
 
-      <section aria-label="Player">
-        <Player
-          activeSong={currentSong}
-          queue={queue}
-          playSignal={playSignal}
-          isFavorite={favoriteIds.includes(currentSong.id)}
-          shuffleEnabled={shuffleEnabled}
-          repeatMode={repeatMode}
-          canGoPrevious={playHistory.length > 0}
-          onToggleFavorite={() => toggleFavorite(currentSong)}
-          onToggleShuffle={toggleShuffle}
-          onCycleRepeatMode={cycleRepeatMode}
-          onQueueChange={setQueue}
-          onActiveSongChange={(song) => startSong(song)}
-          onOpenDetails={setDetailsSong}
-          onNext={() => void playNextFromPolicy("manual")}
-          onPrevious={playPreviousFromHistory}
-          onEnded={() => void playNextFromPolicy("ended")}
-        />
-      </section>
+      {currentSong ? (
+        <section aria-label="Player">
+          <Player
+            activeSong={currentSong}
+            queue={queue}
+            playSignal={playSignal}
+            isFavorite={favoriteIds.includes(currentSong.id)}
+            shuffleEnabled={shuffleEnabled}
+            repeatMode={repeatMode}
+            canGoPrevious={playHistory.length > 0}
+            onToggleFavorite={() => toggleFavorite(currentSong)}
+            onToggleShuffle={toggleShuffle}
+            onCycleRepeatMode={cycleRepeatMode}
+            onQueueChange={setQueue}
+            onActiveSongChange={(song) => startSong(song)}
+            onOpenDetails={setDetailsSong}
+            onNext={() => void playNextFromPolicy("manual")}
+            onPrevious={playPreviousFromHistory}
+            onEnded={() => void playNextFromPolicy("ended")}
+          />
+        </section>
+      ) : null}
 
       <Routes>
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
@@ -1544,15 +1565,7 @@ export function App() {
         />
         <Route
           path="/oauth-callback"
-          element={
-            <OAuthCallbackPage
-              onToken={(token) => {
-                setAuthToken(token);
-                showNotice("Signed in with Google.");
-              }}
-              onError={showNotice}
-            />
-          }
+          element={<OAuthCallbackPage />}
         />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>

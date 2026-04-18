@@ -1,43 +1,12 @@
 import { useEffect } from "react";
-import { useApolloClient } from "@apollo/client";
 import { useNavigate } from "react-router-dom";
 
-type OAuthCallbackPageProps = {
-  onToken: (token: string) => void;
-  onError: (message: string) => void;
-};
-
-export function OAuthCallbackPage({ onToken, onError }: OAuthCallbackPageProps) {
-  const client = useApolloClient();
+export function OAuthCallbackPage() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const searchParams = new URLSearchParams(window.location.search);
-    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-
-    const token = searchParams.get("token") ?? hashParams.get("token");
-    const error = searchParams.get("error") ?? hashParams.get("error");
-
-    if (error) {
-      onError(`Google login failed: ${error}`);
-      navigate("/profile", { replace: true });
-      return;
-    }
-
-    if (!token) {
-      onError(`Google login did not return a token. Callback URL was ${window.location.href}`);
-      navigate("/profile", { replace: true });
-      return;
-    }
-
-    window.localStorage.setItem("wavestack:auth-token", token);
-    onToken(token);
-
-    void client.clearStore().finally(() => {
-      navigate("/profile", { replace: true });
-      window.location.reload();
-    });
-  }, [client, navigate, onError, onToken]);
+    navigate(`/profile${window.location.search}`, { replace: true });
+  }, [navigate]);
 
   return (
     <article aria-label="Completing Google sign in">
