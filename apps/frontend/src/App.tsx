@@ -115,7 +115,21 @@ type SongPageQueryVariables = {
   query?: string | null;
 };
 
-const fallbackSongs: Song[] = [];
+const fallbackSongs: Song[] = [
+  {
+    id: "demo-1",
+    title: "Cloudline",
+    artistName: "The Latency",
+    albumTitle: "Regions",
+    durationSeconds: 213,
+    streamUrl: "/demo/cloudline.mp3",
+    genreNames: ["electronic", "ambient"],
+    thumbnailUrl: "https://images.unsplash.com/photo-1493246507139-91e8fad9978e?auto=format&fit=crop&w=900&q=80",
+    driveThumbnailUrl: undefined,
+    embeddedArtworkUrl: undefined,
+    lyrics: "Instrumental demo track."
+  }
+];
 
 function readStringArray(key: string): string[] {
   try {
@@ -544,7 +558,7 @@ export function App() {
     ]);
   }, [libraryStateData]);
 
-  const currentSong = activeSong ?? songs[0] ?? null;
+  const currentSong = activeSong ?? songs[0] ?? fallbackSongs[0];
   const queueRef = useRef(queue);
   queueRef.current = queue;
 
@@ -1445,8 +1459,7 @@ export function App() {
         </section>
       ) : null}
 
-      {currentSong ? (
-        <section aria-label="Player">
+      <section aria-label="Player">
           <Player
             activeSong={currentSong}
             queue={queue}
@@ -1464,9 +1477,8 @@ export function App() {
             onNext={() => void playNextFromPolicy("manual")}
             onPrevious={playPreviousFromHistory}
             onEnded={() => void playNextFromPolicy("ended")}
-          />
-        </section>
-      ) : null}
+        />
+      </section>
 
       <Routes>
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
