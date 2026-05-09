@@ -1,10 +1,14 @@
 import { Args, Context, Mutation, Query, Resolver } from "@nestjs/graphql";
-import { PlaylistsService } from "./playlists.service";
-import { LibraryState, UserPlaylist } from "./playlists.models";
+import { AuthService } from "../auth/auth.service";
 import { Song } from "../music/music.models";
+import { LibraryState, UserPlaylist } from "./playlists.models";
+import { PlaylistsService } from "./playlists.service";
 
 type GqlContext = {
   req?: {
+    headers?: {
+      authorization?: string;
+    };
     user?: {
       id?: string;
       userId?: string;
@@ -15,17 +19,23 @@ type GqlContext = {
 
 @Resolver()
 export class PlaylistsResolver {
-  constructor(private readonly playlistsService: PlaylistsService) {}
+  constructor(
+    private readonly playlistsService: PlaylistsService,
+    private readonly authService: AuthService
+  ) {}
 
   @Query(() => LibraryState)
   async libraryState(@Context() context: GqlContext): Promise<LibraryState> {
     const userId = this.resolveUserId(context);
+    return userId
+      ? this.playlistsService.getLibraryState(userId)
+      : { favorites: [], playlists: [], recentlyPlayed: [] };
+  }
 
-    if (!userId) {
-      return { favorites: [], playlists: [], recentlyPlayed: [] };
-    }
-
-    return this.playlistsService.getLibraryState(userId);
+  @Query(() => [UserPlaylist])
+  async playlists(@Context() context: GqlContext): Promise<UserPlaylist[]> {
+    const userId = this.resolveUserId(context);
+    return userId ? this.playlistsService.getPlaylists(userId) : [];
   }
 
   @Query(() => [Song])
@@ -36,12 +46,6 @@ export class PlaylistsResolver {
 
   @Query(() => [UserPlaylist])
   async userPlaylists(@Context() context: GqlContext): Promise<UserPlaylist[]> {
-    const userId = this.resolveUserId(context);
-    return userId ? this.playlistsService.getPlaylists(userId) : [];
-  }
-
-  @Query(() => [UserPlaylist])
-  async playlists(@Context() context: GqlContext): Promise<UserPlaylist[]> {
     const userId = this.resolveUserId(context);
     return userId ? this.playlistsService.getPlaylists(userId) : [];
   }
@@ -98,7 +102,9 @@ export class PlaylistsResolver {
     @Args("songId") songId: string
   ): Promise<UserPlaylist[]> {
     const userId = this.resolveUserId(context);
-    return userId ? this.playlistsService.addSongToPlaylist(userId, playlistId, songId) : [];
+    return userId
+      ? this.playlistsService.addSongToPlaylist(userId, playlistId, songId)
+      : [];
   }
 
   @Mutation(() => [UserPlaylist])
@@ -108,15 +114,34 @@ export class PlaylistsResolver {
     @Args("songId") songId: string
   ): Promise<UserPlaylist[]> {
     const userId = this.resolveUserId(context);
-    return userId ? this.playlistsService.removeSongFromPlaylist(userId, playlistId, songId) : [];
+    return userId
+      ? this.playlistsService.removeSongFromPlaylist(userId, playlistId, songId)
+      : [];
   }
 
   private resolveUserId(context: GqlContext): string | null {
-    return (
+    const contextUserId =
       context.req?.user?.userId ??
       context.req?.user?.id ??
       context.req?.user?.sub ??
-      null
-    );
+      null;
+
+    if (contextUserId) {
+      return contextUserId;
+    }
+
+    const authHeader = context.req?.headers?.authorization ?? "";
+
+    if (!authHeader.startsWith("Bearer ")) {
+      return null;
+    }
+
+    try {
+      const token = authHeader.slice(7);
+      const payload = this.authService.verifyToken(token);
+      return payload.userId;
+    } catch {
+      return null;
+    }
   }
 }

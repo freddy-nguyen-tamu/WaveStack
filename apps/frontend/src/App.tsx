@@ -539,13 +539,22 @@ export function App() {
   }, [songs, songById]);
 
   useEffect(() => {
-    if (!libraryStateData?.libraryState) {
+    if (!authToken || !libraryStateData?.libraryState) {
       return;
     }
 
     const backendFavorites = libraryStateData.libraryState.favorites ?? [];
     const backendRecent = libraryStateData.libraryState.recentlyPlayed ?? [];
     const backendPlaylists = libraryStateData.libraryState.playlists ?? [];
+
+    const hasAnyBackendState =
+      backendFavorites.length > 0 ||
+      backendRecent.length > 0 ||
+      backendPlaylists.length > 0;
+
+    if (!hasAnyBackendState) {
+      return;
+    }
 
     setFavoriteIds(backendFavorites.map((song: Song) => song.id));
     setRecentSongIds(backendRecent.map((song: Song) => song.id));
@@ -556,7 +565,7 @@ export function App() {
       ...backendRecent,
       ...backendPlaylists.flatMap((playlist: ClientPlaylist) => playlist.songs ?? [])
     ]);
-  }, [libraryStateData]);
+  }, [authToken, libraryStateData]);
 
   const currentSong = activeSong ?? songs[0] ?? fallbackSongs[0];
   const queueRef = useRef(queue);

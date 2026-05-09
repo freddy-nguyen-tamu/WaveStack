@@ -1,11 +1,12 @@
 import { Module } from "@nestjs/common";
+import { AuthModule } from "../auth/auth.module";
 import { DatabaseModule } from "../database/database.module";
 import { MusicModule } from "../music/music.module";
 import { PlaylistsResolver } from "./playlists.resolver";
 import { PlaylistsService } from "./playlists.service";
 
 @Module({
-  imports: [DatabaseModule, MusicModule],
+  imports: [AuthModule, DatabaseModule, MusicModule],
   providers: [PlaylistsResolver, PlaylistsService],
   exports: [PlaylistsService]
 })
