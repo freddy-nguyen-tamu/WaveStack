@@ -1790,3 +1790,22 @@ article > section > h3 {
     width: 3.4rem !important;
   }
 }
+
+.app-banner {
+  width: calc(100% - (var(--space-page) * 2));
+  margin: 1rem auto 0;
+  border-left: var(--line);
+  padding: 0.85rem 0 0.85rem 1rem;
+  background: transparent;
+  color: var(--color-ink);
+}
+
+.app-banner--error {
+  border-color: var(--color-red);
+  color: var(--color-red);
+}
+
+.app-banner--status {
+  border-color: var(--color-ink);
+  color: var(--color-ink);
+}

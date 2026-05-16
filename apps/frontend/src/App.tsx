@@ -547,18 +547,13 @@ export function App() {
     const backendRecent = libraryStateData.libraryState.recentlyPlayed ?? [];
     const backendPlaylists = libraryStateData.libraryState.playlists ?? [];
 
-    const hasAnyBackendState =
-      backendFavorites.length > 0 ||
-      backendRecent.length > 0 ||
-      backendPlaylists.length > 0;
-
-    if (!hasAnyBackendState) {
-      return;
-    }
-
     setFavoriteIds(backendFavorites.map((song: Song) => song.id));
     setRecentSongIds(backendRecent.map((song: Song) => song.id));
     setPlaylists(backendPlaylists);
+
+    writeLocalJson("wavestack:favorites", backendFavorites.map((song: Song) => song.id));
+    writeLocalJson("wavestack:recent", backendRecent.map((song: Song) => song.id));
+    writeLocalJson("wavestack:playlists", backendPlaylists);
 
     rememberSongObjects([
       ...backendFavorites,
@@ -1460,12 +1455,11 @@ export function App() {
         />
       </header>
 
-      {notice ? <p role="status">{notice}</p> : null}
+      {notice ? <p className="app-banner app-banner--status" role="status">{notice}</p> : null}
       {error ? (
-        <section role="alert">
-          <h2>Could not load music library</h2>
-          <p>{error.message}</p>
-        </section>
+        <p className="app-banner app-banner--error" role="alert">
+          Could not load music library: {error.message}
+        </p>
       ) : null}
 
       <section aria-label="Player">
