@@ -66,6 +66,8 @@ export function Player({
   const [message, setMessage] = useState("");
 
   const displayName = formatSongDisplayName(activeSong);
+  const songTitle = activeSong.title?.trim() || "Untitled Track";
+  const songArtist = activeSong.artistName?.trim() || "Unknown Artist";
   const safeDuration = duration || activeSong.durationSeconds || 0;
   const progressPercent = safeDuration > 0 ? Math.min(100, (currentTime / safeDuration) * 100) : 0;
 
@@ -240,8 +242,10 @@ export function Player({
   return (
     <>
       <article className="player-card">
-        <h2>{formatSongDisplayName(activeSong)}</h2>
-        <p>{activeSong.albumTitle}</p>
+        <div className="player-card__identity">
+          <h2 title={songTitle}>{songTitle}</h2>
+          <p title={songArtist}>{songArtist}</p>
+        </div>
 
         <audio
           ref={audioRef}
@@ -264,7 +268,7 @@ export function Player({
           }}
         />
 
-        {message ? <p role="status">{message}</p> : null}
+        {message ? <p className="player-card__message" role="status" title={message}>{message}</p> : null}
         {playError ? <p role="alert">Playback error: {playError}</p> : null}
 
         <div className="player-actions">
@@ -307,6 +311,14 @@ export function Player({
           </label>
         </div>
 
+        <div
+          className="player-card__progress"
+          aria-hidden="true"
+          style={{ "--progress": `${progressPercent}%` } as React.CSSProperties}
+        >
+          <span />
+        </div>
+
       </article>
 
       {hasPlaybackHistory ? (
@@ -343,8 +355,8 @@ export function Player({
                   }}
                   title={`Open details for ${displayName}`}
                 >
-                  <strong title={displayName}>{displayName}</strong>
-                  <span title={activeSong.albumTitle}>{activeSong.albumTitle}</span>
+                  <strong title={songTitle}>{songTitle}</strong>
+                  <span title={songArtist}>{songArtist}</span>
                 </button>
               </div>
 
@@ -360,7 +372,8 @@ export function Player({
                   aria-label="Toggle shuffle"
                   aria-pressed={shuffleEnabled}
                   onClick={onToggleShuffle}
-                  className={shuffleEnabled ? "mini-player__mode-button mini-player__mode-button--active" : "mini-player__mode-button"}
+                  className={shuffleEnabled ? "mini-player__mode-button mini-player__mode-button--shuffle mini-player__mode-button--active" : "mini-player__mode-button mini-player__mode-button--shuffle"}
+                  title={shuffleEnabled ? "Shuffle on" : "Shuffle off"}
                 >
                   <Shuffle aria-hidden="true" />
                 </button>
@@ -382,7 +395,7 @@ export function Player({
                   aria-label={repeatLabel}
                   aria-pressed={repeatMode !== "none"}
                   onClick={onCycleRepeatMode}
-                  className={repeatMode !== "none" ? "mini-player__mode-button mini-player__mode-button--active" : "mini-player__mode-button"}
+                  className={`mini-player__mode-button mini-player__mode-button--repeat mini-player__mode-button--repeat-${repeatMode}${repeatMode !== "none" ? " mini-player__mode-button--active" : ""}`}
                   title={repeatLabel}
                 >
                   <RepeatIcon aria-hidden="true" />

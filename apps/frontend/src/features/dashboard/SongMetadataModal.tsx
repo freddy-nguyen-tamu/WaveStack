@@ -41,6 +41,7 @@ type LyricsRepairMutationVariables = {
 export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalProps) {
   const attemptedAutoRepairRef = useRef("");
   const [lyricsRepairMessage, setLyricsRepairMessage] = useState("");
+  const [showArtwork, setShowArtwork] = useState(true);
 
   const { data, loading, refetch } = useQuery<SongDetailsQueryData, SongDetailsQueryVariables>(
     SONG_DETAILS_QUERY,
@@ -59,6 +60,10 @@ export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalPr
   const details: Song = data?.songDetails ?? song;
   const genreNames: string[] = details.genreNames ?? [];
   const lyrics = details.lyrics?.trim();
+
+  useEffect(() => {
+    setShowArtwork(true);
+  }, [details.id]);
 
   async function extractLyricsForThisSong(manual = false) {
     if (repairingLyrics) {
@@ -119,42 +124,25 @@ export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalPr
       }}
     >
       <div className="song-modal" onClick={(event) => event.stopPropagation()}>
-        <SongArtwork
-          song={details}
-          wrapClassName="song-modal__hero"
-          fallbackClassName="song-modal__fallback"
-          loading="eager"
-          eager
-        />
-
-        <div className="song-modal__body song-modal__content">
-          <button
-            className="song-modal__play-button"
-            type="button"
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              onPlay();
-            }}
-          >
-            <Play aria-hidden="true" /> Play without closing
-          </button>
-
+        <div className={showArtwork ? "song-modal__body song-modal__content" : "song-modal__body song-modal__content song-modal__content--art-hidden"}>
           <h2>{details.title}</h2>
           <p className="song-modal__artist">{details.artistName}</p>
 
-          {details.albumTitle ? (
-            <p className="song-modal__album">{details.albumTitle}</p>
-          ) : null}
-
-          {genreNames.length ? (
-            <div className="song-modal__genres">
-              {genreNames.map((genre) => (
-                <span key={genre} className="song-modal__genre-tag">
-                  {genre}
-                </span>
-              ))}
-            </div>
+          {showArtwork ? (
+            <button
+              type="button"
+              className="song-modal__art-button"
+              onClick={() => setShowArtwork(false)}
+              aria-label="Hide thumbnail and expand lyrics"
+            >
+              <SongArtwork
+                song={details}
+                wrapClassName="song-modal__hero"
+                fallbackClassName="song-modal__fallback"
+                loading="eager"
+                eager
+              />
+            </button>
           ) : null}
 
           <section className="song-modal__lyrics-panel" aria-label="Lyrics">
@@ -194,8 +182,50 @@ export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalPr
             )}
           </section>
 
-          <section aria-label="All metadata">
-            <h3>All metadata</h3>
+          <div className="song-modal__actions">
+            <button
+              className="song-modal__play-button"
+              type="button"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onPlay();
+              }}
+            >
+              <Play aria-hidden="true" /> Play without closing
+            </button>
+
+            {!showArtwork ? (
+              <button
+                type="button"
+                className="song-modal__secondary-button"
+                onClick={() => setShowArtwork(true)}
+              >
+                Show thumbnail
+              </button>
+            ) : null}
+          </div>
+
+          <details className="song-modal__metadata" aria-label="All metadata">
+            <summary>All metadata</summary>
+
+            {details.albumTitle || genreNames.length ? (
+              <div className="song-modal__metadata-summary">
+                {details.albumTitle ? (
+                  <p className="song-modal__album">{details.albumTitle}</p>
+                ) : null}
+
+                {genreNames.length ? (
+                  <div className="song-modal__genres">
+                    {genreNames.map((genre) => (
+                      <span key={genre} className="song-modal__genre-tag">
+                        {genre}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
 
             <table className="song-modal__table">
               <tbody>
@@ -266,7 +296,7 @@ export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalPr
                 </tr>
               </tbody>
             </table>
-          </section>
+          </details>
         </div>
 
         <button

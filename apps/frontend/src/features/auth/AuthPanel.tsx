@@ -46,19 +46,24 @@ export function AuthPanel({ user, onLogout }: AuthPanelProps) {
   }
 
   if (user) {
+    const initials = user.displayName
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part.charAt(0).toUpperCase())
+      .join("") || "U";
+
     return (
-      <section className="auth-panel" aria-label="Account">
-        {user.avatarUrl ? (
-          <img className="auth-panel__avatar" src={user.avatarUrl} alt="" />
-        ) : null}
-
-        <div className="auth-panel__user">
-          <strong>{user.displayName}</strong>
-          <small>{user.email}</small>
-        </div>
-
-        <Link className="auth-panel__profile-link" to="/profile">
-          View profile
+      <section className="auth-panel auth-panel--signed-in" aria-label="Account">
+        <Link className="auth-panel__profile-link" to="/profile" aria-label={`View profile for ${user.displayName}`}>
+          {user.avatarUrl ? (
+            <img className="auth-panel__avatar" src={user.avatarUrl} alt="" />
+          ) : (
+            <span className="auth-panel__avatar auth-panel__avatar--fallback" aria-hidden="true">
+              {initials}
+            </span>
+          )}
+          <span>View profile</span>
         </Link>
 
         <button type="button" onClick={onLogout}>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useApolloClient, useMutation, useQuery } from "@apollo/client";
 import { useInfiniteScroll } from "./hooks/useInfiniteScroll";
-import { Activity, Clock, Heart, Library, ListMusic, Search, TrendingUp, UserCircle } from "lucide-react";
+import { Activity, Clock, Heart, Library, ListMusic, Search, TrendingUp } from "lucide-react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import {
     LISTENING_HABIT_SUMMARY_QUERY,
@@ -1407,53 +1407,40 @@ export function App() {
             <h1>WaveStack</h1>
             <p>Cloud-native music streaming platform</p>
           </div>
-
-          <NavLink
-            to="/profile"
-            className="profile-shortcut"
-            aria-label={authUser ? `Open profile for ${authUser.displayName}` : "Open profile"}
-          >
-            {authUser?.avatarUrl ? (
-              <img src={authUser.avatarUrl} alt="" />
-            ) : (
-              <UserCircle aria-hidden="true" />
-            )}
-            <span>{authUser ? authUser.displayName : "Profile"}</span>
-          </NavLink>
         </div>
-
-        <nav aria-label="Primary">
-          <NavLink to="/dashboard">
-            <Activity aria-hidden="true" /> Dashboard
-          </NavLink>
-          <NavLink to="/library">
-            <Library aria-hidden="true" /> Library
-          </NavLink>
-          <NavLink to="/search">
-            <Search aria-hidden="true" /> Search
-          </NavLink>
-          <NavLink to="/favorites">
-            <Heart aria-hidden="true" /> Favorites ({favoriteSongs.length})
-          </NavLink>
-          <NavLink to="/recent">
-            <Clock aria-hidden="true" /> Recent ({recentSongs.length})
-          </NavLink>
-          <button type="button" onClick={() => setQueueDrawerOpen(true)} aria-label="Open queue">
-            <ListMusic aria-hidden="true" /> Queue ({queue.length})
-          </button>
-          <NavLink to="/stats">
-            <TrendingUp aria-hidden="true" /> Stats
-          </NavLink>
-          <NavLink to="/playlists">
-            Playlists ({playlists.length})
-          </NavLink>
-        </nav>
 
         <AuthPanel
           user={authUser}
           onLogout={logout}
         />
       </header>
+
+      <nav className="app-nav" aria-label="Primary">
+        <NavLink to="/dashboard">
+          <Activity aria-hidden="true" /> Dashboard
+        </NavLink>
+        <NavLink to="/library">
+          <Library aria-hidden="true" /> Library
+        </NavLink>
+        <NavLink to="/search">
+          <Search aria-hidden="true" /> Search
+        </NavLink>
+        <NavLink to="/favorites">
+          <Heart aria-hidden="true" /> Favorites ({favoriteSongs.length})
+        </NavLink>
+        <NavLink to="/recent">
+          <Clock aria-hidden="true" /> Recent ({recentSongs.length})
+        </NavLink>
+        <button type="button" onClick={() => setQueueDrawerOpen(true)} aria-label="Open queue">
+          <ListMusic aria-hidden="true" /> Queue ({queue.length})
+        </button>
+        <NavLink to="/stats">
+          <TrendingUp aria-hidden="true" /> Stats
+        </NavLink>
+        <NavLink to="/playlists">
+          Playlists ({playlists.length})
+        </NavLink>
+      </nav>
 
       {notice ? <p className="app-banner app-banner--status" role="status">{notice}</p> : null}
       {error ? (
