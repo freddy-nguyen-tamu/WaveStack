@@ -1,14 +1,20 @@
 import { useEffect } from "react";
-import { X, Trash2, Play } from "lucide-react";
-import type { Song } from "../../App";
+import { X, Trash2 } from "lucide-react";
+import type { ClientPlaylist, Song } from "../../App";
 import { formatSongDisplayName } from "../../song-format";
+import { SongActions } from "../../components/SongActions";
 
 type QueueDrawerProps = {
   open: boolean;
   queue: Song[];
   currentSongId: string | null;
+  playlists: ClientPlaylist[];
+  favoriteIds: string[];
   onClose: () => void;
   onPlay: (song: Song) => void;
+  onQueue: (song: Song) => void;
+  onToggleFavorite: (song: Song) => void;
+  onAddToPlaylist: (playlistId: string, song: Song) => void;
   onRemove: (songId: string) => void;
   onClear: () => void;
 };
@@ -17,8 +23,13 @@ export function QueueDrawer({
   open,
   queue,
   currentSongId,
+  playlists,
+  favoriteIds,
   onClose,
   onPlay,
+  onQueue,
+  onToggleFavorite,
+  onAddToPlaylist,
   onRemove,
   onClear
 }: QueueDrawerProps) {
@@ -88,19 +99,21 @@ export function QueueDrawer({
                       key={song.id}
                       className={`queue-drawer__item${isCurrent ? " queue-drawer__item--current" : ""}`}
                     >
-                      <button
-                        type="button"
-                        className="queue-drawer__play"
-                        onClick={() => onPlay(song)}
-                        aria-label={`Play ${formatSongDisplayName(song)}`}
-                      >
-                        {isCurrent ? <Play aria-hidden="true" fill="currentColor" /> : <Play aria-hidden="true" />}
-                      </button>
-
                       <span className="queue-drawer__name">
                         {isCurrent ? <strong>Now: </strong> : null}
                         {formatSongDisplayName(song)}
                       </span>
+
+                      <SongActions
+                        song={song}
+                        playlists={playlists}
+                        isFavorite={favoriteIds.includes(song.id)}
+                        onPlay={onPlay}
+                        onQueue={onQueue}
+                        onToggleFavorite={onToggleFavorite}
+                        onAddToPlaylist={onAddToPlaylist}
+                        className="song-actions--queue"
+                      />
 
                       <button
                         type="button"

@@ -175,10 +175,7 @@ function LibraryPage({
   librarySongs,
   libraryCursor,
   playlists,
-  selectedPlaylistId,
   favoriteIds,
-  onSelectedPlaylistChange,
-  onCreatePlaylist,
   onAddToPlaylist,
   onPlay,
   onQueue,
@@ -189,10 +186,7 @@ function LibraryPage({
   librarySongs: Song[];
   libraryCursor: string | null;
   playlists: ClientPlaylist[];
-  selectedPlaylistId: string;
   favoriteIds: string[];
-  onSelectedPlaylistChange: (id: string) => void;
-  onCreatePlaylist: (name: string) => void;
   onAddToPlaylist: (id: string, song: Song) => void;
   onPlay: (song: Song) => void;
   onQueue: (song: Song) => void;
@@ -213,11 +207,8 @@ function LibraryPage({
         title="Library"
         songs={librarySongs.length ? librarySongs : songs}
         playlists={playlists}
-        selectedPlaylistId={selectedPlaylistId}
         favoriteIds={favoriteIds}
         emptyMessage="No songs found."
-        onSelectedPlaylistChange={onSelectedPlaylistChange}
-        onCreatePlaylist={onCreatePlaylist}
         onAddToPlaylist={onAddToPlaylist}
         onPlay={onPlay}
         onQueue={onQueue}
@@ -1385,11 +1376,8 @@ export function App() {
           title={title}
           songs={pageSongs}
           playlists={playlists}
-          selectedPlaylistId={selectedPlaylistId}
           favoriteIds={favoriteIds}
           emptyMessage={emptyMessage}
-          onSelectedPlaylistChange={setSelectedPlaylistId}
-          onCreatePlaylist={createPlaylist}
           onAddToPlaylist={addToPlaylist}
           onPlay={playSong}
           onQueue={queueSong}
@@ -1483,7 +1471,12 @@ export function App() {
                 recentlyPlayed={recentSongs}
                 recommendations={visibleRecommendations}
                 habitSummaries={habitSummaries}
+                playlists={playlists}
+                favoriteIds={favoriteIds}
                 onPlay={playSong}
+                onQueue={queueSong}
+                onToggleFavorite={toggleFavorite}
+                onAddToPlaylist={addToPlaylist}
                 userName={authUser?.displayName}
                 onLoadMoreRecommendations={hasToken ? loadMoreRecommendations : undefined}
                 hasMoreRecommendations={hasToken && hasMoreRecommendations}
@@ -1499,10 +1492,7 @@ export function App() {
             librarySongs={librarySongs}
             libraryCursor={libraryCursor}
             playlists={playlists}
-            selectedPlaylistId={selectedPlaylistId}
             favoriteIds={favoriteIds}
-            onSelectedPlaylistChange={setSelectedPlaylistId}
-            onCreatePlaylist={createPlaylist}
             onAddToPlaylist={addToPlaylist}
             onPlay={playSong}
             onQueue={queueSong}
@@ -1547,7 +1537,15 @@ export function App() {
           path="/stats"
           element={
             <section aria-label="Stats">
-              <StatsPage />
+              <StatsPage
+                songs={allKnownSongs}
+                playlists={playlists}
+                favoriteIds={favoriteIds}
+                onPlay={playSong}
+                onQueue={queueSong}
+                onToggleFavorite={toggleFavorite}
+                onAddToPlaylist={addToPlaylist}
+              />
             </section>
           }
         />
@@ -1558,10 +1556,15 @@ export function App() {
               user={authUser}
               favorites={favoriteSongs}
               recentlyPlayed={recentSongs}
+              playlists={playlists}
+              favoriteIds={favoriteIds}
               queueLength={queue.length}
               habitSummaries={habitSummaries}
               onLogout={logout}
               onPlay={playSong}
+              onQueue={queueSong}
+              onToggleFavorite={toggleFavorite}
+              onAddToPlaylist={addToPlaylist}
             />
           }
         />
@@ -1576,6 +1579,11 @@ export function App() {
         <SongMetadataModal
           song={detailsSong}
           onPlay={() => playSong(detailsSong)}
+          onQueue={() => queueSong(detailsSong)}
+          isFavorite={favoriteIds.includes(detailsSong.id)}
+          playlists={playlists}
+          onToggleFavorite={() => toggleFavorite(detailsSong)}
+          onAddToPlaylist={(playlistId) => addToPlaylist(playlistId, detailsSong)}
           onClose={() => setDetailsSong(null)}
         />
       ) : null}
@@ -1584,10 +1592,15 @@ export function App() {
         open={queueDrawerOpen}
         queue={queue}
         currentSongId={currentSong.id}
+        playlists={playlists}
+        favoriteIds={favoriteIds}
         onClose={() => setQueueDrawerOpen(false)}
         onPlay={(song) => {
           playSong(song);
         }}
+        onQueue={queueSong}
+        onToggleFavorite={toggleFavorite}
+        onAddToPlaylist={addToPlaylist}
         onRemove={removeFromQueue}
         onClear={() => {
           setQueue([]);

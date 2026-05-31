@@ -1,10 +1,12 @@
 import { Activity, Clock, Flame, Heart, TrendingUp } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { HabitSummaryEntry, RecommendResult, Song } from "../../App";
+import type { ClientPlaylist } from "../../App";
 import { formatSeconds, getSongCardSize, getWeightedSongLength } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
 import { SongMetadataModal } from "./SongMetadataModal";
 import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
+import { SongActions } from "../../components/SongActions";
 
 type DashboardProps = {
   loading: boolean;
@@ -13,7 +15,12 @@ type DashboardProps = {
   recentlyPlayed: Song[];
   recommendations?: RecommendResult[];
   habitSummaries: Record<string, HabitSummaryEntry[]>;
+  playlists: ClientPlaylist[];
+  favoriteIds: string[];
   onPlay: (song: Song) => void;
+  onQueue: (song: Song) => void;
+  onToggleFavorite: (song: Song) => void;
+  onAddToPlaylist: (playlistId: string, song: Song) => void;
   userName?: string;
   onLoadMoreRecommendations?: () => void;
   hasMoreRecommendations?: boolean;
@@ -27,7 +34,12 @@ export function Dashboard({
   recentlyPlayed,
   recommendations = [],
   habitSummaries,
+  playlists,
+  favoriteIds,
   onPlay,
+  onQueue,
+  onToggleFavorite,
+  onAddToPlaylist,
   userName,
   onLoadMoreRecommendations,
   hasMoreRecommendations,
@@ -186,14 +198,16 @@ export function Dashboard({
                   </span>
                 </button>
 
-                <button
-                  className="song-tile__play"
-                  type="button"
-                  onClick={() => onPlay(song)}
-                  aria-label={`Play ${song.artistName} - ${song.title}`}
-                >
-                  Play
-                </button>
+                <SongActions
+                  song={song}
+                  playlists={playlists}
+                  isFavorite={favoriteIds.includes(song.id)}
+                  onPlay={onPlay}
+                  onQueue={onQueue}
+                  onToggleFavorite={onToggleFavorite}
+                  onAddToPlaylist={onAddToPlaylist}
+                  className="song-actions--tile"
+                />
               </article>
             );
           })}
@@ -220,6 +234,11 @@ export function Dashboard({
         <SongMetadataModal
           song={selectedSong}
           onPlay={() => onPlay(selectedSong)}
+          onQueue={() => onQueue(selectedSong)}
+          isFavorite={favoriteIds.includes(selectedSong.id)}
+          playlists={playlists}
+          onToggleFavorite={() => onToggleFavorite(selectedSong)}
+          onAddToPlaylist={(playlistId) => onAddToPlaylist(playlistId, selectedSong)}
           onClose={() => setSelectedSong(null)}
         />
       ) : null}

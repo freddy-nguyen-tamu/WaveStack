@@ -1,18 +1,24 @@
 import { createPortal } from "react-dom";
 import { useEffect, useRef, useState } from "react";
-import { Play, RefreshCw, X } from "lucide-react";
+import { RefreshCw, X } from "lucide-react";
 import { useMutation, useQuery } from "@apollo/client";
-import type { Song } from "../../App";
+import type { ClientPlaylist, Song } from "../../App";
 import {
   REPAIR_EMBEDDED_LYRICS_FOR_SONG_MUTATION,
   SONG_DETAILS_QUERY
 } from "../../api";
 import { formatBytes, formatSeconds, formatSongDisplayName } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
+import { SongActions } from "../../components/SongActions";
 
 type SongMetadataModalProps = {
   song: Song;
   onPlay: () => void;
+  onQueue: () => void;
+  isFavorite: boolean;
+  playlists: ClientPlaylist[];
+  onToggleFavorite: () => void;
+  onAddToPlaylist: (playlistId: string) => void | Promise<void>;
   onClose: () => void;
 };
 
@@ -38,7 +44,16 @@ type LyricsRepairMutationVariables = {
   songId: string;
 };
 
-export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalProps) {
+export function SongMetadataModal({
+  song,
+  onPlay,
+  onQueue,
+  isFavorite,
+  playlists,
+  onToggleFavorite,
+  onAddToPlaylist,
+  onClose
+}: SongMetadataModalProps) {
   const attemptedAutoRepairRef = useRef("");
   const [lyricsRepairMessage, setLyricsRepairMessage] = useState("");
   const [showArtwork, setShowArtwork] = useState(true);
@@ -128,6 +143,17 @@ export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalPr
           <h2>{details.title}</h2>
           <p className="song-modal__artist">{details.artistName}</p>
 
+          <SongActions
+            song={details}
+            playlists={playlists}
+            isFavorite={isFavorite}
+            onPlay={() => onPlay()}
+            onQueue={() => onQueue()}
+            onToggleFavorite={() => onToggleFavorite()}
+            onAddToPlaylist={(playlistId) => onAddToPlaylist(playlistId)}
+            className="song-actions--modal"
+          />
+
           {showArtwork ? (
             <button
               type="button"
@@ -182,20 +208,8 @@ export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalPr
             )}
           </section>
 
-          <div className="song-modal__actions">
-            <button
-              className="song-modal__play-button"
-              type="button"
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onPlay();
-              }}
-            >
-              <Play aria-hidden="true" /> Play without closing
-            </button>
-
-            {!showArtwork ? (
+          {!showArtwork ? (
+            <div className="song-modal__actions">
               <button
                 type="button"
                 className="song-modal__secondary-button"
@@ -203,8 +217,8 @@ export function SongMetadataModal({ song, onPlay, onClose }: SongMetadataModalPr
               >
                 Show thumbnail
               </button>
-            ) : null}
-          </div>
+            </div>
+          ) : null}
 
           <details className="song-modal__metadata" aria-label="All metadata">
             <summary>All metadata</summary>

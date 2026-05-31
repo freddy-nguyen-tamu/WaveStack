@@ -1,9 +1,10 @@
 import { CalendarDays, Clock, DownloadCloud, Heart, ListMusic, UserCircle } from "lucide-react";
 import { useMutation } from "@apollo/client";
-import type { AuthUser, HabitSummaryEntry, Song } from "../../App";
+import type { AuthUser, ClientPlaylist, HabitSummaryEntry, Song } from "../../App";
 import { EXPORT_LISTENING_HABITS_MUTATION, TEST_PRIVATE_DRIVE_WRITE_MUTATION } from "../../api";
 import { formatSeconds, formatSongDisplayName } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
+import { SongActions } from "../../components/SongActions";
 import { ListeningArchivePanel } from "./ListeningArchivePanel";
 
 type DriveExportResult = {
@@ -19,10 +20,15 @@ type ProfilePageProps = {
   user: AuthUser | null;
   favorites: Song[];
   recentlyPlayed: Song[];
+  playlists: ClientPlaylist[];
+  favoriteIds: string[];
   queueLength: number;
   habitSummaries: Record<string, HabitSummaryEntry[]>;
   onLogout: () => void;
   onPlay: (song: Song) => void;
+  onQueue: (song: Song) => void;
+  onToggleFavorite: (song: Song) => void;
+  onAddToPlaylist: (playlistId: string, song: Song) => void;
 };
 
 const periodLabels: Record<string, string> = {
@@ -36,10 +42,15 @@ export function ProfilePage({
   user,
   favorites,
   recentlyPlayed,
+  playlists,
+  favoriteIds,
   queueLength,
   habitSummaries,
   onLogout,
-  onPlay
+  onPlay,
+  onQueue,
+  onToggleFavorite,
+  onAddToPlaylist
 }: ProfilePageProps) {
   const [testDriveWrite, testResult] = useMutation<{ testPrivateDriveWrite: DriveExportResult }>(
     TEST_PRIVATE_DRIVE_WRITE_MUTATION
@@ -159,14 +170,23 @@ export function ProfilePage({
         {recentlyPlayed.length ? (
           <div className="profile-song-list">
             {recentlyPlayed.slice(0, 8).map((song) => (
-              <button key={song.id} type="button" onClick={() => onPlay(song)}>
+              <div key={song.id} className="profile-song-list__item">
                 <SongArtwork
                   song={song}
                   wrapClassName="profile-song-list__art"
                   fallbackClassName="profile-song-list__fallback"
                 />
                 <span>{formatSongDisplayName(song)}</span>
-              </button>
+                <SongActions
+                  song={song}
+                  playlists={playlists}
+                  isFavorite={favoriteIds.includes(song.id)}
+                  onPlay={onPlay}
+                  onQueue={onQueue}
+                  onToggleFavorite={onToggleFavorite}
+                  onAddToPlaylist={onAddToPlaylist}
+                />
+              </div>
             ))}
           </div>
         ) : (

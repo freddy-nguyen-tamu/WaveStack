@@ -1,7 +1,8 @@
-import { Heart, ListPlus, Play, Trash2 } from "lucide-react";
+import { ListPlus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { ClientPlaylist, Song } from "../../App";
 import { formatSongDisplayName } from "../../song-format";
+import { SongActions } from "../../components/SongActions";
 
 type PlaylistPanelProps = {
   songs: Song[];
@@ -103,8 +104,8 @@ export function PlaylistPanel({
     setMessage(`Deleted playlist: ${playlist.name}`);
   }
 
-  function add(song: Song) {
-    onAddToPlaylist(selectedPlaylistId, song);
+  function add(playlistId: string, song: Song) {
+    onAddToPlaylist(playlistId, song);
     setMessage(`Playlist action sent for: ${formatSongDisplayName(song)}`);
   }
 
@@ -172,23 +173,23 @@ export function PlaylistPanel({
           {selectedPlaylistSongs.length ? (
             <ol>
               {selectedPlaylistSongs.map((song) => {
-                const isFavorite = favoriteIds.includes(song.id);
+                  const isFavorite = favoriteIds.includes(song.id);
 
                 return (
                   <li key={song.id}>
-                    <button type="button" onClick={() => play(song)}>
-                      <Play aria-hidden="true" /> Play
-                    </button>
-                    <button type="button" onClick={() => queue(song)}>
-                      Queue
-                    </button>
-                    <button type="button" onClick={() => toggleFavorite(song, isFavorite)} aria-pressed={isFavorite}>
-                      <Heart aria-hidden="true" /> {isFavorite ? "Unfavorite" : "Favorite"}
-                    </button>
+                    <strong>{formatSongDisplayName(song)}</strong>
+                    <SongActions
+                      song={song}
+                      playlists={playlists}
+                      isFavorite={isFavorite}
+                      onPlay={play}
+                      onQueue={queue}
+                      onToggleFavorite={(item) => toggleFavorite(item, isFavorite)}
+                      onAddToPlaylist={add}
+                    />
                     <button type="button" onClick={() => remove(song)}>
                       <Trash2 aria-hidden="true" /> Remove
                     </button>
-                    <strong>{formatSongDisplayName(song)}</strong>
                   </li>
                 );
               })}
@@ -231,17 +232,24 @@ export function PlaylistPanel({
         )}
 
         <ul>
-          {pagedSongs.map((song) => (
-            <li key={song.id}>
-              <button type="button" onClick={() => add(song)}>
-                <ListPlus aria-hidden="true" /> Add to playlist
-              </button>
-              <button type="button" onClick={() => play(song)}>
-                <Play aria-hidden="true" /> Play
-              </button>
-              {formatSongDisplayName(song)}
-            </li>
-          ))}
+          {pagedSongs.map((song) => {
+            const isFavorite = favoriteIds.includes(song.id);
+
+            return (
+              <li key={song.id}>
+                <strong>{formatSongDisplayName(song)}</strong>
+                <SongActions
+                  song={song}
+                  playlists={playlists}
+                  isFavorite={isFavorite}
+                  onPlay={play}
+                  onQueue={queue}
+                  onToggleFavorite={(item) => toggleFavorite(item, isFavorite)}
+                  onAddToPlaylist={add}
+                />
+              </li>
+            );
+          })}
         </ul>
       </section>
     </article>

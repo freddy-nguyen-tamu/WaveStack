@@ -19,6 +19,8 @@ import {
   TOP_GENRES_QUERY,
   TOP_TRACKS_QUERY
 } from "../../api";
+import type { ClientPlaylist, Song } from "../../App";
+import { SongActions } from "../../components/SongActions";
 import { StatsPieChart } from "./components/StatsPieChart";
 import { StatsReceipt } from "./components/StatsReceipt";
 import { TasteComparisonPanel } from "./components/TasteComparisonPanel";
@@ -73,6 +75,16 @@ type DriveExportPanelProps = {
   period: string;
 };
 
+type StatsPageProps = {
+  songs: Song[];
+  playlists: ClientPlaylist[];
+  favoriteIds: string[];
+  onPlay: (song: Song) => void;
+  onQueue: (song: Song) => void;
+  onToggleFavorite: (song: Song) => void;
+  onAddToPlaylist: (playlistId: string, song: Song) => void;
+};
+
 function DriveExportPanel({ period }: DriveExportPanelProps) {
   const [exportData, { loading, data, error }] = useMutation(EXPORT_LISTENING_HABITS_MUTATION);
 
@@ -106,7 +118,15 @@ function DriveExportPanel({ period }: DriveExportPanelProps) {
   );
 }
 
-export function StatsPage() {
+export function StatsPage({
+  songs,
+  playlists,
+  favoriteIds,
+  onPlay,
+  onQueue,
+  onToggleFavorite,
+  onAddToPlaylist
+}: StatsPageProps) {
   const [period, setPeriod] = useState<string>("FOUR_WEEKS");
   const [tab, setTab] = useState<Tab>("TRACKS");
   const [receiptMode, setReceiptMode] = useState<"normal" | "brat">("normal");
@@ -121,6 +141,7 @@ export function StatsPage() {
   const artistEntries: StatsEntry[] = useMemo(() => artistsData?.topArtists ?? [], [artistsData]);
   const genreEntries: StatsEntry[] = useMemo(() => genresData?.topGenres ?? [], [genresData]);
   const recentEntries: RecentlyPlayedEntry[] = useMemo(() => recentData?.recentlyPlayedDetailed ?? [], [recentData]);
+  const songById = useMemo(() => new Map(songs.map((song) => [song.id, song])), [songs]);
 
   useEffect(() => {
     if (period) {
@@ -164,27 +185,44 @@ export function StatsPage() {
     );
   }
 
-  function renderRankingList(entries: StatsEntry[], showSubtitle = true) {
+  function renderRankingList(entries: StatsEntry[], showSubtitle = true, showSongActions = false) {
     if (!entries.length) {
       return <p className="stats-page__empty">No data for this period yet.</p>;
     }
 
     return (
       <ol className="ranking-list">
-        {entries.map((entry) => (
-          <li key={entry.key} className="ranking-list__item">
-            <span className="ranking-list__position">#{entry.rank}</span>
+        {entries.map((entry) => {
+          const song = entry.songId ? songById.get(entry.songId) : undefined;
 
-            <div className="ranking-list__info">
-              <strong>{entry.label}</strong>
-              {showSubtitle && entry.subtitle ? <small>{entry.subtitle}</small> : null}
-            </div>
+          return (
+            <li key={entry.key} className="ranking-list__item">
+              <span className="ranking-list__position">#{entry.rank}</span>
 
-            <span className="ranking-list__count">{entry.playCount} plays</span>
+              <div className="ranking-list__info">
+                <strong>{entry.label}</strong>
+                {showSubtitle && entry.subtitle ? <small>{entry.subtitle}</small> : null}
+              </div>
 
-            <RankChange entry={entry} />
-          </li>
-        ))}
+              <span className="ranking-list__count">{entry.playCount} plays</span>
+
+              <RankChange entry={entry} />
+
+              {showSongActions && song ? (
+                <SongActions
+                  song={song}
+                  playlists={playlists}
+                  isFavorite={favoriteIds.includes(song.id)}
+                  onPlay={onPlay}
+                  onQueue={onQueue}
+                  onToggleFavorite={onToggleFavorite}
+                  onAddToPlaylist={onAddToPlaylist}
+                  className="song-actions--ranking"
+                />
+              ) : null}
+            </li>
+          );
+        })}
       </ol>
     );
   }
@@ -198,6 +236,7 @@ export function StatsPage() {
       <ul className="recent-list">
         {recentEntries.map((entry, index) => {
           const date = new Date(entry.startedAt);
+          const song = songById.get(entry.songId);
 
           return (
             <li key={`${entry.songId}-${index}`} className="recent-list__item">
@@ -213,6 +252,19 @@ export function StatsPage() {
               <span className="recent-list__ratio">
                 {Math.round(entry.completedPlayRatio * 100)}%
               </span>
+
+              {song ? (
+                <SongActions
+                  song={song}
+                  playlists={playlists}
+                  isFavorite={favoriteIds.includes(song.id)}
+                  onPlay={onPlay}
+                  onQueue={onQueue}
+                  onToggleFavorite={onToggleFavorite}
+                  onAddToPlaylist={onAddToPlaylist}
+                  className="song-actions--ranking"
+                />
+              ) : null}
             </li>
           );
         })}
@@ -354,7 +406,7 @@ export function StatsPage() {
 
         {tab === "TRACKS" && (
           <>
-            {tracksLoading ? <p className="stats-page__loading">Loading...</p> : renderRankingList(trackEntries)}
+            {tracksLoading ? <p className="stats-page__loading">Loading...</p> : renderRankingList(trackEntries, true, true)}
           </>
         )}
 
