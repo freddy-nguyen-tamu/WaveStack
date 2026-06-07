@@ -1,45 +1,50 @@
 import { Search } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@apollo/client";
-import { SONG_PAGE_QUERY } from "../../api";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import type { ClientPlaylist, Song } from "../../App";
-import { SongActions } from "../../components/SongActions";
-import { SongIdentityButton } from "../../components/SongIdentityButton";
-import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
-
-type SongPageQueryData = {
-  songPage: {
-    nodes: Song[];
-    pageInfo: {
-      endCursor?: string | null;
-      hasNextPage: boolean;
-    };
-    totalCount: number;
-  };
-};
-
-type SongPageQueryVariables = {
-  first: number;
-  after?: string | null;
-  query?: string | null;
-  sort?: string | null;
-};
-
-type SortMode = "DATE_DESC" | "DATE_ASC" | "TITLE_ASC";
+import { SongListRow } from "../../components/SongListRow";
+import { formatSongDisplayName } from "../../song-format";
 
 type AllPageProps = {
+  songs: Song[];
+  localTracks?: Song[];
   playlists: ClientPlaylist[];
   favoriteIds: string[];
   onPlay: (song: Song) => void;
   onQueue: (song: Song) => void;
   onToggleFavorite: (song: Song) => void;
   onAddToPlaylist: (playlistId: string, song: Song) => void;
-  onOpenDetails: (song: Song) => void;
+  onOpenDetails?: (song: Song) => void;
 };
 
-const PAGE_SIZE = 50;
+type SortMode = "az" | "newest" | "oldest";
+
+const INITIAL_VISIBLE_COUNT = 60;
+const LOAD_CHUNK_SIZE = 60;
+const FAST_SCROLL_THUMB_HEIGHT = 86;
+
+function getSongDateValue(song: Song): number {
+  const modifiedTime = song.modifiedTime ? Date.parse(song.modifiedTime) : Number.NaN;
+
+  if (Number.isFinite(modifiedTime)) {
+    return modifiedTime;
+  }
+
+  return 0;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
 
 export function AllPage({
+  songs,
+  localTracks = [],
   playlists,
   favoriteIds,
   onPlay,
@@ -48,207 +53,292 @@ export function AllPage({
   onAddToPlaylist,
   onOpenDetails
 }: AllPageProps) {
+  const listRef = useRef<HTMLUListElement | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const fastScrollTrackRef = useRef<HTMLDivElement | null>(null);
   const [query, setQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [sort, setSort] = useState<SortMode>("DATE_DESC");
-  const [songs, setSongs] = useState<Song[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(false);
-  const [isFetchingMore, setIsFetchingMore] = useState(false);
-  const scrollerRef = useRef<HTMLElement | null>(null);
+  const [sortMode, setSortMode] = useState<SortMode>("az");
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_COUNT);
+  const [thumbTop, setThumbTop] = useState(0);
+  const [isDraggingFastScroll, setIsDraggingFastScroll] = useState(false);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setDebouncedQuery(query.trim());
-    }, 250);
+  const allSongs = useMemo(() => {
+    const seen = new Set<string>();
+    return [...localTracks, ...songs].filter((song) => {
+      if (seen.has(song.id)) {
+        return false;
+      }
+      seen.add(song.id);
+      return true;
+    });
+  }, [localTracks, songs]);
 
-    return () => window.clearTimeout(timer);
-  }, [query]);
+  const filteredSongs = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const matches = needle
+      ? allSongs.filter((song) => {
+          const haystack = [
+            formatSongDisplayName(song),
+            song.title,
+            song.artistName,
+            song.albumTitle,
+            ...(song.genreNames ?? [])
+          ]
+            .join(" ")
+            .toLowerCase();
 
-  const { data, loading, fetchMore, refetch } = useQuery<SongPageQueryData, SongPageQueryVariables>(
-    SONG_PAGE_QUERY,
-    {
-      variables: {
-        first: PAGE_SIZE,
-        after: null,
-        query: debouncedQuery || null,
-        sort
-      },
-      fetchPolicy: "network-only",
-      notifyOnNetworkStatusChange: true
-    }
-  );
+          return haystack.includes(needle);
+        })
+      : allSongs;
 
-  useEffect(() => {
-    const page = data?.songPage;
-    setSongs(page?.nodes ?? []);
-    setCursor(page?.pageInfo.endCursor ?? null);
-    setHasMore(Boolean(page?.pageInfo.hasNextPage));
-  }, [data]);
+    return [...matches].sort((left, right) => {
+      if (sortMode === "newest") {
+        return getSongDateValue(right) - getSongDateValue(left);
+      }
 
-  useEffect(() => {
-    setSongs([]);
-    setCursor(null);
-    setHasMore(false);
-    void refetch({ first: PAGE_SIZE, after: null, query: debouncedQuery || null, sort });
-  }, [debouncedQuery, sort, refetch]);
+      if (sortMode === "oldest") {
+        return getSongDateValue(left) - getSongDateValue(right);
+      }
 
-  async function loadMore() {
-    if (!cursor || !hasMore || isFetchingMore) {
+      return formatSongDisplayName(left).localeCompare(
+        formatSongDisplayName(right),
+        undefined,
+        {
+          numeric: true,
+          sensitivity: "base"
+        }
+      );
+    });
+  }, [allSongs, query, sortMode]);
+
+  const visibleSongs = filteredSongs.slice(0, visibleCount);
+  const hasMore = visibleSongs.length < filteredSongs.length;
+
+  const updateThumbFromWindowScroll = useCallback(() => {
+    const track = fastScrollTrackRef.current;
+    const list = listRef.current;
+
+    if (!track || !list) {
+      setThumbTop(0);
       return;
     }
 
-    setIsFetchingMore(true);
+    const trackRect = track.getBoundingClientRect();
+    const maxThumbTop = Math.max(0, trackRect.height - FAST_SCROLL_THUMB_HEIGHT);
+    const listTop = list.getBoundingClientRect().top + window.scrollY;
+    const listBottom = listTop + list.scrollHeight;
+    const viewportTravel = Math.max(1, listBottom - window.innerHeight - listTop);
+    const scrolledInsideList = clamp(window.scrollY - listTop, 0, viewportTravel);
+    const ratio = viewportTravel <= 0 ? 0 : scrolledInsideList / viewportTravel;
 
-    try {
-      const result = await fetchMore({
-        variables: {
-          first: PAGE_SIZE,
-          after: cursor,
-          query: debouncedQuery || null,
-          sort
-        }
-      });
+    setThumbTop(ratio * maxThumbTop);
+  }, []);
 
-      const page = result.data?.songPage;
+  const scrollToFastScrollRatio = useCallback((ratio: number) => {
+    const list = listRef.current;
+    const track = fastScrollTrackRef.current;
 
-      if (!page) {
-        return;
-      }
-
-      setSongs((current) => {
-        const seen = new Set(current.map((song) => song.id));
-        const next = page.nodes.filter((song) => !seen.has(song.id));
-        return [...current, ...next];
-      });
-      setCursor(page.pageInfo.endCursor ?? null);
-      setHasMore(page.pageInfo.hasNextPage);
-    } finally {
-      setIsFetchingMore(false);
+    if (!list || !track) {
+      return;
     }
-  }
 
-  const sentinelRef = useInfiniteScroll({
-    enabled: true,
-    loading: loading || isFetchingMore,
-    hasMore,
-    onLoadMore: () => void loadMore(),
-    rootMargin: "1200px"
-  });
+    const trackRect = track.getBoundingClientRect();
+    const maxThumbTop = Math.max(0, trackRect.height - FAST_SCROLL_THUMB_HEIGHT);
+    const nextThumbTop = clamp(ratio, 0, 1) * maxThumbTop;
+    const listTop = list.getBoundingClientRect().top + window.scrollY;
+    const listBottom = listTop + list.scrollHeight;
+    const viewportTravel = Math.max(0, listBottom - window.innerHeight - listTop);
 
-  const totalCount = data?.songPage.totalCount ?? songs.length;
+    setThumbTop(nextThumbTop);
 
-  const progressPercent = useMemo(() => {
-    if (!totalCount) {
+    window.scrollTo({
+      top: listTop + viewportTravel * clamp(ratio, 0, 1),
+      behavior: "auto"
+    });
+  }, []);
+
+  function getRatioFromPointer(clientY: number): number {
+    const track = fastScrollTrackRef.current;
+
+    if (!track) {
       return 0;
     }
 
-    return Math.min(100, Math.max(0, (songs.length / totalCount) * 100));
-  }, [songs.length, totalCount]);
+    const trackRect = track.getBoundingClientRect();
+    const maxThumbTop = Math.max(1, trackRect.height - FAST_SCROLL_THUMB_HEIGHT);
+    const nextTop = clamp(
+      clientY - trackRect.top - FAST_SCROLL_THUMB_HEIGHT / 2,
+      0,
+      maxThumbTop
+    );
 
-  function jumpByFastScroll(event: React.PointerEvent<HTMLDivElement>) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const ratio = Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height));
-    const documentHeight = document.documentElement.scrollHeight - window.innerHeight;
+    return nextTop / maxThumbTop;
+  }
 
-    window.scrollTo({
-      top: documentHeight * ratio,
-      behavior: "auto"
-    });
+  function handleFastScrollPointerDown(event: React.PointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setIsDraggingFastScroll(true);
+    scrollToFastScrollRatio(getRatioFromPointer(event.clientY));
+  }
 
-    if (ratio > 0.72 && hasMore && !isFetchingMore) {
-      void loadMore();
+  function handleFastScrollPointerMove(event: React.PointerEvent<HTMLButtonElement>) {
+    if (!isDraggingFastScroll) {
+      return;
     }
+
+    event.preventDefault();
+    scrollToFastScrollRatio(getRatioFromPointer(event.clientY));
+  }
+
+  function stopFastScrollDrag(event: React.PointerEvent<HTMLButtonElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    setIsDraggingFastScroll(false);
+    updateThumbFromWindowScroll();
+  }
+
+  function handleFastScrollTrackPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+
+    event.preventDefault();
+    scrollToFastScrollRatio(getRatioFromPointer(event.clientY));
+  }
+
+  useEffect(() => {
+    setVisibleCount(INITIAL_VISIBLE_COUNT);
+    window.requestAnimationFrame(updateThumbFromWindowScroll);
+  }, [query, sortMode, filteredSongs.length, updateThumbFromWindowScroll]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+
+    if (!sentinel || !hasMore) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisibleCount((count) => Math.min(count + LOAD_CHUNK_SIZE, filteredSongs.length));
+        }
+      },
+      {
+        root: null,
+        rootMargin: "900px 0px 1100px 0px",
+        threshold: 0.01
+      }
+    );
+
+    observer.observe(sentinel);
+
+    return () => observer.disconnect();
+  }, [filteredSongs.length, hasMore]);
+
+  useEffect(() => {
+    updateThumbFromWindowScroll();
+
+    window.addEventListener("scroll", updateThumbFromWindowScroll, { passive: true });
+    window.addEventListener("resize", updateThumbFromWindowScroll);
+
+    return () => {
+      window.removeEventListener("scroll", updateThumbFromWindowScroll);
+      window.removeEventListener("resize", updateThumbFromWindowScroll);
+    };
+  }, [updateThumbFromWindowScroll, visibleSongs.length]);
+
+  if (!allSongs.length) {
+    return (
+      <article className="all-page">
+        <p className="eyebrow">Library</p>
+        <h2>All Songs</h2>
+        <p>No songs found. Upload your first track or sign in to load your library.</p>
+      </article>
+    );
   }
 
   return (
-    <article className="all-page" ref={scrollerRef}>
-      <p className="eyebrow">Library</p>
-      <h2>All Songs</h2>
+    <article className="all-page">
+      <div className="all-page__header-row">
+        <div>
+          <p className="eyebrow">Library</p>
+          <h2>All Songs ({filteredSongs.length})</h2>
+        </div>
+      </div>
 
-      <div className="all-page__toolbar" aria-label="All songs controls">
+      <section className="all-page__controls" aria-label="All songs controls">
         <label className="all-page__search">
           <Search aria-hidden="true" /> Search all songs
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Title, artist, album, or genre"
+            placeholder="Song, artist, album, or genre"
           />
         </label>
 
         <label className="all-page__sort">
           Sort
-          <select value={sort} onChange={(event) => setSort(event.target.value as SortMode)}>
-            <option value="DATE_DESC">Date descending</option>
-            <option value="DATE_ASC">Date ascending</option>
-            <option value="TITLE_ASC">A-Z</option>
+          <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)}>
+            <option value="az">A-Z</option>
+            <option value="newest">Date descending</option>
+            <option value="oldest">Date ascending</option>
           </select>
         </label>
-      </div>
+      </section>
 
-      <p className="all-page__count">
-        Showing {songs.length} of {totalCount} song(s). Lazy loading is on; no pagination.
+      <p className="all-page__summary">
+        Showing {visibleSongs.length} of {filteredSongs.length} song(s).
+        {hasMore ? " Scroll down or drag the red bar to lazy-load more." : " End of list."}
       </p>
 
-      {songs.length ? (
-        <ul className="all-page__list" aria-label="All loaded songs">
-          {songs.map((song, index) => {
-            const isFavorite = favoriteIds.includes(song.id);
-
-            return (
-              <li key={song.id} className="song-list-row all-page__row">
-                <SongIdentityButton
-                  song={song}
-                  index={index + 1}
-                  subtitle={song.artistName}
-                  onOpenDetails={onOpenDetails}
-                />
-                <SongActions
-                  song={song}
-                  playlists={playlists}
-                  isFavorite={isFavorite}
-                  onPlay={onPlay}
-                  onQueue={onQueue}
-                  onToggleFavorite={onToggleFavorite}
-                  onAddToPlaylist={onAddToPlaylist}
-                />
-              </li>
-            );
-          })}
+      {visibleSongs.length ? (
+        <ul ref={listRef} className="song-list all-page__list">
+          {visibleSongs.map((song, index) => (
+            <SongListRow
+              key={song.id}
+              song={song}
+              index={index}
+              playlists={playlists}
+              favoriteIds={favoriteIds}
+              onPlay={onPlay}
+              onQueue={onQueue}
+              onToggleFavorite={onToggleFavorite}
+              onAddToPlaylist={onAddToPlaylist}
+              onOpenDetails={onOpenDetails}
+            />
+          ))}
         </ul>
-      ) : loading ? (
-        <p className="infinite-scroll-status">Loading all songs...</p>
       ) : (
-        <p>No songs found.</p>
+        <p>No matching songs.</p>
       )}
 
-      <div ref={sentinelRef} className="infinite-scroll-sentinel" aria-hidden="true" />
-
-      {isFetchingMore ? <p className="infinite-scroll-status">Loading more songs...</p> : null}
-      {!loading && !isFetchingMore && songs.length > 0 && !hasMore ? (
-        <p className="infinite-scroll-status">You reached the end of all songs.</p>
-      ) : null}
+      <div ref={sentinelRef} className="all-page__lazy-sentinel" aria-hidden="true" />
 
       <div
+        ref={fastScrollTrackRef}
         className="all-page__fast-scroll"
-        role="scrollbar"
-        aria-label="Fast scroll all songs"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={Math.round(progressPercent)}
-        tabIndex={0}
-        onPointerDown={(event) => {
-          event.currentTarget.setPointerCapture(event.pointerId);
-          jumpByFastScroll(event);
-        }}
-        onPointerMove={(event) => {
-          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-            jumpByFastScroll(event);
-          }
-        }}
+        onPointerDown={handleFastScrollTrackPointerDown}
+        aria-hidden="true"
       >
-        <span style={{ height: `${Math.max(8, progressPercent)}%` }} />
+        <button
+          type="button"
+          className="all-page__fast-scroll-thumb"
+          data-dragging={isDraggingFastScroll ? "true" : "false"}
+          onPointerDown={handleFastScrollPointerDown}
+          onPointerMove={handleFastScrollPointerMove}
+          onPointerUp={stopFastScrollDrag}
+          onPointerCancel={stopFastScrollDrag}
+          style={{ transform: `translateY(${thumbTop}px)` }}
+          tabIndex={-1}
+          aria-label="Fast scroll all songs"
+        />
       </div>
+
+      <div className="bottom-player-spacer" aria-hidden="true" />
     </article>
   );
 }

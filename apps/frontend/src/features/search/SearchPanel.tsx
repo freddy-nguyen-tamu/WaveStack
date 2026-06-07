@@ -4,8 +4,7 @@ import { useQuery } from "@apollo/client";
 import { SONG_PAGE_QUERY } from "../../api";
 import type { ClientPlaylist, Song } from "../../App";
 import { formatSongDisplayName } from "../../song-format";
-import { SongActions } from "../../components/SongActions";
-import { SongIdentityButton } from "../../components/SongIdentityButton";
+import { SongListRow } from "../../components/SongListRow";
 import { PaginationBar } from "../../components/PaginationBar";
 
 type SongPageQueryData = {
@@ -187,32 +186,21 @@ export function SearchPanel({
       </p>
       {pagedResults.length ? (
         <>
-          <ul>
-            {pagedResults.map((song, index) => {
-              const isFavorite = favoriteIds.includes(song.id);
-              const absoluteIndex = (currentPage - 1) * PAGE_SIZE + index + 1;
-              return (
-                <li key={song.id} className="song-list-row">
-                  <SongIdentityButton
-                    song={song}
-                    index={absoluteIndex}
-                    subtitle={song.artistName}
-                    onOpenDetails={onOpenDetails}
-                  />
-                  <div className="song-list-row__body song-list-row__body--actions-only">
-                    <SongActions
-                      song={song}
-                      playlists={playlists}
-                      isFavorite={isFavorite}
-                      onPlay={play}
-                      onQueue={queue}
-                      onToggleFavorite={(item) => toggleFavorite(item, isFavorite)}
-                      onAddToPlaylist={add}
-                    />
-                  </div>
-                </li>
-              );
-            })}
+          <ul className="song-list">
+            {pagedResults.map((song, index) => (
+              <SongListRow
+                key={song.id}
+                song={song}
+                index={(currentPage - 1) * PAGE_SIZE + index}
+                playlists={playlists}
+                favoriteIds={favoriteIds}
+                onPlay={play}
+                onQueue={queue}
+                onToggleFavorite={(item) => toggleFavorite(item, favoriteIds.includes(item.id))}
+                onAddToPlaylist={add}
+                onOpenDetails={onOpenDetails}
+              />
+            ))}
           </ul>
 
           <PaginationBar

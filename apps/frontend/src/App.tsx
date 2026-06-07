@@ -61,6 +61,13 @@ export type AuthUser = {
 
 export type RepeatMode = "none" | "all" | "one";
 
+export type PlaybackContext = {
+  id: string;
+  label: string;
+  songs: Song[];
+  source: "all" | "dashboard" | "search" | "favorites" | "recent" | "playlist" | "profile" | "manual";
+};
+
 export type RecommendResult = {
   song: Song;
   reason: string;
@@ -179,6 +186,20 @@ export function App() {
   const [queueDrawerOpen, setQueueDrawerOpen] = useState(false);
   const [detailsSong, setDetailsSong] = useState<Song | null>(null);
   const pendingNavScrollRef = useRef(false);
+
+  const [playbackContext, setPlaybackContext] = useState<PlaybackContext>(() => ({
+    id: "initial",
+    label: "Initial library",
+    songs: [],
+    source: "manual"
+  }));
+
+  const currentSongRef = useRef<Song | null>(null);
+  const shuffleEnabledRef = useRef(false);
+  const repeatModeRef = useRef<RepeatMode>("none");
+  const playHistoryRef = useRef<Song[]>([]);
+  const playbackContextRef = useRef<PlaybackContext | null>(null);
+  const queueRef = useRef<Song[]>([]);
 
   const [localTracks, setLocalTracks] = useState<Song[]>(() => {
     try {
@@ -513,8 +534,6 @@ export function App() {
   }, [authToken, libraryStateData]);
 
   const currentSong = activeSong ?? songs[0] ?? fallbackSongs[0];
-  const queueRef = useRef(queue);
-  queueRef.current = queue;
 
   function showNotice(message: string) {
     if (noticeTimerRef.current) {
@@ -625,173 +644,201 @@ export function App() {
     setRecommendedData((items) => items ? items.filter((item) => item.song.id !== songId) : null);
   }
 
-  function pickFromSongs(songsToPickFrom: Song[]): Song | null {
-    if (!songsToPickFrom.length) {
-      return null;
-    }
+  currentSongRef.current = activeSong;
+  shuffleEnabledRef.current = shuffleEnabled;
+  repeatModeRef.current = repeatMode;
+  playHistoryRef.current = playHistory;
+  playbackContextRef.current = playbackContext;
+  queueRef.current = queue;
 
-    if (!shuffleEnabled) {
-      return songsToPickFrom[0];
-    }
+  type PlaybackAdvanceReason = "manual" | "ended";
 
-    return songsToPickFrom[Math.floor(Math.random() * songsToPickFrom.length)];
+  function startSong(song: Song, options: { preserveContext?: boolean } = {}) {
+    currentSongRef.current = song;
+    setActiveSong(song);
+    setPlaySignal((value) => value + 1);
   }
 
-  function consumeQueueNext(): Song | null {
-    if (!queue.length) {
+  function popNextQueuedSong(): Song | null {
+    const latestQueue = queueRef.current;
+
+    if (!latestQueue.length) {
       return null;
     }
 
-    const nextSong = pickFromSongs(queue);
+    const nextSong = latestQueue[latestQueue.length - 1];
+    const remainingQueue = latestQueue.slice(0, -1);
 
-    if (!nextSong) {
-      return null;
-    }
+    queueRef.current = remainingQueue;
+    setQueue(remainingQueue);
 
-    setQueue((items) => items.filter((item) => item.id !== nextSong.id));
     return nextSong;
   }
 
-  function consumeRecommendationNext(): Song | null {
-    const nextSong = pickFromSongs(recommendationSongs);
-
-    if (!nextSong) {
-      return null;
-    }
-
-    dismissRecommendation(nextSong.id);
-    return nextSong;
-  }
-
-  function fallbackLibraryNext(): Song | null {
-    const candidates = songs.filter((song) => song.id !== activeSong?.id);
+  function pickRandomSongExcluding(songs: Song[], currentSongId: string): Song | null {
+    const candidates = songs.filter((song) => song.id !== currentSongId);
 
     if (!candidates.length) {
       return null;
     }
 
-    return pickFromSongs(candidates);
+    const randomIndex = Math.floor(Math.random() * candidates.length);
+    return candidates[randomIndex] ?? null;
   }
 
-  function startSong(song: Song, options: { rememberCurrent?: boolean } = {}) {
-    if (activeSong && options.rememberCurrent !== false) {
-      rememberPlayedSong(activeSong);
+  function resolveNextSongFromCurrentPolicy(reason: PlaybackAdvanceReason): Song | null {
+    const queuedSong = popNextQueuedSong();
+
+    if (queuedSong) {
+      return queuedSong;
     }
 
-    setActiveSong(song);
-    setPlaySignal((value) => value + 1);
-  }
+    const latestCurrentSong = currentSongRef.current;
+    const latestContext = playbackContextRef.current;
+    const latestShuffleEnabled = shuffleEnabledRef.current;
+    const latestRepeatMode = repeatModeRef.current;
 
-  async function ensureMoreRecommendationsIfNeeded() {
-    if (loadingMoreRecommendations || !hasMoreRecommendations) {
-      return;
+    if (!latestCurrentSong || !latestContext?.songs?.length) {
+      return null;
     }
 
-    await loadMoreRecommendations();
-  }
+    const contextSongs = latestContext.songs.filter(Boolean);
 
-  async function playNextFromPolicy(reason: "ended" | "manual") {
-    if (!activeSong) {
-      const firstRecommendation = consumeRecommendationNext();
-      const firstFallback = firstRecommendation ?? fallbackLibraryNext();
+    if (!contextSongs.length) {
+      return null;
+    }
 
-      if (firstFallback) {
-        startSong(firstFallback, { rememberCurrent: false });
+    if (latestRepeatMode === "one" && reason === "ended") {
+      return latestCurrentSong;
+    }
+
+    if (latestShuffleEnabled) {
+      const shuffledPick = pickRandomSongExcluding(contextSongs, latestCurrentSong.id);
+
+      if (shuffledPick) {
+        return shuffledPick;
       }
 
-      return;
-    }
-
-    if (reason === "ended") {
-      dismissRecommendation(activeSong.id);
-    }
-
-    if (repeatMode === "one" && reason === "ended") {
-      setPlaySignal((value) => value + 1);
-      return;
-    }
-
-    const queuedNext = consumeQueueNext();
-
-    if (queuedNext) {
-      startSong(queuedNext);
-      return;
-    }
-
-    let recommendationNext = consumeRecommendationNext();
-
-    if (!recommendationNext && hasMoreRecommendations) {
-      await ensureMoreRecommendationsIfNeeded();
-      recommendationNext = consumeRecommendationNext();
-    }
-
-    if (recommendationNext) {
-      startSong(recommendationNext);
-      return;
-    }
-
-    if (repeatMode === "all") {
-      const fromHistory = playHistory.length ? pickFromSongs([...playHistory].reverse()) : null;
-      const fromLibrary = fromHistory ?? fallbackLibraryNext();
-
-      if (fromLibrary) {
-        startSong(fromLibrary);
-        return;
+      if (latestRepeatMode === "all" || latestRepeatMode === "one") {
+        return latestCurrentSong;
       }
+
+      return null;
     }
 
-    const fallbackNext = fallbackLibraryNext();
+    const currentIndex = contextSongs.findIndex((song) => song.id === latestCurrentSong.id);
 
-    if (fallbackNext) {
-      startSong(fallbackNext);
+    if (currentIndex < 0) {
+      return contextSongs[0] ?? null;
+    }
+
+    const nextSong = contextSongs[currentIndex + 1];
+
+    if (nextSong) {
+      return nextSong;
+    }
+
+    if (latestRepeatMode === "all") {
+      return contextSongs[0] ?? null;
+    }
+
+    return null;
+  }
+
+  function playNextFromPolicy(reason: PlaybackAdvanceReason = "manual") {
+    const latestCurrentSong = currentSongRef.current;
+    const nextSong = resolveNextSongFromCurrentPolicy(reason);
+
+    if (!nextSong) {
+      showNotice("No next song available.");
+      return;
+    }
+
+    if (latestCurrentSong && nextSong.id !== latestCurrentSong.id) {
+      const nextHistory = [...playHistoryRef.current, latestCurrentSong];
+      playHistoryRef.current = nextHistory;
+      setPlayHistory(nextHistory);
+    }
+
+    startSong(nextSong, { preserveContext: true });
+
+    if (nextSong.id !== latestCurrentSong?.id) {
+      rememberRecent(nextSong);
     }
   }
 
   function playPreviousFromHistory() {
-    const previous = playHistory[0];
+    const latestHistory = playHistoryRef.current;
 
-    if (!previous) {
+    if (!latestHistory.length) {
+      showNotice("No previous song available.");
       return;
     }
 
-    setPlayHistory((items) => items.slice(1));
+    const previousSong = latestHistory[latestHistory.length - 1];
+    const remainingHistory = latestHistory.slice(0, -1);
 
-    if (activeSong) {
-      setQueue((items) => [activeSong, ...items.filter((item) => item.id !== activeSong.id)]);
-    }
+    playHistoryRef.current = remainingHistory;
+    setPlayHistory(remainingHistory);
 
-    setActiveSong(previous);
-    setPlaySignal((value) => value + 1);
+    startSong(previousSong, { preserveContext: true });
   }
 
   function toggleShuffle() {
-    setShuffleEnabled((value) => !value);
-  }
-
-  function cycleRepeatMode() {
-    setRepeatMode((value) => {
-      if (value === "none") return "all";
-      if (value === "all") return "one";
-      return "none";
+    setShuffleEnabled((enabled) => {
+      const nextValue = !enabled;
+      shuffleEnabledRef.current = nextValue;
+      return nextValue;
     });
   }
 
-  function playSong(song: Song) {
-    setActiveSong(song);
+  function cycleRepeatMode() {
+    setRepeatMode((mode) => {
+      const nextMode: RepeatMode =
+        mode === "none" ? "all" : mode === "all" ? "one" : "none";
+
+      repeatModeRef.current = nextMode;
+      return nextMode;
+    });
+  }
+
+  function playSongFromContext(song: Song, context: PlaybackContext) {
+    rememberSongObjects([song, ...context.songs]);
+
+    const deduplicatedContext = {
+      ...context,
+      songs: context.songs.filter(
+        (item, index, list) => list.findIndex((other) => other.id === item.id) === index
+      )
+    };
+
+    playbackContextRef.current = deduplicatedContext;
+    setPlaybackContext(deduplicatedContext);
+
+    playHistoryRef.current = [];
+    setPlayHistory([]);
+
+    startSong(song, { preserveContext: true });
     rememberRecent(song);
-    setPlaySignal((value) => value + 1);
+    showNotice(`Now playing: ${formatSongDisplayName(song)}`);
+  }
+
+  function playSong(song: Song) {
+    startSong(song);
+    rememberRecent(song);
     showNotice(`Now playing: ${formatSongDisplayName(song)}`);
   }
 
   function queueSong(song: Song) {
-    rememberSongObjects([song]);
-    setQueue((items) => {
-      if (items.some((item) => item.id === song.id) || activeSong?.id === song.id) {
+    setQueue((currentQueue) => {
+      if (currentQueue.some((item) => item.id === song.id) || activeSong?.id === song.id) {
         showNotice(`${formatSongDisplayName(song)} is already in the queue.`);
-        return items;
+        return currentQueue;
       }
 
-      return [...items, song];
+      const nextQueue = [...currentQueue, song];
+      queueRef.current = nextQueue;
+      return nextQueue;
     });
 
     showNotice(`Queued: ${formatSongDisplayName(song)}`);
@@ -799,7 +846,13 @@ export function App() {
 
   function removeFromQueue(songId: string) {
     const song = queue.find((item) => item.id === songId);
-    setQueue((items) => items.filter((item) => item.id !== songId));
+
+    setQueue((currentQueue) => {
+      const nextQueue = currentQueue.filter((item) => item.id !== songId);
+      queueRef.current = nextQueue;
+      return nextQueue;
+    });
+
     showNotice(song ? `Removed from queue: ${formatSongDisplayName(song)}` : "Removed song from queue.");
   }
 
@@ -1399,7 +1452,7 @@ export function App() {
     }
   }
 
-  function renderSongsPage(title: string, pageSongs: Song[], emptyMessage: string) {
+  function renderSongsPage(title: string, pageSongs: Song[], emptyMessage: string, contextPlay?: (song: Song) => void) {
     return (
       <section aria-label={title}>
         <SearchPanel
@@ -1411,7 +1464,7 @@ export function App() {
           favoriteIds={favoriteIds}
           emptyMessage={emptyMessage}
           onAddToPlaylist={addToPlaylist}
-          onPlay={playSong}
+          onPlay={contextPlay ?? playSong}
           onQueue={queueSong}
           onToggleFavorite={toggleFavorite}
           onOpenDetails={setDetailsSong}
@@ -1438,7 +1491,7 @@ export function App() {
 
       <nav className="app-nav" aria-label="Primary">
         <NavLink to="/all" onClick={() => requestNavScroll("/all")}>
-          <Music2 aria-hidden="true" /> All ({allKnownSongs.length})
+          <Music2 aria-hidden="true" /> All
         </NavLink>
         <NavLink to="/dashboard" onClick={() => requestNavScroll("/dashboard")}>
           <Activity aria-hidden="true" /> Dashboard
@@ -1492,9 +1545,9 @@ export function App() {
             onQueueChange={setQueue}
             onActiveSongChange={(song) => startSong(song)}
             onOpenDetails={setDetailsSong}
-            onNext={() => void playNextFromPolicy("manual")}
+            onNext={() => playNextFromPolicy("manual")}
             onPrevious={playPreviousFromHistory}
-            onEnded={() => void playNextFromPolicy("ended")}
+            onEnded={() => playNextFromPolicy("ended")}
         />
       </section>
 
@@ -1506,9 +1559,18 @@ export function App() {
           element={
             <section aria-label="All songs">
               <AllPage
+                songs={allKnownSongs}
+                localTracks={localTracks}
                 playlists={playlists}
                 favoriteIds={favoriteIds}
-                onPlay={playSong}
+                onPlay={(song: Song) =>
+                  playSongFromContext(song, {
+                    id: `all:az`,
+                    label: "All Songs",
+                    source: "all",
+                    songs: allKnownSongs
+                  })
+                }
                 onQueue={queueSong}
                 onToggleFavorite={toggleFavorite}
                 onAddToPlaylist={addToPlaylist}
@@ -1530,7 +1592,14 @@ export function App() {
                 habitSummaries={habitSummaries}
                 playlists={playlists}
                 favoriteIds={favoriteIds}
-                onPlay={playSong}
+                onPlay={(song: Song) =>
+                  playSongFromContext(song, {
+                    id: "dashboard:recommendations",
+                    label: "Dashboard recommendations",
+                    source: "dashboard",
+                    songs: recommendationSongs.length ? recommendationSongs : songs
+                  })
+                }
                 onQueue={queueSong}
                 onToggleFavorite={toggleFavorite}
                 onAddToPlaylist={addToPlaylist}
@@ -1544,7 +1613,14 @@ export function App() {
         />
         <Route
           path="/search"
-          element={renderSongsPage("Search", allKnownSongs, "No songs found.")}
+          element={renderSongsPage("Search", allKnownSongs, "No songs found.", (song: Song) =>
+            playSongFromContext(song, {
+              id: "search",
+              label: "Search",
+              source: "search",
+              songs: allKnownSongs
+            })
+          )}
         />
         <Route
           path="/add-songs"
@@ -1559,11 +1635,25 @@ export function App() {
         />
         <Route
           path="/favorites"
-          element={renderSongsPage("Favorites", favoriteSongs, "No favorite songs yet. Click Favorite on a song first.")}
+          element={renderSongsPage("Favorites", favoriteSongs, "No favorite songs yet. Click Favorite on a song first.", (song: Song) =>
+            playSongFromContext(song, {
+              id: "favorites",
+              label: "Favorites",
+              source: "favorites",
+              songs: favoriteSongs
+            })
+          )}
         />
         <Route
           path="/recent"
-          element={renderSongsPage("Recently Played", recentSongs, "No recently played songs yet. Click Play on a song first.")}
+          element={renderSongsPage("Recently Played", recentSongs, "No recently played songs yet. Click Play on a song first.", (song: Song) =>
+            playSongFromContext(song, {
+              id: "recent",
+              label: "Recent",
+              source: "recent",
+              songs: recentSongs
+            })
+          )}
         />
         <Route
           path="/playlists"
@@ -1579,7 +1669,14 @@ export function App() {
                 onDeletePlaylist={deletePlaylist}
                 onAddToPlaylist={addToPlaylist}
                 onRemoveFromPlaylist={removeFromPlaylist}
-                onPlay={playSong}
+                onPlay={(song: Song) =>
+                  playSongFromContext(song, {
+                    id: `playlist:${selectedPlaylistId}`,
+                    label: playlists.find((p) => p.id === selectedPlaylistId)?.name ?? "Playlist",
+                    source: "playlist",
+                    songs: allKnownSongs
+                  })
+                }
                 onQueue={queueSong}
                 onToggleFavorite={toggleFavorite}
                 onOpenDetails={setDetailsSong}
@@ -1595,7 +1692,14 @@ export function App() {
                 songs={allKnownSongs}
                 playlists={playlists}
                 favoriteIds={favoriteIds}
-                onPlay={playSong}
+                onPlay={(song: Song) =>
+                  playSongFromContext(song, {
+                    id: "stats",
+                    label: "Stats",
+                    source: "manual",
+                    songs: allKnownSongs
+                  })
+                }
                 onQueue={queueSong}
                 onToggleFavorite={toggleFavorite}
                 onAddToPlaylist={addToPlaylist}
@@ -1606,21 +1710,28 @@ export function App() {
         <Route
           path="/profile"
           element={
-            <ProfilePage
-              user={authUser}
-              favorites={favoriteSongs}
-              recentlyPlayed={recentSongs}
-              playlists={playlists}
-              favoriteIds={favoriteIds}
-              queueLength={queue.length}
-              habitSummaries={habitSummaries}
-              onLogout={logout}
-              onPlay={playSong}
-              onQueue={queueSong}
-              onToggleFavorite={toggleFavorite}
-              onAddToPlaylist={addToPlaylist}
-              onOpenDetails={setDetailsSong}
-            />
+              <ProfilePage
+                user={authUser}
+                favorites={favoriteSongs}
+                recentlyPlayed={recentSongs}
+                playlists={playlists}
+                favoriteIds={favoriteIds}
+                queueLength={queue.length}
+                habitSummaries={habitSummaries}
+                onLogout={logout}
+                onPlay={(song: Song) =>
+                  playSongFromContext(song, {
+                    id: "profile",
+                    label: "Profile",
+                    source: "profile",
+                    songs: favoriteSongs
+                  })
+                }
+                onQueue={queueSong}
+                onToggleFavorite={toggleFavorite}
+                onAddToPlaylist={addToPlaylist}
+                onOpenDetails={setDetailsSong}
+              />
           }
         />
         <Route
@@ -1660,6 +1771,7 @@ export function App() {
         onRemove={removeFromQueue}
         onOpenDetails={setDetailsSong}
         onClear={() => {
+          queueRef.current = [];
           setQueue([]);
           showNotice("Queue cleared.");
         }}
