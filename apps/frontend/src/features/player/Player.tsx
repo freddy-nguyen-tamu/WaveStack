@@ -204,6 +204,47 @@ export function Player({
     await playCurrent();
   }
 
+  useEffect(() => {
+    function isTypingTarget(target: EventTarget | null) {
+      if (!(target instanceof HTMLElement)) {
+        return false;
+      }
+
+      const tagName = target.tagName.toLowerCase();
+
+      return (
+        target.isContentEditable ||
+        tagName === "input" ||
+        tagName === "textarea" ||
+        tagName === "select" ||
+        tagName === "button"
+      );
+    }
+
+    function handleSpacebarResume(event: KeyboardEvent) {
+      if (event.code !== "Space" && event.key !== " ") {
+        return;
+      }
+
+      if (isTypingTarget(event.target)) {
+        return;
+      }
+
+      if (isPlaying) {
+        return;
+      }
+
+      event.preventDefault();
+      void playCurrent();
+    }
+
+    window.addEventListener("keydown", handleSpacebarResume);
+
+    return () => {
+      window.removeEventListener("keydown", handleSpacebarResume);
+    };
+  }, [isPlaying, activeSong.id]);
+
   function skip() {
     onNext();
   }
