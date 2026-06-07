@@ -216,12 +216,19 @@ export function Player({
         target.isContentEditable ||
         tagName === "input" ||
         tagName === "textarea" ||
-        tagName === "select" ||
-        tagName === "button"
+        tagName === "select"
       );
     }
 
-    function handleSpacebarResume(event: KeyboardEvent) {
+    function isNativeButtonTarget(target: EventTarget | null) {
+      if (!(target instanceof HTMLElement)) {
+        return false;
+      }
+
+      return target.closest("button, a, [role='button']") !== null;
+    }
+
+    function handleSpacebarToggle(event: KeyboardEvent) {
       if (event.code !== "Space" && event.key !== " ") {
         return;
       }
@@ -230,20 +237,28 @@ export function Player({
         return;
       }
 
-      if (isPlaying) {
+      if (isNativeButtonTarget(event.target)) {
         return;
       }
 
       event.preventDefault();
+
+      if (isPlaying) {
+        audioRef.current?.pause();
+        setIsPlaying(false);
+        setMessage(`Paused: ${displayName}`);
+        return;
+      }
+
       void playCurrent();
     }
 
-    window.addEventListener("keydown", handleSpacebarResume);
+    window.addEventListener("keydown", handleSpacebarToggle);
 
     return () => {
-      window.removeEventListener("keydown", handleSpacebarResume);
+      window.removeEventListener("keydown", handleSpacebarToggle);
     };
-  }, [isPlaying, activeSong.id]);
+  }, [isPlaying, activeSong.id, displayName]);
 
   function skip() {
     onNext();
