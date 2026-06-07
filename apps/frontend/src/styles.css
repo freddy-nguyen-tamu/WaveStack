@@ -1115,6 +1115,70 @@ article > section > h3 {
   text-transform: none;
 }
 
+.song-list-row {
+  display: grid;
+  grid-template-columns: clamp(4.75rem, 6vw, 6.25rem) minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: start;
+}
+
+.song-list-row__art {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: var(--line);
+  border-radius: var(--radius-card);
+  background: var(--color-panel);
+}
+
+.song-list-row__art-image,
+.song-list-row__art-fallback {
+  width: 100%;
+  height: 100%;
+}
+
+.song-list-row__art-image {
+  display: block;
+  object-fit: cover;
+  filter: grayscale(1);
+}
+
+.song-list-row__art-fallback {
+  display: grid;
+  place-items: center;
+  font-family: var(--font-display);
+  font-size: 2rem;
+}
+
+.song-list-row__body {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.song-list-row__body strong,
+.song-list-row__body small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.song-list-row__body strong {
+  display: block;
+}
+
+.song-list-row__body small {
+  color: var(--color-muted);
+}
+
+.song-list-row__index {
+  color: var(--color-red);
+}
+
+.song-list-row__side-action {
+  align-self: start;
+}
+
 /* Modals */
 
 .song-modal-backdrop,
@@ -1591,9 +1655,9 @@ article > section > h3 {
 
 .queue-drawer__item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 4.5rem minmax(0, 1fr) auto;
   gap: 0.75rem;
-  align-items: center;
+  align-items: start;
 }
 
 .queue-drawer__item--current {
@@ -1610,8 +1674,14 @@ article > section > h3 {
   white-space: nowrap;
 }
 
-.queue-drawer__item .song-actions {
-  grid-column: 1 / -1;
+.queue-drawer__body {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.queue-drawer__art {
+  width: 4.5rem;
 }
 
 .queue-drawer__item .song-actions__playlist-picker {
@@ -1667,6 +1737,7 @@ article > section > h3 {
 .stats-pie-card,
 .taste-judge-card,
 .taste-comparison-card,
+.listening-bar-card,
 .stats-receipt-controls,
 .stats-page__snapshots {
   display: grid;
@@ -1683,6 +1754,7 @@ article > section > h3 {
 
 .taste-judge-card,
 .taste-comparison-card,
+.listening-bar-card,
 .stats-receipt-controls,
 .drive-export-panel {
   border: var(--line);
@@ -1692,6 +1764,7 @@ article > section > h3 {
 .stats-pie-card h3,
 .taste-judge-card h3,
 .taste-comparison-card h3,
+.listening-bar-card h3,
 .stats-receipt-controls h3 {
   margin: 0;
   font-size: 1.6rem;
@@ -1823,6 +1896,47 @@ article > section > h3 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
+}
+
+.listening-bar-chart {
+  display: grid;
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+  align-items: end;
+  min-height: 18rem;
+  padding: 1.25rem 1rem 0.85rem;
+  border: var(--line);
+  border-radius: var(--radius-card);
+  background: var(--color-ink);
+  color: var(--color-paper);
+  box-shadow: 10px 10px 0 rgba(0, 0, 0, 0.16);
+}
+
+.listening-bar-chart__bar {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  gap: 0.4rem;
+  align-items: end;
+  min-width: 0;
+  height: 100%;
+}
+
+.listening-bar-chart__bar span {
+  display: block;
+  width: 70%;
+  min-height: 0.35rem;
+  height: var(--bar-height);
+  justify-self: center;
+  background: var(--color-paper);
+  border-left: 1px solid rgba(255, 255, 255, 0.5);
+  border-right: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.listening-bar-chart__bar small {
+  overflow: hidden;
+  color: var(--color-paper);
+  font-size: 0.65rem;
+  text-align: center;
+  text-overflow: ellipsis;
 }
 
 .stats-receipt {
@@ -2130,6 +2244,26 @@ article > section > h3 {
   .ranking-list__item,
   .recent-list__item {
     grid-template-columns: 1fr;
+  }
+
+  .song-list-row,
+  .queue-drawer__item {
+    grid-template-columns: 4rem minmax(0, 1fr);
+  }
+
+  .song-list-row__side-action,
+  .queue-drawer__remove {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .queue-drawer__art {
+    width: 4rem;
+  }
+
+  .listening-bar-chart {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    min-height: 13rem;
   }
 
   .stats-page__hero {

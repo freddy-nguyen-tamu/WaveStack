@@ -6,6 +6,7 @@ import type { ClientPlaylist, Song } from "../../App";
 import { formatSongDisplayName } from "../../song-format";
 import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
 import { SongActions } from "../../components/SongActions";
+import { SongArtwork } from "../../components/SongArtwork";
 
 type SongPageQueryData = {
   songPage: {
@@ -159,20 +160,32 @@ export function SearchPanel({
       <p>Showing {results.length} song(s){debouncedQuery ? ` (DB search: "${debouncedQuery}")` : ""}{loading ? " — searching..." : ""}</p>
       {results.length ? (
         <ul>
-          {results.map((song) => {
+          {results.map((song, index) => {
             const isFavorite = favoriteIds.includes(song.id);
             return (
-              <li key={song.id}>
-                <strong>{formatSongDisplayName(song)}</strong> - {song.albumTitle}
-                <SongActions
+              <li key={song.id} className="song-list-row">
+                <SongArtwork
                   song={song}
-                  playlists={playlists}
-                  isFavorite={isFavorite}
-                  onPlay={play}
-                  onQueue={queue}
-                  onToggleFavorite={(item) => toggleFavorite(item, isFavorite)}
-                  onAddToPlaylist={add}
+                  wrapClassName="song-list-row__art"
+                  fallbackClassName="song-list-row__art-fallback"
+                  imageClassName="song-list-row__art-image"
                 />
+                <div className="song-list-row__body">
+                  <strong>
+                    <span className="song-list-row__index">{index + 1}.</span>{" "}
+                    {formatSongDisplayName(song)}
+                  </strong>
+                  {song.albumTitle ? <small>{song.albumTitle}</small> : null}
+                  <SongActions
+                    song={song}
+                    playlists={playlists}
+                    isFavorite={isFavorite}
+                    onPlay={play}
+                    onQueue={queue}
+                    onToggleFavorite={(item) => toggleFavorite(item, isFavorite)}
+                    onAddToPlaylist={add}
+                  />
+                </div>
               </li>
             );
           })}

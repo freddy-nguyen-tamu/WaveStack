@@ -156,7 +156,7 @@ export function StatsPage({
       case "GENRES": return genreEntries;
       default: return [];
     }
-  }, [tab, trackEntries, artistEntries, genreEntries]);
+  }, [tab, artistEntries, genreEntries]);
 
   function RankChange({ entry }: { entry: StatsEntry }) {
     if (entry.rankChange === 0) {
@@ -182,44 +182,27 @@ export function StatsPage({
     );
   }
 
-  function renderRankingList(entries: StatsEntry[], showSubtitle = true, showSongActions = false) {
+  function renderRankingList(entries: StatsEntry[], showSubtitle = true) {
     if (!entries.length) {
       return <p className="stats-page__empty">No data for this period yet.</p>;
     }
 
     return (
       <ol className="ranking-list">
-        {entries.map((entry) => {
-          const song = entry.songId ? songById.get(entry.songId) : undefined;
+        {entries.map((entry) => (
+          <li key={entry.key} className="ranking-list__item">
+            <span className="ranking-list__position">#{entry.rank}</span>
 
-          return (
-            <li key={entry.key} className="ranking-list__item">
-              <span className="ranking-list__position">#{entry.rank}</span>
+            <div className="ranking-list__info">
+              <strong>{entry.label}</strong>
+              {showSubtitle && entry.subtitle ? <small>{entry.subtitle}</small> : null}
+            </div>
 
-              <div className="ranking-list__info">
-                <strong>{entry.label}</strong>
-                {showSubtitle && entry.subtitle ? <small>{entry.subtitle}</small> : null}
-              </div>
+            <span className="ranking-list__count">{entry.playCount} plays</span>
 
-              <span className="ranking-list__count">{entry.playCount} plays</span>
-
-              <RankChange entry={entry} />
-
-              {showSongActions && song ? (
-                <SongActions
-                  song={song}
-                  playlists={playlists}
-                  isFavorite={favoriteIds.includes(song.id)}
-                  onPlay={onPlay}
-                  onQueue={onQueue}
-                  onToggleFavorite={onToggleFavorite}
-                  onAddToPlaylist={onAddToPlaylist}
-                  className="song-actions--ranking"
-                />
-              ) : null}
-            </li>
-          );
-        })}
+            <RankChange entry={entry} />
+          </li>
+        ))}
       </ol>
     );
   }
@@ -266,6 +249,39 @@ export function StatsPage({
           );
         })}
       </ul>
+    );
+  }
+
+  function renderSongPlayBarChart() {
+    const entries = trackEntries.slice(0, 24);
+    const maxPlays = Math.max(1, ...entries.map((entry) => entry.playCount));
+
+    return (
+      <section className="listening-bar-card" aria-label="Song play bar chart">
+        <div>
+          <p className="eyebrow">Song spread</p>
+          <h3>How your plays stack up</h3>
+        </div>
+
+        {tracksData === undefined ? (
+          <p className="stats-page__loading">Loading...</p>
+        ) : entries.length ? (
+          <div className="listening-bar-chart" role="img" aria-label="Bar chart of your top song play counts">
+            {entries.map((entry) => {
+              const height = Math.max(6, Math.round((entry.playCount / maxPlays) * 100));
+
+              return (
+                <div className="listening-bar-chart__bar" key={entry.key}>
+                  <span style={{ "--bar-height": `${height}%` } as React.CSSProperties} />
+                  <small>{entry.playCount}</small>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="stats-page__empty">No song plays for this period yet.</p>
+        )}
+      </section>
     );
   }
 
@@ -331,6 +347,8 @@ export function StatsPage({
         </div>
 
         <TasteComparisonPanel period={period} />
+
+        {renderSongPlayBarChart()}
 
         <TasteJudgePanel period={period} />
 
