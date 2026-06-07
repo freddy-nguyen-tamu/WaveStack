@@ -6,7 +6,6 @@ import {
   BarChart3,
   Clock,
   Download,
-  Disc3,
   Headphones,
   Loader2,
   Mic2,
@@ -62,10 +61,9 @@ const PERIOD_LABEL_MAP: Record<string, string> = {
   ALL_TIME: "All time"
 };
 
-type Tab = "TRACKS" | "ARTISTS" | "GENRES" | "RECENT";
+type Tab = "ARTISTS" | "GENRES" | "RECENT";
 
 const TAB_LABELS: Record<Tab, string> = {
-  TRACKS: "Top Tracks",
   ARTISTS: "Top Artists",
   GENRES: "Top Genres",
   RECENT: "Recently Played"
@@ -128,11 +126,11 @@ export function StatsPage({
   onAddToPlaylist
 }: StatsPageProps) {
   const [period, setPeriod] = useState<string>("FOUR_WEEKS");
-  const [tab, setTab] = useState<Tab>("TRACKS");
+  const [tab, setTab] = useState<Tab>("ARTISTS");
   const [receiptMode, setReceiptMode] = useState<"normal" | "brat">("normal");
   const [receiptLength, setReceiptLength] = useState<10 | 50>(10);
 
-  const [topTracksQuery, { data: tracksData, loading: tracksLoading }] = useLazyQuery(TOP_TRACKS_QUERY, { fetchPolicy: "cache-and-network" });
+  const [topTracksQuery, { data: tracksData }] = useLazyQuery(TOP_TRACKS_QUERY, { fetchPolicy: "cache-and-network" });
   const [topArtistsQuery, { data: artistsData, loading: artistsLoading }] = useLazyQuery(TOP_ARTISTS_QUERY, { fetchPolicy: "cache-and-network" });
   const [topGenresQuery, { data: genresData, loading: genresLoading }] = useLazyQuery(TOP_GENRES_QUERY, { fetchPolicy: "cache-and-network" });
   const [recentQuery, { data: recentData, loading: recentLoading }] = useLazyQuery(RECENTLY_PLAYED_DETAILED_QUERY, { fetchPolicy: "cache-and-network" });
@@ -154,7 +152,6 @@ export function StatsPage({
 
   const tabEntries = useMemo(() => {
     switch (tab) {
-      case "TRACKS": return trackEntries;
       case "ARTISTS": return artistEntries;
       case "GENRES": return genreEntries;
       default: return [];
@@ -273,7 +270,6 @@ export function StatsPage({
   }
 
   const tabs: { key: Tab; icon: React.ReactNode; label: string }[] = [
-    { key: "TRACKS", icon: <Disc3 aria-hidden="true" />, label: "Top Tracks" },
     { key: "ARTISTS", icon: <Mic2 aria-hidden="true" />, label: "Top Artists" },
     { key: "GENRES", icon: <BarChart3 aria-hidden="true" />, label: "Top Genres" },
     { key: "RECENT", icon: <Clock aria-hidden="true" />, label: "Recently Played" }
@@ -326,8 +322,8 @@ export function StatsPage({
           />
 
           <StatsPieChart
-            title="Genre pie"
-            entries={(genreEntries ?? []).map((entry) => ({
+            title="Song pie"
+            entries={(trackEntries ?? []).map((entry) => ({
               label: entry.label,
               value: entry.playCount
             }))}
@@ -354,7 +350,7 @@ export function StatsPage({
             </button>
             <button
               type="button"
-              className={receiptMode === "brat" ? "stats-tabs__button stats-tabs__button--active" : "stats-tabs__button"}
+              className={receiptMode === "brat" ? "stats-tabs__button stats-tabs__button--active stats-tabs__button--brat-active" : "stats-tabs__button"}
               onClick={() => setReceiptMode("brat")}
             >
               Brat Edition
@@ -403,12 +399,6 @@ export function StatsPage({
             <h3>{TAB_LABELS[tab]}</h3>
           </div>
         </div>
-
-        {tab === "TRACKS" && (
-          <>
-            {tracksLoading ? <p className="stats-page__loading">Loading...</p> : renderRankingList(trackEntries, true, true)}
-          </>
-        )}
 
         {tab === "ARTISTS" && (
           <>

@@ -32,6 +32,7 @@
   --color-panel: #e8e8e8;
   --color-soft: #f5f5f5;
   --color-red: #fd0330;
+  --color-brat: #a3ff12;
   --line: 1px solid var(--color-ink);
   --radius-card: 8px;
   --radius-pill: 999px;
@@ -182,6 +183,12 @@ button[aria-pressed="true"],
   border-color: var(--color-ink) !important;
   background: var(--color-ink) !important;
   color: var(--color-paper) !important;
+}
+
+.stats-tabs__button--brat-active {
+  border-color: var(--color-ink) !important;
+  background: var(--color-brat) !important;
+  color: var(--color-ink) !important;
 }
 
 label {
@@ -1830,7 +1837,7 @@ article > section > h3 {
 }
 
 .stats-receipt--brat .stats-receipt__paper {
-  background: #a3ff12;
+  background: var(--color-brat);
 }
 
 .stats-receipt__paper h3 {

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApolloClient, useMutation, useQuery } from "@apollo/client";
-import { useInfiniteScroll } from "./hooks/useInfiniteScroll";
-import { Activity, Clock, Heart, Library, ListMusic, Search, TrendingUp } from "lucide-react";
+import { Activity, Clock, Heart, ListMusic, Search, TrendingUp } from "lucide-react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import {
     LISTENING_HABIT_SUMMARY_QUERY,
@@ -9,7 +8,6 @@ import {
     MUSIC_HOME_QUERY,
     RECOMMENDED_SONGS_QUERY,
     RECORD_LISTEN_MUTATION,
-    SONG_PAGE_QUERY,
     LIBRARY_STATE_QUERY,
     FAVORITE_SONG_MUTATION,
     UNFAVORITE_SONG_MUTATION,
@@ -98,23 +96,6 @@ export type ClientPlaylist = {
   updatedAt?: string;
 };
 
-type SongPageQueryData = {
-  songPage: {
-    nodes: Song[];
-    pageInfo: {
-      endCursor?: string | null;
-      hasNextPage: boolean;
-    };
-    totalCount: number;
-  };
-};
-
-type SongPageQueryVariables = {
-  first: number;
-  after?: string | null;
-  query?: string | null;
-};
-
 const fallbackSongs: Song[] = [
   {
     id: "demo-1",
@@ -133,7 +114,6 @@ const fallbackSongs: Song[] = [
 
 const NAV_SCROLL_PATHS = new Set([
   "/dashboard",
-  "/library",
   "/search",
   "/favorites",
   "/recent",
@@ -178,60 +158,6 @@ function writeLocalJson(key: string, value: unknown) {
   } catch (error) {
     console.warn(`Could not write ${key}`, error);
   }
-}
-
-function LibraryPage({
-  songs,
-  librarySongs,
-  libraryCursor,
-  playlists,
-  favoriteIds,
-  onAddToPlaylist,
-  onPlay,
-  onQueue,
-  onToggleFavorite,
-  onLoadMoreLibrary
-}: {
-  songs: Song[];
-  librarySongs: Song[];
-  libraryCursor: string | null;
-  playlists: ClientPlaylist[];
-  favoriteIds: string[];
-  onAddToPlaylist: (id: string, song: Song) => void;
-  onPlay: (song: Song) => void;
-  onQueue: (song: Song) => void;
-  onToggleFavorite: (song: Song) => void;
-  onLoadMoreLibrary: () => void;
-}) {
-  const sentinelRef = useInfiniteScroll({
-    enabled: Boolean(libraryCursor),
-    loading: false,
-    hasMore: Boolean(libraryCursor),
-    onLoadMore: () => { onLoadMoreLibrary(); }
-  });
-
-  return (
-    <section aria-label="Library">
-      <SearchPanel
-        pageKey="Library"
-        title="Library"
-        songs={librarySongs.length ? librarySongs : songs}
-        playlists={playlists}
-        favoriteIds={favoriteIds}
-        emptyMessage="No songs found."
-        onAddToPlaylist={onAddToPlaylist}
-        onPlay={onPlay}
-        onQueue={onQueue}
-        onToggleFavorite={onToggleFavorite}
-      />
-
-      <div ref={sentinelRef} className="infinite-scroll-sentinel" aria-hidden="true" />
-
-      {!libraryCursor && librarySongs.length > 0 ? (
-        <p className="infinite-scroll-status">End of library.</p>
-      ) : null}
-    </section>
-  );
 }
 
 export function App() {
@@ -389,9 +315,6 @@ export function App() {
     [visibleRecommendations]
   );
 
-  const [libraryCursor, setLibraryCursor] = useState<string | null>(null);
-  const [librarySongs, setLibrarySongs] = useState<Song[]>([]);
-
   const { data: meData, refetch: refetchMe } = useQuery(ME_QUERY, {
     skip: !hasToken,
     fetchPolicy: "network-only"
@@ -437,7 +360,6 @@ export function App() {
     return uniqueSongsById([
       ...cachedSongs,
       ...songs,
-      ...librarySongs,
       ...homeRecentSongs,
       ...homeRecommendationSongs,
       ...visibleRecommendations.map((item) => item.song),
@@ -450,7 +372,6 @@ export function App() {
   }, [
     cachedSongs,
     songs,
-    librarySongs,
     homeRecentSongs,
     homeRecommendationSongs,
     visibleRecommendations,
@@ -480,40 +401,6 @@ export function App() {
     return uniqueSongsById([...homeRecentSongs, ...localRecentSongs]);
   }, [recentSongIds, songById, homeRecentSongs]);
 
-  const {
-    data: libraryData,
-    fetchMore: fetchMoreLibrary
-  } = useQuery<SongPageQueryData, SongPageQueryVariables>(SONG_PAGE_QUERY, {
-    variables: { first: 50, after: null, query: null },
-    fetchPolicy: "cache-and-network"
-  });
-
-  useEffect(() => {
-    if (libraryData?.songPage?.nodes) {
-      setLibrarySongs(libraryData.songPage.nodes);
-      setLibraryCursor(libraryData.songPage.pageInfo.endCursor ?? null);
-    }
-  }, [libraryData]);
-
-  async function loadMoreLibrary() {
-    if (!libraryCursor) return;
-
-    const result = await fetchMoreLibrary({
-      variables: {
-        first: 50,
-        after: libraryCursor,
-        query: null
-      }
-    });
-
-    const page = result.data?.songPage;
-
-    if (page?.nodes) {
-      setLibrarySongs((items) => uniqueSongsById([...items, ...page.nodes]));
-      setLibraryCursor(page.pageInfo.endCursor ?? null);
-    }
-  }
-
   useEffect(() => {
     window.localStorage.setItem("wavestack:favorites", JSON.stringify(favoriteIds));
   }, [favoriteIds]);
@@ -525,10 +412,6 @@ export function App() {
   useEffect(() => {
     rememberSongObjects(songs);
   }, [songs]);
-
-  useEffect(() => {
-    rememberSongObjects(librarySongs);
-  }, [librarySongs]);
 
   useEffect(() => {
     rememberSongObjects(visibleRecommendations.map((item) => item.song));
@@ -1462,9 +1345,6 @@ export function App() {
         <NavLink to="/dashboard" onClick={() => requestNavScroll("/dashboard")}>
           <Activity aria-hidden="true" /> Dashboard
         </NavLink>
-        <NavLink to="/library" onClick={() => requestNavScroll("/library")}>
-          <Library aria-hidden="true" /> Library
-        </NavLink>
         <NavLink to="/search" onClick={() => requestNavScroll("/search")}>
           <Search aria-hidden="true" /> Search
         </NavLink>
@@ -1540,21 +1420,6 @@ export function App() {
               />
             </section>
           }
-        />
-        <Route
-          path="/library"
-          element={<LibraryPage
-            songs={songs}
-            librarySongs={librarySongs}
-            libraryCursor={libraryCursor}
-            playlists={playlists}
-            favoriteIds={favoriteIds}
-            onAddToPlaylist={addToPlaylist}
-            onPlay={playSong}
-            onQueue={queueSong}
-            onToggleFavorite={toggleFavorite}
-            onLoadMoreLibrary={() => void loadMoreLibrary()}
-          />}
         />
         <Route
           path="/search"
