@@ -2846,3 +2846,124 @@ article.dashboard-page .song-actions--tile select {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* ─── All Page ─── */
+article.all-page {
+  padding: var(--space-page);
+  padding-right: 0;
+}
+
+article.all-page > h2 {
+  margin-bottom: 1rem;
+}
+
+article.all-page__section {
+  margin-bottom: 2rem;
+}
+
+article.all-page__section h3 {
+  font-size: 1rem;
+  margin-bottom: 0.5rem;
+  opacity: 0.7;
+}
+
+article.all-page__grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+article.all-page__row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-lg);
+  transition: background 0.15s;
+}
+
+article.all-page__row:hover {
+  background: var(--color-surface-2);
+}
+
+article.all-page__art {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+article.all-page__art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+article.all-page__art-fallback {
+  width: 2.5rem;
+  height: 2.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-3);
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+}
+
+article.all-page__info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+article.all-page__info strong {
+  font-size: 0.95rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+article.all-page__info small {
+  font-size: 0.8rem;
+  opacity: 0.65;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+article.all-page__duration {
+  font-size: 0.8rem;
+  opacity: 0.6;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+/* ─── Upload Button ─── */
+.upload-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.75rem;
+  background: var(--color-accent);
+  color: #fff;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  font-size: 0.82rem;
+  white-space: nowrap;
+  transition: opacity 0.15s;
+}
+
+.upload-button:hover {
+  opacity: 0.85;
+}
+
+.upload-button svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.nav-upload-button {
+  margin: 0 0.5rem;
+}

@@ -73,6 +73,44 @@ export async function restoreApolloCache(): Promise<void> {
   });
 }
 
+export function uploadTrack(
+  file: File,
+  title: string,
+  artistName: string,
+  albumTitle?: string
+): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const token = window.localStorage.getItem("wavestack:auth-token");
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("title", title);
+    formData.append("artistName", artistName);
+    if (albumTitle) formData.append("albumTitle", albumTitle);
+
+    const baseUrl = import.meta.env.VITE_GRAPHQL_URL ?? "http://localhost:3000/graphql";
+    const apiOrigin = baseUrl.replace(/\/graphql$/, "");
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${apiOrigin}/api/upload`);
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch {
+          reject(new Error("Invalid JSON response"));
+        }
+      } else {
+        reject(new Error(`Upload failed: ${xhr.status} ${xhr.statusText}`));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.send(formData);
+  });
+}
+
 const SONG_CARD_FIELDS = gql`
   fragment SongCardFields on Song {
     id

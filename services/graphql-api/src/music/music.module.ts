@@ -16,10 +16,11 @@ import { ThumbnailRepairService } from "./thumbnail-repair.service";
 import { DriveDownloadService } from "./drive-download.service";
 import { DriveLyricsService } from "./drive-lyrics.service";
 import { LyricsRepairService } from "./lyrics-repair.service";
+import { UploadsController } from "./uploads.controller";
 
 @Module({
   imports: [ConfigModule, StorageModule, DatabaseModule, AuthModule],
-  controllers: [GoogleDriveController],
+  controllers: [GoogleDriveController, UploadsController],
   providers: [
     MusicResolver,
     MusicService,

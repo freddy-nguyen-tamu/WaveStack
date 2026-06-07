@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApolloClient, useMutation, useQuery } from "@apollo/client";
-import { Activity, Clock, Heart, ListMusic, Search, TrendingUp, Upload } from "lucide-react";
+import { Activity, Clock, Heart, ListMusic, Music2, Search, TrendingUp, Upload } from "lucide-react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import {
     LISTENING_HABIT_SUMMARY_QUERY,
@@ -20,6 +20,7 @@ import { Player } from "./features/player/Player";
 import { PlaylistPanel } from "./features/playlists/PlaylistPanel";
 import { SearchPanel } from "./features/search/SearchPanel";
 import { Dashboard } from "./features/dashboard/Dashboard";
+import { AllPage } from "./features/all/AllPage";
 import { SongMetadataModal } from "./features/dashboard/SongMetadataModal";
 import { AuthPanel } from "./features/auth/AuthPanel";
 import { OAuthCallbackPage } from "./features/auth/OAuthCallbackPage";
@@ -27,6 +28,8 @@ import { ProfilePage } from "./features/profile/ProfilePage";
 import { QueueDrawer } from "./features/queue/QueueDrawer";
 import { StatsPage } from "./features/stats/StatsPage";
 import { AddSongsPage } from "./features/add-songs/AddSongsPage";
+import { UploadButton } from "./components/UploadButton";
+import { uploadTrack } from "./api";
 import { formatSongDisplayName } from "./song-format";
 
 export type Song = {
@@ -114,6 +117,7 @@ const fallbackSongs: Song[] = [
 ];
 
 const NAV_SCROLL_PATHS = new Set([
+  "/all",
   "/dashboard",
   "/search",
   "/favorites",
@@ -176,6 +180,15 @@ export function App() {
   const [queueDrawerOpen, setQueueDrawerOpen] = useState(false);
   const [detailsSong, setDetailsSong] = useState<Song | null>(null);
   const pendingNavScrollRef = useRef(false);
+
+  const [localTracks, setLocalTracks] = useState<Song[]>(() => {
+    try {
+      const stored = window.localStorage.getItem("wavestack:local-tracks");
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
 
   const [cachedSongs, setCachedSongs] = useState<Song[]>(readSongCache);
 
@@ -361,6 +374,7 @@ export function App() {
 
   const allKnownSongs = useMemo<Song[]>(() => {
     return uniqueSongsById([
+      ...localTracks,
       ...cachedSongs,
       ...songs,
       ...homeRecentSongs,
@@ -373,6 +387,7 @@ export function App() {
       ...(detailsSong ? [detailsSong] : [])
     ]);
   }, [
+    localTracks,
     cachedSongs,
     songs,
     homeRecentSongs,
@@ -403,6 +418,10 @@ export function App() {
 
     return uniqueSongsById([...homeRecentSongs, ...localRecentSongs]);
   }, [recentSongIds, songById, homeRecentSongs]);
+
+  useEffect(() => {
+    window.localStorage.setItem("wavestack:local-tracks", JSON.stringify(localTracks));
+  }, [localTracks]);
 
   useEffect(() => {
     window.localStorage.setItem("wavestack:favorites", JSON.stringify(favoriteIds));
@@ -544,6 +563,26 @@ export function App() {
       writeLocalJson("wavestack:song-cache", next);
       return next;
     });
+  }
+
+  async function handleLocalUpload(file: File) {
+    const nameWithoutExt = file.name.replace(/\.[^/.]+$/, "");
+    showNotice(`Uploading ${nameWithoutExt}...`);
+
+    try {
+      const result = await uploadTrack(file, nameWithoutExt, "Local Upload");
+      const track = result as unknown as Song;
+      if (track?.id) {
+        setLocalTracks((prev) => {
+          if (prev.some((t) => t.id === track.id)) return prev;
+          return [track, ...prev];
+        });
+        showNotice(`Uploaded: ${track.title}`);
+      }
+    } catch (error) {
+      console.error("Upload failed", error);
+      showNotice(error instanceof Error ? error.message : "Upload failed.");
+    }
   }
 
   function handleUserSongsAdded(songsToRemember: Song[]) {
@@ -1373,6 +1412,9 @@ export function App() {
       </header>
 
       <nav className="app-nav" aria-label="Primary">
+        <NavLink to="/all" onClick={() => requestNavScroll("/all")}>
+          <Music2 aria-hidden="true" /> All ({allKnownSongs.length})
+        </NavLink>
         <NavLink to="/dashboard" onClick={() => requestNavScroll("/dashboard")}>
           <Activity aria-hidden="true" /> Dashboard
         </NavLink>
@@ -1397,6 +1439,7 @@ export function App() {
         <NavLink to="/playlists" onClick={() => requestNavScroll("/playlists")}>
           Playlists ({playlists.length})
         </NavLink>
+        <UploadButton onUpload={handleLocalUpload} className="nav-upload-button" />
       </nav>
 
       {notice ? (
@@ -1433,7 +1476,24 @@ export function App() {
 
       <div className="route-content" data-route-content>
       <Routes>
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/" element={<Navigate to="/all" replace />} />
+        <Route
+          path="/all"
+          element={
+            <section aria-label="All songs">
+              <AllPage
+                songs={allKnownSongs}
+                localTracks={localTracks}
+                playlists={playlists}
+                favoriteIds={favoriteIds}
+                onPlay={playSong}
+                onQueue={queueSong}
+                onToggleFavorite={toggleFavorite}
+                onAddToPlaylist={addToPlaylist}
+              />
+            </section>
+          }
+        />
         <Route
           path="/dashboard"
           element={
