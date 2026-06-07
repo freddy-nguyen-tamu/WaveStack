@@ -25,8 +25,14 @@ export class MusicService {
     return this.googleDriveService.listSongs();
   }
 
-  songPage(first: number, after?: string | null, query?: string | null, userId?: string | null): Promise<SongConnection> {
-    return this.driveTrackRepository.listSongs({ first, after, query, userId });
+  songPage(
+    first: number,
+    after?: string | null,
+    query?: string | null,
+    userId?: string | null,
+    sort?: string | null
+  ): Promise<SongConnection> {
+    return this.driveTrackRepository.listSongs({ first, after, query, userId, sort });
   }
 
   async dashboardSongs(limit: number, userId?: string | null): Promise<Song[]> {

@@ -5,7 +5,7 @@ import { SONG_PAGE_QUERY } from "../../api";
 import type { ClientPlaylist, Song } from "../../App";
 import { formatSongDisplayName } from "../../song-format";
 import { SongActions } from "../../components/SongActions";
-import { SongArtwork } from "../../components/SongArtwork";
+import { SongIdentityButton } from "../../components/SongIdentityButton";
 import { PaginationBar } from "../../components/PaginationBar";
 
 type SongPageQueryData = {
@@ -36,6 +36,7 @@ type SearchPanelProps = {
   onPlay: (song: Song) => void;
   onQueue: (song: Song) => void;
   onToggleFavorite: (song: Song) => void;
+  onOpenDetails: (song: Song) => void;
 };
 
 const PAGE_SIZE = 30;
@@ -50,7 +51,8 @@ export function SearchPanel({
   onAddToPlaylist,
   onPlay,
   onQueue,
-  onToggleFavorite
+  onToggleFavorite,
+  onOpenDetails
 }: SearchPanelProps) {
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -191,18 +193,13 @@ export function SearchPanel({
               const absoluteIndex = (currentPage - 1) * PAGE_SIZE + index + 1;
               return (
                 <li key={song.id} className="song-list-row">
-                  <SongArtwork
+                  <SongIdentityButton
                     song={song}
-                    wrapClassName="song-list-row__art"
-                    fallbackClassName="song-list-row__art-fallback"
-                    imageClassName="song-list-row__art-image"
+                    index={absoluteIndex}
+                    subtitle={song.artistName}
+                    onOpenDetails={onOpenDetails}
                   />
-                  <div className="song-list-row__body">
-                    <strong>
-                      <span className="song-list-row__index">{absoluteIndex}.</span>{" "}
-                      {formatSongDisplayName(song)}
-                    </strong>
-                    {song.albumTitle ? <small>{song.albumTitle}</small> : null}
+                  <div className="song-list-row__body song-list-row__body--actions-only">
                     <SongActions
                       song={song}
                       playlists={playlists}

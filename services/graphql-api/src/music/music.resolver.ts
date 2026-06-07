@@ -52,9 +52,10 @@ export class MusicResolver {
     @Context() context: GqlContext,
     @Args("first", { type: () => Int, nullable: true }) first?: number,
     @Args("after", { nullable: true }) after?: string,
-    @Args("query", { nullable: true }) query?: string
+    @Args("query", { nullable: true }) query?: string,
+    @Args("sort", { nullable: true }) sort?: string
   ): Promise<SongConnection> {
-    return this.musicService.songPage(first ?? 50, after, query, this.resolveUserId(context));
+    return this.musicService.songPage(first ?? 50, after, query, this.resolveUserId(context), sort);
   }
 
   @Query(() => [Song])

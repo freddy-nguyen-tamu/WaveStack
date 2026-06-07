@@ -28,7 +28,6 @@ import { ProfilePage } from "./features/profile/ProfilePage";
 import { QueueDrawer } from "./features/queue/QueueDrawer";
 import { StatsPage } from "./features/stats/StatsPage";
 import { AddSongsPage } from "./features/add-songs/AddSongsPage";
-import { UploadButton } from "./components/UploadButton";
 import { uploadTrack } from "./api";
 import { formatSongDisplayName } from "./song-format";
 
@@ -565,24 +564,49 @@ export function App() {
     });
   }
 
-  async function handleLocalUpload(file: File) {
-    const nameWithoutExt = file.name.replace(/\.[^/.]+$/, "");
-    showNotice(`Uploading ${nameWithoutExt}...`);
+  async function handleLocalUploads(files: File[]) {
+    const audioFiles = files.filter((file) => file.type.startsWith("audio/") || /\.(mp3|m4a|wav|flac|aac|ogg|opus|webm|mp4)$/i.test(file.name));
 
-    try {
-      const result = await uploadTrack(file, nameWithoutExt, "Local Upload");
-      const track = result as unknown as Song;
-      if (track?.id) {
-        setLocalTracks((prev) => {
-          if (prev.some((t) => t.id === track.id)) return prev;
-          return [track, ...prev];
-        });
-        showNotice(`Uploaded: ${track.title}`);
-      }
-    } catch (error) {
-      console.error("Upload failed", error);
-      showNotice(error instanceof Error ? error.message : "Upload failed.");
+    if (!audioFiles.length) {
+      showNotice("Choose at least one audio file.");
+      return;
     }
+
+    showNotice(`Uploading ${audioFiles.length} local audio file(s)...`);
+
+    const uploaded: Song[] = [];
+
+    for (const file of audioFiles) {
+      const nameWithoutExt = file.name.replace(/\.[^/.]+$/, "");
+
+      try {
+        const result = await uploadTrack(file, nameWithoutExt, "Local Upload", "Local Uploads");
+        const track = result as unknown as Song;
+
+        if (track?.id) {
+          uploaded.push(track);
+        }
+      } catch (error) {
+        console.error(`Upload failed for ${file.name}`, error);
+        showNotice(error instanceof Error ? error.message : `Upload failed for ${file.name}.`);
+      }
+    }
+
+    if (!uploaded.length) {
+      showNotice("No files were uploaded.");
+      return;
+    }
+
+    setLocalTracks((prev) => {
+      const seen = new Set(prev.map((track) => track.id));
+      const next = uploaded.filter((track) => !seen.has(track.id));
+      return [...next, ...prev];
+    });
+
+    rememberSongObjects(uploaded);
+    void refetch();
+    void refetchLibraryState();
+    showNotice(`Uploaded ${uploaded.length} local audio file(s).`);
   }
 
   function handleUserSongsAdded(songsToRemember: Song[]) {
@@ -1390,6 +1414,7 @@ export function App() {
           onPlay={playSong}
           onQueue={queueSong}
           onToggleFavorite={toggleFavorite}
+          onOpenDetails={setDetailsSong}
         />
       </section>
     );
@@ -1439,7 +1464,6 @@ export function App() {
         <NavLink to="/playlists" onClick={() => requestNavScroll("/playlists")}>
           Playlists ({playlists.length})
         </NavLink>
-        <UploadButton onUpload={handleLocalUpload} className="nav-upload-button" />
       </nav>
 
       {notice ? (
@@ -1482,14 +1506,13 @@ export function App() {
           element={
             <section aria-label="All songs">
               <AllPage
-                songs={allKnownSongs}
-                localTracks={localTracks}
                 playlists={playlists}
                 favoriteIds={favoriteIds}
                 onPlay={playSong}
                 onQueue={queueSong}
                 onToggleFavorite={toggleFavorite}
                 onAddToPlaylist={addToPlaylist}
+                onOpenDetails={setDetailsSong}
               />
             </section>
           }
@@ -1530,6 +1553,7 @@ export function App() {
               isSignedIn={hasToken}
               onSongsAdded={handleUserSongsAdded}
               onNotice={showNotice}
+              onUploadFiles={handleLocalUploads}
             />
           }
         />
@@ -1558,6 +1582,7 @@ export function App() {
                 onPlay={playSong}
                 onQueue={queueSong}
                 onToggleFavorite={toggleFavorite}
+                onOpenDetails={setDetailsSong}
               />
             </section>
           }
@@ -1594,6 +1619,7 @@ export function App() {
               onQueue={queueSong}
               onToggleFavorite={toggleFavorite}
               onAddToPlaylist={addToPlaylist}
+              onOpenDetails={setDetailsSong}
             />
           }
         />
@@ -1632,6 +1658,7 @@ export function App() {
         onToggleFavorite={toggleFavorite}
         onAddToPlaylist={addToPlaylist}
         onRemove={removeFromQueue}
+        onOpenDetails={setDetailsSong}
         onClear={() => {
           setQueue([]);
           showNotice("Queue cleared.");

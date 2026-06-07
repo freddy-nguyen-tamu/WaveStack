@@ -5,6 +5,7 @@ import { EXPORT_LISTENING_HABITS_MUTATION, TEST_PRIVATE_DRIVE_WRITE_MUTATION } f
 import { formatSeconds, formatSongDisplayName } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
 import { SongActions } from "../../components/SongActions";
+import { SongIdentityButton } from "../../components/SongIdentityButton";
 import { ListeningArchivePanel } from "./ListeningArchivePanel";
 
 type DriveExportResult = {
@@ -29,6 +30,7 @@ type ProfilePageProps = {
   onQueue: (song: Song) => void;
   onToggleFavorite: (song: Song) => void;
   onAddToPlaylist: (playlistId: string, song: Song) => void;
+  onOpenDetails: (song: Song) => void;
 };
 
 const periodLabels: Record<string, string> = {
@@ -50,7 +52,8 @@ export function ProfilePage({
   onPlay,
   onQueue,
   onToggleFavorite,
-  onAddToPlaylist
+  onAddToPlaylist,
+  onOpenDetails
 }: ProfilePageProps) {
   const [testDriveWrite, testResult] = useMutation<{ testPrivateDriveWrite: DriveExportResult }>(
     TEST_PRIVATE_DRIVE_WRITE_MUTATION
@@ -171,12 +174,14 @@ export function ProfilePage({
           <div className="profile-song-list">
             {recentlyPlayed.slice(0, 8).map((song) => (
               <div key={song.id} className="profile-song-list__item">
-                <SongArtwork
+                <SongIdentityButton
                   song={song}
-                  wrapClassName="profile-song-list__art"
+                  subtitle={song.artistName}
+                  className="song-identity-button profile-song-list__identity"
+                  artClassName="profile-song-list__art"
                   fallbackClassName="profile-song-list__fallback"
+                  onOpenDetails={onOpenDetails}
                 />
-                <span>{formatSongDisplayName(song)}</span>
                 <SongActions
                   song={song}
                   playlists={playlists}

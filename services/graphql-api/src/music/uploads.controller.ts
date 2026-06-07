@@ -120,12 +120,28 @@ export class UploadsController {
       response.setHeader("Content-Range", `bytes ${start}-${end}/${fileSize}`);
       response.setHeader("Accept-Ranges", "bytes");
       response.setHeader("Content-Length", chunkSize);
-      response.setHeader("Content-Type", "audio/mpeg");
+      response.setHeader("Content-Type", this.contentTypeForFile(safeName));
       stream.pipe(response);
     } else {
-      response.setHeader("Content-Type", "audio/mpeg");
+      response.setHeader("Content-Type", this.contentTypeForFile(safeName));
       response.setHeader("Content-Length", fileSize);
       createReadStream(filePath).pipe(response);
     }
+  }
+
+  private contentTypeForFile(fileName: string): string {
+    const lower = fileName.toLowerCase();
+
+    if (lower.endsWith(".mp3")) return "audio/mpeg";
+    if (lower.endsWith(".m4a")) return "audio/mp4";
+    if (lower.endsWith(".mp4")) return "audio/mp4";
+    if (lower.endsWith(".aac")) return "audio/aac";
+    if (lower.endsWith(".wav")) return "audio/wav";
+    if (lower.endsWith(".flac")) return "audio/flac";
+    if (lower.endsWith(".ogg")) return "audio/ogg";
+    if (lower.endsWith(".opus")) return "audio/ogg";
+    if (lower.endsWith(".webm")) return "audio/webm";
+
+    return "application/octet-stream";
   }
 }

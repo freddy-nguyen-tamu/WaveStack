@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ClientPlaylist, Song } from "../../App";
 import { formatSongDisplayName } from "../../song-format";
 import { SongActions } from "../../components/SongActions";
-import { SongArtwork } from "../../components/SongArtwork";
+import { SongIdentityButton } from "../../components/SongIdentityButton";
 import { PaginationBar } from "../../components/PaginationBar";
 
 type PlaylistPanelProps = {
@@ -19,6 +19,7 @@ type PlaylistPanelProps = {
   onPlay: (song: Song) => void;
   onQueue: (song: Song) => void;
   onToggleFavorite: (song: Song) => void;
+  onOpenDetails: (song: Song) => void;
 };
 
 const PAGE_SIZE = 30;
@@ -35,7 +36,8 @@ export function PlaylistPanel({
   onRemoveFromPlaylist,
   onPlay,
   onQueue,
-  onToggleFavorite
+  onToggleFavorite,
+  onOpenDetails
 }: PlaylistPanelProps) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
@@ -195,18 +197,13 @@ export function PlaylistPanel({
 
                 return (
                   <li key={song.id} className="song-list-row">
-                    <SongArtwork
+                    <SongIdentityButton
                       song={song}
-                      wrapClassName="song-list-row__art"
-                      fallbackClassName="song-list-row__art-fallback"
-                      imageClassName="song-list-row__art-image"
+                      index={index + 1}
+                      subtitle={song.artistName}
+                      onOpenDetails={onOpenDetails}
                     />
-                    <div className="song-list-row__body">
-                      <strong>
-                        <span className="song-list-row__index">{index + 1}.</span>{" "}
-                        {formatSongDisplayName(song)}
-                      </strong>
-                      {song.albumTitle ? <small>{song.albumTitle}</small> : null}
+                    <div className="song-list-row__body song-list-row__body--actions-only">
                       <SongActions
                         song={song}
                         playlists={playlists}
@@ -248,18 +245,13 @@ export function PlaylistPanel({
 
             return (
               <li key={song.id} className="song-list-row">
-                <SongArtwork
+                <SongIdentityButton
                   song={song}
-                  wrapClassName="song-list-row__art"
-                  fallbackClassName="song-list-row__art-fallback"
-                  imageClassName="song-list-row__art-image"
+                  index={(currentPage - 1) * PAGE_SIZE + index + 1}
+                  subtitle={song.artistName}
+                  onOpenDetails={onOpenDetails}
                 />
-                <div className="song-list-row__body">
-                  <strong>
-                    <span className="song-list-row__index">{(currentPage - 1) * PAGE_SIZE + index + 1}.</span>{" "}
-                    {formatSongDisplayName(song)}
-                  </strong>
-                  {song.albumTitle ? <small>{song.albumTitle}</small> : null}
+                <div className="song-list-row__body song-list-row__body--actions-only">
                   <SongActions
                     song={song}
                     playlists={playlists}

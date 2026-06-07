@@ -7,12 +7,14 @@ import {
 } from "../../api";
 import type { Song } from "../../App";
 import { SongArtwork } from "../../components/SongArtwork";
+import { UploadButton } from "../../components/UploadButton";
 import { formatSongDisplayName } from "../../song-format";
 
 type AddSongsPageProps = {
   isSignedIn: boolean;
   onSongsAdded: (songs: Song[]) => void;
   onNotice: (message: string) => void;
+  onUploadFiles: (files: File[]) => void;
 };
 
 type DraftSong = {
@@ -153,8 +155,8 @@ function parseBulkRows(value: string): DraftSong[] {
     });
 }
 
-export function AddSongsPage({ isSignedIn, onSongsAdded, onNotice }: AddSongsPageProps) {
-  const [mode, setMode] = useState<"single" | "bulk">("single");
+export function AddSongsPage({ isSignedIn, onSongsAdded, onNotice, onUploadFiles }: AddSongsPageProps) {
+  const [mode, setMode] = useState<"single" | "bulk" | "local">("single");
   const [reviewBeforeSave, setReviewBeforeSave] = useState(true);
   const [drafts, setDrafts] = useState<DraftSong[]>(() => [newDraft()]);
   const [bulkText, setBulkText] = useState("");
@@ -310,6 +312,9 @@ export function AddSongsPage({ isSignedIn, onSongsAdded, onNotice }: AddSongsPag
         <button type="button" aria-pressed={mode === "bulk"} onClick={() => setMode("bulk")}>
           <ListPlus aria-hidden="true" /> Bulk add
         </button>
+        <button type="button" aria-pressed={mode === "local"} onClick={() => setMode("local")}>
+          <Upload aria-hidden="true" /> Local files
+        </button>
       </div>
 
       <label className="add-songs-page__review-toggle">
@@ -336,6 +341,24 @@ export function AddSongsPage({ isSignedIn, onSongsAdded, onNotice }: AddSongsPag
           <button type="button" onClick={applyBulkText}>
             <Upload aria-hidden="true" /> Prepare bulk songs
           </button>
+        </section>
+      ) : null}
+
+      {mode === "local" ? (
+        <section className="add-songs-page__local-upload" aria-label="Upload local audio files">
+          <h3>Upload local audio</h3>
+          <p>
+            Choose one audio file or select multiple audio files at once. This opens your local PC file picker and uploads the files to your private library.
+          </p>
+          <UploadButton
+            label="Choose local audio files"
+            multiple
+            className="add-songs-page__upload-button"
+            onUploadFiles={onUploadFiles}
+          />
+          <p className="add-songs-page__upload-help">
+            Supported by the browser file picker: MP3, M4A, WAV, FLAC, AAC, OGG, OPUS, WEBM audio, and other audio/* files.
+          </p>
         </section>
       ) : null}
 

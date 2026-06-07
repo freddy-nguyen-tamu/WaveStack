@@ -3,7 +3,7 @@ import { X, Trash2 } from "lucide-react";
 import type { ClientPlaylist, Song } from "../../App";
 import { formatSongDisplayName } from "../../song-format";
 import { SongActions } from "../../components/SongActions";
-import { SongArtwork } from "../../components/SongArtwork";
+import { SongIdentityButton } from "../../components/SongIdentityButton";
 
 type QueueDrawerProps = {
   open: boolean;
@@ -18,6 +18,7 @@ type QueueDrawerProps = {
   onAddToPlaylist: (playlistId: string, song: Song) => void;
   onRemove: (songId: string) => void;
   onClear: () => void;
+  onOpenDetails: (song: Song) => void;
 };
 
 export function QueueDrawer({
@@ -32,7 +33,8 @@ export function QueueDrawer({
   onToggleFavorite,
   onAddToPlaylist,
   onRemove,
-  onClear
+  onClear,
+  onOpenDetails
 }: QueueDrawerProps) {
   useEffect(() => {
     if (!open) return;
@@ -100,17 +102,16 @@ export function QueueDrawer({
                       key={song.id}
                       className={`queue-drawer__item${isCurrent ? " queue-drawer__item--current" : ""}`}
                     >
-                      <SongArtwork
+                      <SongIdentityButton
                         song={song}
-                        wrapClassName="song-list-row__art queue-drawer__art"
+                        subtitle={isCurrent ? `Now playing · ${song.artistName}` : song.artistName}
+                        className="song-identity-button queue-drawer__identity"
+                        artClassName="song-list-row__art queue-drawer__art"
                         fallbackClassName="song-list-row__art-fallback"
                         imageClassName="song-list-row__art-image"
+                        onOpenDetails={onOpenDetails}
                       />
                       <div className="queue-drawer__body">
-                        <span className="queue-drawer__name">
-                          {isCurrent ? <strong>Now: </strong> : null}
-                          {formatSongDisplayName(song)}
-                        </span>
 
                         <SongActions
                           song={song}

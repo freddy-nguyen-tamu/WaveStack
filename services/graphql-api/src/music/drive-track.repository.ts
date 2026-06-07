@@ -191,11 +191,19 @@ export class DriveTrackRepository {
     after?: string | null;
     query?: string | null;
     userId?: string | null;
+    sort?: string | null;
   }): Promise<SongConnection> {
     const first = Math.max(1, Math.min(options.first || 50, 100));
     const offset = options.after ? Number(Buffer.from(options.after, "base64url").toString("utf8")) : 0;
     const safeOffset = Number.isFinite(offset) && offset >= 0 ? offset : 0;
     const search = options.query?.trim().toLowerCase();
+    const sort = options.sort ?? "DATE_DESC";
+    const orderBy =
+      sort === "TITLE_ASC"
+        ? "ORDER BY lower(title) ASC, lower(artist_name) ASC, id ASC"
+        : sort === "DATE_ASC"
+          ? "ORDER BY synced_at ASC, id ASC"
+          : "ORDER BY synced_at DESC, id ASC";
 
     const params: unknown[] = [];
     const conditions = [
@@ -224,7 +232,7 @@ export class DriveTrackRepository {
         SELECT *
         FROM drive_tracks
         ${where}
-        ORDER BY synced_at DESC, id ASC
+        ${orderBy}
         LIMIT $${limitParam}
         OFFSET $${offsetParam}
         `,

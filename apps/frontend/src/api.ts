@@ -27,7 +27,7 @@ export const apolloCache = new InMemoryCache({
     Query: {
       fields: {
         songPage: {
-          keyArgs: ["query"],
+          keyArgs: ["query", "sort"],
           merge(existing, incoming) {
             if (!existing) return incoming;
             const existingNodes = existing.nodes ?? [];
@@ -185,8 +185,8 @@ export const MUSIC_HOME_QUERY = gql`
 export const SONG_PAGE_QUERY = gql`
   ${SONG_CARD_FIELDS}
 
-  query SongPage($first: Int, $after: String, $query: String) {
-    songPage(first: $first, after: $after, query: $query) {
+  query SongPage($first: Int, $after: String, $query: String, $sort: String) {
+    songPage(first: $first, after: $after, query: $query, sort: $sort) {
       nodes {
         ...SongCardFields
       }
