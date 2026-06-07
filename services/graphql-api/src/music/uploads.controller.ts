@@ -3,9 +3,9 @@ import {
   Controller, Get, Header, NotFoundException, Param, Post, Req, Res, UnauthorizedException, UploadedFile, UseInterceptors
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
+import { diskStorage } from "multer";
 import { Request, Response } from "express";
-import { createReadStream, existsSync, mkdirSync } from "node:fs";
-import { access, unlink, writeFile } from "node:fs/promises";
+import { createReadStream, existsSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { AuthService } from "../auth/auth.service";
 import { DriveTrackRepository } from "./drive-track.repository";
@@ -23,20 +23,31 @@ function sanitizeFileName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
+ensureUploadsDir();
+
 @Controller("api")
 export class UploadsController {
   constructor(
     private readonly authService: AuthService,
     private readonly driveTrackRepository: DriveTrackRepository,
     private readonly audioJobsProducer: AudioJobsProducer
-  ) {
-    ensureUploadsDir();
-  }
+  ) {}
 
   @Post("upload")
-  @UseInterceptors(FileInterceptor("file", { dest: UPLOADS_DIR }))
+  @UseInterceptors(
+    FileInterceptor("file", {
+      storage: diskStorage({
+        destination: UPLOADS_DIR,
+        filename: (_req: any, file: { originalname: string }, callback: (err: Error | null, name: string) => void) => {
+          const prefix = Date.now();
+          const sanitized = sanitizeFileName(file.originalname);
+          callback(null, `${prefix}-${sanitized}`);
+        }
+      })
+    })
+  )
   async uploadFile(
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFile() file: any,
     @Req() request: Request,
     @Res() response: Response
   ) {
@@ -60,17 +71,7 @@ export class UploadsController {
     const artistName = (request.body?.artistName as string)?.trim() || "Unknown Artist";
     const albumTitle = (request.body?.albumTitle as string)?.trim() || "Local Uploads";
 
-    const ext = file.originalname.split(".").pop() ?? "mp3";
-    const storedName = `${Date.now()}-${sanitizeFileName(file.originalname)}`;
-    const destPath = join(UPLOADS_DIR, storedName);
-
-    if (file.path && file.path !== destPath) {
-      await access(file.path);
-      await writeFile(destPath, await require("node:fs/promises").readFile(file.path));
-      await unlink(file.path).catch(() => {});
-    }
-
-    const streamUrl = `/api/uploads/${storedName}`;
+    const streamUrl = `/api/uploads/${file.filename}`;
 
     const song = await this.driveTrackRepository.createUserSongs(userId, [
       { title, artistName, albumTitle, durationSeconds: 0, streamUrl }
@@ -94,14 +95,18 @@ export class UploadsController {
   @Header("Accept-Ranges", "bytes")
   streamUpload(@Param("fileName") fileName: string, @Req() request: Request, @Res() response: Response) {
     const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "");
+
+    if (!safeName) {
+      throw new NotFoundException("Invalid file name.");
+    }
+
     const filePath = join(UPLOADS_DIR, safeName);
 
-    if (!existsSync(filePath) || !safeName) {
+    if (!existsSync(filePath)) {
       throw new NotFoundException("Uploaded file not found.");
     }
 
-    const stat = require("node:fs").statSync(filePath);
-    const fileSize = stat.size;
+    const fileSize = statSync(filePath).size;
     const range = request.headers.range;
 
     if (range) {
