@@ -368,7 +368,7 @@ export function StatsPage({
             </button>
             <button
               type="button"
-              className={receiptMode === "brat" ? "stats-tabs__button stats-tabs__button--active stats-tabs__button--brat-active" : "stats-tabs__button"}
+              className="stats-tabs__button stats-tabs__button--brat-active"
               onClick={() => setReceiptMode("brat")}
             >
               Brat Edition
