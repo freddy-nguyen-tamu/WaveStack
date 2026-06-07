@@ -133,6 +133,18 @@ export function SearchPanel({
     setPage(1);
   }, [query, results.length]);
 
+  useEffect(() => {
+    if (!message) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setMessage("");
+    }, 2400);
+
+    return () => window.clearTimeout(timer);
+  }, [message]);
+
   function play(song: Song) {
     onPlay(song);
     setMessage(`Playing: ${formatSongDisplayName(song)}`);
@@ -160,7 +172,11 @@ export function SearchPanel({
         <Search aria-hidden="true" /> Song, artist, album, or genre
         <input value={query} onChange={(event) => setQuery(event.target.value)} />
       </label>
-      {message ? <p role="status">{message}</p> : null}
+      {message ? (
+        <p className="toast-notice toast-notice--status" role="status">
+          {message}
+        </p>
+      ) : null}
       <p>
         Showing {pagedResults.length} of {results.length} song(s).
         {debouncedQuery ? ` (DB search: "${debouncedQuery}")` : ""}

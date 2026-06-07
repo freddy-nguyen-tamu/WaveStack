@@ -172,6 +172,7 @@ export function App() {
   const [playlists, setPlaylists] = useState<ClientPlaylist[]>(readPlaylists);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState("");
   const [notice, setNotice] = useState("");
+  const noticeTimerRef = useRef<number | null>(null);
   const [queueDrawerOpen, setQueueDrawerOpen] = useState(false);
   const [detailsSong, setDetailsSong] = useState<Song | null>(null);
   const pendingNavScrollRef = useRef(false);
@@ -498,8 +499,25 @@ export function App() {
   queueRef.current = queue;
 
   function showNotice(message: string) {
+    if (noticeTimerRef.current) {
+      window.clearTimeout(noticeTimerRef.current);
+    }
+
     setNotice(message);
+
+    noticeTimerRef.current = window.setTimeout(() => {
+      setNotice("");
+      noticeTimerRef.current = null;
+    }, 2800);
   }
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) {
+        window.clearTimeout(noticeTimerRef.current);
+      }
+    };
+  }, []);
 
   function rememberRecent(song: Song) {
     rememberSongObjects([song]);
@@ -1381,7 +1399,11 @@ export function App() {
         </NavLink>
       </nav>
 
-      {notice ? <p className="app-banner app-banner--status" role="status">{notice}</p> : null}
+      {notice ? (
+        <p className="toast-notice toast-notice--status" role="status">
+          {notice}
+        </p>
+      ) : null}
       {error ? (
         <p className="app-banner app-banner--error" role="alert">
           Could not load music library: {error.message}

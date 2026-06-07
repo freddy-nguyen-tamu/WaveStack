@@ -77,6 +77,18 @@ export function PlaylistPanel({
     setPage(1);
   }, [query, songs.length]);
 
+  useEffect(() => {
+    if (!message) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setMessage("");
+    }, 2400);
+
+    return () => window.clearTimeout(timer);
+  }, [message]);
+
   function createPlaylistFromPrompt() {
     const name = window.prompt("Playlist name", "My Playlist");
 
@@ -148,7 +160,11 @@ export function PlaylistPanel({
         <ListPlus aria-hidden="true" /> New playlist
       </button>
 
-      {message ? <p role="status">{message}</p> : null}
+      {message ? (
+        <p className="toast-notice toast-notice--status" role="status">
+          {message}
+        </p>
+      ) : null}
 
       {playlists.length ? (
         <ul>
