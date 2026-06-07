@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApolloClient, useMutation, useQuery } from "@apollo/client";
-import { Activity, Clock, Heart, ListMusic, Search, TrendingUp } from "lucide-react";
+import { Activity, Clock, Heart, ListMusic, Search, TrendingUp, Upload } from "lucide-react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import {
     LISTENING_HABIT_SUMMARY_QUERY,
@@ -26,6 +26,7 @@ import { OAuthCallbackPage } from "./features/auth/OAuthCallbackPage";
 import { ProfilePage } from "./features/profile/ProfilePage";
 import { QueueDrawer } from "./features/queue/QueueDrawer";
 import { StatsPage } from "./features/stats/StatsPage";
+import { AddSongsPage } from "./features/add-songs/AddSongsPage";
 import { formatSongDisplayName } from "./song-format";
 
 export type Song = {
@@ -118,7 +119,8 @@ const NAV_SCROLL_PATHS = new Set([
   "/favorites",
   "/recent",
   "/stats",
-  "/playlists"
+  "/playlists",
+  "/add-songs"
 ]);
 
 function readStringArray(key: string): string[] {
@@ -524,6 +526,17 @@ export function App() {
       writeLocalJson("wavestack:song-cache", next);
       return next;
     });
+  }
+
+  function handleUserSongsAdded(songsToRemember: Song[]) {
+    if (!songsToRemember.length) {
+      return;
+    }
+
+    rememberSongObjects(songsToRemember);
+    void refetch();
+    void refetchLibraryState();
+    void loadInitialRecommendations();
   }
 
   function dismissRecommendation(songId: string) {
@@ -1348,6 +1361,9 @@ export function App() {
         <NavLink to="/search" onClick={() => requestNavScroll("/search")}>
           <Search aria-hidden="true" /> Search
         </NavLink>
+        <NavLink to="/add-songs" onClick={() => requestNavScroll("/add-songs")}>
+          <Upload aria-hidden="true" /> Add Songs
+        </NavLink>
         <NavLink to="/favorites" onClick={() => requestNavScroll("/favorites")}>
           <Heart aria-hidden="true" /> Favorites ({favoriteSongs.length})
         </NavLink>
@@ -1423,7 +1439,17 @@ export function App() {
         />
         <Route
           path="/search"
-          element={renderSongsPage("Search", songs, "No songs found.")}
+          element={renderSongsPage("Search", allKnownSongs, "No songs found.")}
+        />
+        <Route
+          path="/add-songs"
+          element={
+            <AddSongsPage
+              isSignedIn={hasToken}
+              onSongsAdded={handleUserSongsAdded}
+              onNotice={showNotice}
+            />
+          }
         />
         <Route
           path="/favorites"

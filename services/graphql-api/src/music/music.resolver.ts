@@ -1,4 +1,5 @@
-import { Args, Int, Mutation, Query, Resolver } from "@nestjs/graphql";
+import { Args, Context, Int, Mutation, Query, Resolver } from "@nestjs/graphql";
+import { AuthService } from "../auth/auth.service";
 import {
   Album,
   Artist,
@@ -7,13 +8,28 @@ import {
   LyricsRepairResult,
   Song,
   SongConnection,
-  ThumbnailRepairResult
+  ThumbnailRepairResult,
+  UserSongAttributeInput,
+  UserSongInput
 } from "./music.models";
 import { MusicService } from "./music.service";
 import { DriveLibrarySyncService } from "./drive-library-sync.service";
 import { DriveTrackRepository } from "./drive-track.repository";
 import { ThumbnailRepairService } from "./thumbnail-repair.service";
 import { LyricsRepairService } from "./lyrics-repair.service";
+
+type GqlContext = {
+  req?: {
+    headers?: {
+      authorization?: string;
+    };
+    user?: {
+      id?: string;
+      userId?: string;
+      sub?: string;
+    };
+  };
+};
 
 @Resolver(() => Song)
 export class MusicResolver {
@@ -22,7 +38,8 @@ export class MusicResolver {
     private readonly driveLibrarySyncService: DriveLibrarySyncService,
     private readonly driveTrackRepository: DriveTrackRepository,
     private readonly thumbnailRepairService: ThumbnailRepairService,
-    private readonly lyricsRepairService: LyricsRepairService
+    private readonly lyricsRepairService: LyricsRepairService,
+    private readonly authService: AuthService
   ) {}
 
   @Query(() => [Song])
@@ -32,23 +49,64 @@ export class MusicResolver {
 
   @Query(() => SongConnection)
   songPage(
+    @Context() context: GqlContext,
     @Args("first", { type: () => Int, nullable: true }) first?: number,
     @Args("after", { nullable: true }) after?: string,
     @Args("query", { nullable: true }) query?: string
   ): Promise<SongConnection> {
-    return this.musicService.songPage(first ?? 50, after, query);
+    return this.musicService.songPage(first ?? 50, after, query, this.resolveUserId(context));
   }
 
   @Query(() => [Song])
   dashboardSongs(
+    @Context() context: GqlContext,
     @Args("limit", { type: () => Int, nullable: true }) limit?: number
   ): Promise<Song[]> {
-    return this.musicService.dashboardSongs(limit ?? 40);
+    return this.musicService.dashboardSongs(limit ?? 40, this.resolveUserId(context));
   }
 
   @Query(() => Song, { nullable: true })
-  songDetails(@Args("id") id: string): Promise<Song | null> {
-    return this.musicService.songDetails(id);
+  songDetails(@Context() context: GqlContext, @Args("id") id: string): Promise<Song | null> {
+    return this.musicService.songDetails(id, this.resolveUserId(context));
+  }
+
+  @Mutation(() => Song)
+  async createUserSong(
+    @Context() context: GqlContext,
+    @Args("input") input: UserSongInput
+  ): Promise<Song> {
+    const userId = this.resolveUserId(context);
+
+    if (!userId) {
+      return this.emptyPrivateSong();
+    }
+
+    const songs = await this.musicService.createUserSongs(userId, [input]);
+    return songs[0] ?? this.emptyPrivateSong();
+  }
+
+  @Mutation(() => [Song])
+  async createUserSongs(
+    @Context() context: GqlContext,
+    @Args("inputs", { type: () => [UserSongInput] }) inputs: UserSongInput[]
+  ): Promise<Song[]> {
+    const userId = this.resolveUserId(context);
+
+    if (!userId) {
+      return [];
+    }
+
+    return this.musicService.createUserSongs(userId, inputs);
+  }
+
+  @Mutation(() => Song, { nullable: true })
+  updateUserSongAttributes(
+    @Context() context: GqlContext,
+    @Args("songId") songId: string,
+    @Args("input") input: UserSongAttributeInput
+  ): Promise<Song | null> {
+    const userId = this.resolveUserId(context);
+    return userId ? this.musicService.updateUserSongAttributes(userId, songId, input) : Promise.resolve(null);
   }
 
   @Query(() => DriveSyncStatus)
@@ -104,5 +162,41 @@ export class MusicResolver {
     @Args("userId") userId: string
   ): Promise<boolean> {
     return this.musicService.requestUploadProcessing(songId, blobUrl, userId);
+  }
+
+  private resolveUserId(context: GqlContext): string | null {
+    const contextUserId =
+      context.req?.user?.userId ??
+      context.req?.user?.id ??
+      context.req?.user?.sub ??
+      null;
+
+    if (contextUserId) {
+      return contextUserId;
+    }
+
+    const authHeader = context.req?.headers?.authorization ?? "";
+
+    if (!authHeader.startsWith("Bearer ")) {
+      return null;
+    }
+
+    try {
+      return this.authService.verifyToken(authHeader.slice(7)).userId;
+    } catch {
+      return null;
+    }
+  }
+
+  private emptyPrivateSong(): Song {
+    return {
+      id: "",
+      title: "",
+      artistName: "",
+      albumTitle: "",
+      durationSeconds: 0,
+      streamUrl: "",
+      genreNames: []
+    };
   }
 }

@@ -1,4 +1,4 @@
-import { Field, Float, ID, Int, ObjectType } from "@nestjs/graphql";
+import { Field, Float, ID, InputType, Int, ObjectType } from "@nestjs/graphql";
 
 @ObjectType()
 export class Song {
@@ -175,4 +175,58 @@ export class Artist {
 
   @Field()
   name!: string;
+}
+
+@InputType()
+export class UserSongInput {
+  @Field()
+  title!: string;
+
+  @Field()
+  artistName!: string;
+
+  @Field({ nullable: true })
+  albumTitle?: string;
+
+  @Field(() => Int, { nullable: true })
+  durationSeconds?: number;
+
+  @Field({ nullable: true })
+  streamUrl?: string;
+
+  @Field(() => [String], { nullable: true })
+  genreNames?: string[];
+
+  @Field({ nullable: true })
+  thumbnailUrl?: string;
+
+  @Field({ nullable: true })
+  lyrics?: string;
+}
+
+@InputType()
+export class UserSongAttributeInput {
+  @Field({ nullable: true })
+  title?: string;
+
+  @Field({ nullable: true })
+  artistName?: string;
+
+  @Field({ nullable: true })
+  albumTitle?: string;
+
+  @Field(() => Int, { nullable: true })
+  durationSeconds?: number;
+
+  @Field({ nullable: true })
+  streamUrl?: string;
+
+  @Field(() => [String], { nullable: true })
+  genreNames?: string[];
+
+  @Field({ nullable: true })
+  thumbnailUrl?: string;
+
+  @Field({ nullable: true })
+  lyrics?: string;
 }

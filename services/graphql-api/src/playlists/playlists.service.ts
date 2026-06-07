@@ -1,7 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
-import { GoogleDriveService } from "../music/google-drive.service";
 import { Song } from "../music/music.models";
+import { MusicService } from "../music/music.service";
 import { LibraryState, UserPlaylist } from "./playlists.models";
 
 type FavoriteRow = {
@@ -21,7 +21,7 @@ type PlaylistRow = {
 export class PlaylistsService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly googleDriveService: GoogleDriveService
+    private readonly musicService: MusicService
   ) {}
 
   async getLibraryState(userId: string, recentLimit = 100): Promise<LibraryState> {
@@ -44,7 +44,7 @@ export class PlaylistsService {
     );
 
     const ids = this.rows<FavoriteRow>(result).map((row) => row.song_id);
-    return this.songsByIds(ids);
+    return this.songsByIds(ids, userId);
   }
 
   async toggleFavorite(userId: string, songId: string): Promise<Song[]> {
@@ -122,7 +122,7 @@ export class PlaylistsService {
     return Promise.all(
       rows.map(async (row) => {
         const songIds = row.song_ids ?? [];
-        const songs = await this.songsByIds(songIds);
+        const songs = await this.songsByIds(songIds, userId);
 
         return {
           id: row.id,
@@ -235,7 +235,7 @@ export class PlaylistsService {
     );
 
     const ids = this.rows<FavoriteRow>(result).map((row) => row.song_id);
-    return this.songsByIds(ids);
+    return this.songsByIds(ids, userId);
   }
 
   private async touchPlaylist(playlistId: string, userId: string): Promise<void> {
@@ -247,17 +247,21 @@ export class PlaylistsService {
     );
   }
 
-  private async songsByIds(ids: string[]): Promise<Song[]> {
+  private async songsByIds(ids: string[], userId: string): Promise<Song[]> {
     const uniqueIds = Array.from(new Set(ids)).filter(Boolean);
 
     if (!uniqueIds.length) {
       return [];
     }
 
-    const allSongs = await this.googleDriveService.listSongs();
-    const songMap = new Map(allSongs.map((song) => [song.id, song]));
+    const songs = await Promise.all(uniqueIds.map((id) => this.musicService.songDetails(id, userId)));
+    const songMap = new Map(
+      songs
+        .filter((song): song is Song => Boolean(song))
+        .map((song) => [song.id, song])
+    );
 
-    return uniqueIds
+    return ids
       .map((id) => songMap.get(id))
       .filter((song): song is Song => Boolean(song));
   }

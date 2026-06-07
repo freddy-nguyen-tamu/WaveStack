@@ -31,6 +31,34 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     await this.pool.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`);
 
     await this.pool.query(`
+      ALTER TABLE IF EXISTS drive_tracks
+      ADD COLUMN IF NOT EXISTS owner_user_id UUID REFERENCES app_users(id) ON DELETE CASCADE
+    `);
+
+    await this.pool.query(`
+      ALTER TABLE IF EXISTS drive_tracks
+      ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'drive'
+    `);
+
+    await this.pool.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1
+          FROM information_schema.tables
+          WHERE table_schema = 'public'
+            AND table_name = 'drive_tracks'
+        ) THEN
+          CREATE INDEX IF NOT EXISTS idx_drive_tracks_owner_synced
+          ON drive_tracks (owner_user_id, synced_at DESC);
+
+          CREATE INDEX IF NOT EXISTS idx_drive_tracks_source_type
+          ON drive_tracks (source_type);
+        END IF;
+      END $$;
+    `);
+
+    await this.pool.query(`
       CREATE TABLE IF NOT EXISTS app_favorites (
         user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
         song_id TEXT NOT NULL,

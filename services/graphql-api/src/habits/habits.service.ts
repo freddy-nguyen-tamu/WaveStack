@@ -97,7 +97,7 @@ export class HabitsService {
     } = {}
   ): Promise<RecommendSongResult[]> {
     const totalNeeded = limit + (options.offset ?? 0);
-    const allSongs = await this.getRecommendationPool(Math.max(totalNeeded * 30, 500));
+    const allSongs = await this.getRecommendationPool(Math.max(totalNeeded * 30, 500), userId);
 
     if (!allSongs.length) {
       return [];
@@ -246,7 +246,7 @@ export class HabitsService {
     const safeOffset = Math.max(0, options.offset);
     const excludedSet = new Set(uniqueStrings(options.excludedSongIds));
 
-    const allSongs = (await this.getRecommendationPool(10000)).filter((song) => !excludedSet.has(song.id));
+    const allSongs = (await this.getRecommendationPool(10000, userId)).filter((song) => !excludedSet.has(song.id));
 
     if (!allSongs.length) {
       return {
@@ -373,19 +373,19 @@ export class HabitsService {
     };
   }
 
-  private async getRecommendationPool(limit: number): Promise<Song[]> {
+  private async getRecommendationPool(limit: number, userId?: string | null): Promise<Song[]> {
     const musicService = this.musicService as MusicService & {
-      songPage?: (first: number, after?: string | null, query?: string | null) => Promise<{ nodes: Song[] }>;
-      dashboardSongs?: (limit: number) => Promise<Song[]>;
+      songPage?: (first: number, after?: string | null, query?: string | null, userId?: string | null) => Promise<{ nodes: Song[] }>;
+      dashboardSongs?: (limit: number, userId?: string | null) => Promise<Song[]>;
     };
 
     if (musicService.songPage) {
-      const page = await musicService.songPage(limit, null, null);
+      const page = await musicService.songPage(limit, null, null, userId);
       return page.nodes;
     }
 
     if (musicService.dashboardSongs) {
-      return musicService.dashboardSongs(limit);
+      return musicService.dashboardSongs(limit, userId);
     }
 
     return this.musicService.listSongs();

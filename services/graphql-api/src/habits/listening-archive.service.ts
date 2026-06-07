@@ -1,4 +1,5 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { DatabaseService } from "../database/database.service";
 import {
   ArchivedListeningEvent,
@@ -52,13 +53,31 @@ type ArchiveStatusRow = {
 };
 
 @Injectable()
-export class ListeningArchiveService {
+export class ListeningArchiveService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ListeningArchiveService.name);
+  private dailyArchiveTimeout?: ReturnType<typeof setTimeout>;
+  private dailyArchiveInterval?: ReturnType<typeof setInterval>;
+  private dailyArchiveRunning = false;
 
   constructor(
     private readonly database: DatabaseService,
-    private readonly drivePrivateExport: DrivePrivateExportService
+    private readonly drivePrivateExport: DrivePrivateExportService,
+    private readonly config: ConfigService
   ) {}
+
+  onModuleInit(): void {
+    this.scheduleDailyColdStorage();
+  }
+
+  onModuleDestroy(): void {
+    if (this.dailyArchiveTimeout) {
+      clearTimeout(this.dailyArchiveTimeout);
+    }
+
+    if (this.dailyArchiveInterval) {
+      clearInterval(this.dailyArchiveInterval);
+    }
+  }
 
   async status(): Promise<ListeningArchiveStatus> {
     const result = await this.database.query(
@@ -116,7 +135,7 @@ export class ListeningArchiveService {
     dryRun: boolean;
     batchLimit?: number;
   }): Promise<ListeningArchiveResult> {
-    const daysToKeep = Math.max(30, Math.min(options.daysToKeep, 3650));
+    const daysToKeep = Math.max(1, Math.min(options.daysToKeep, 3650));
     const batchLimit = Math.max(100, Math.min(options.batchLimit ?? 5000, 20000));
     const dryRun = options.dryRun;
     const cutoffAt = new Date(Date.now() - daysToKeep * 24 * 60 * 60 * 1000);
@@ -311,6 +330,64 @@ export class ListeningArchiveService {
         ]
       );
     }
+  }
+
+  private scheduleDailyColdStorage(): void {
+    const enabled = (this.config.get<string>("LISTENING_ARCHIVE_DAILY_ENABLED") ?? "true").toLowerCase() !== "false";
+
+    if (!enabled) {
+      this.logger.log("Daily listening cold storage is disabled.");
+      return;
+    }
+
+    const utcHour = Math.max(0, Math.min(Number(this.config.get<string>("LISTENING_ARCHIVE_DAILY_UTC_HOUR") ?? 7), 23));
+    const delay = this.nextUtcHourDelay(utcHour);
+
+    this.dailyArchiveTimeout = setTimeout(() => {
+      void this.runDailyColdStorage();
+      this.dailyArchiveInterval = setInterval(() => {
+        void this.runDailyColdStorage();
+      }, 24 * 60 * 60 * 1000);
+    }, delay);
+
+    this.logger.log(`Daily listening cold storage scheduled for ${utcHour}:00 UTC.`);
+  }
+
+  private async runDailyColdStorage(): Promise<void> {
+    if (this.dailyArchiveRunning) {
+      return;
+    }
+
+    this.dailyArchiveRunning = true;
+
+    try {
+      const daysToKeep = Number(this.config.get<string>("LISTENING_ARCHIVE_DAILY_DAYS_TO_KEEP") ?? 1);
+      const result = await this.archiveOldEvents({
+        daysToKeep,
+        dryRun: false,
+        batchLimit: 20000
+      });
+
+      if (result.ok) {
+        this.logger.log(result.message);
+      } else {
+        this.logger.warn(result.message);
+      }
+    } finally {
+      this.dailyArchiveRunning = false;
+    }
+  }
+
+  private nextUtcHourDelay(utcHour: number): number {
+    const now = new Date();
+    const next = new Date(now);
+    next.setUTCHours(utcHour, 0, 0, 0);
+
+    if (next.getTime() <= now.getTime()) {
+      next.setUTCDate(next.getUTCDate() + 1);
+    }
+
+    return next.getTime() - now.getTime();
   }
 
   private async getUserRefreshTokens(rows: ArchiveCandidateRow[]): Promise<Map<string, string>> {

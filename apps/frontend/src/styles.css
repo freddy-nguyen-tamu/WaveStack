@@ -386,6 +386,7 @@ header .auth-panel {
 
 article,
 .archive-panel,
+.add-songs-page,
 .drive-export-panel,
 .profile-page,
 .stats-page,
@@ -415,6 +416,7 @@ main > section[aria-label="Player"] .player-card {
 }
 
 article > h2,
+.add-songs-page > h2,
 .dashboard-page__header h2,
 .stats-page__hero h2,
 .profile-hero h2 {
@@ -1177,6 +1179,119 @@ article > section > h3 {
 
 .song-list-row__side-action {
   align-self: start;
+}
+
+/* Private song intake */
+
+.add-songs-page__mode-row,
+.add-songs-page__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  align-items: center;
+  margin: 1.5rem 0;
+}
+
+.add-songs-page__review-toggle {
+  display: inline-flex;
+  width: auto;
+  align-items: center;
+  grid-template-columns: auto 1fr;
+  gap: 0.7rem;
+  margin: 1rem 0 2rem;
+  text-transform: uppercase;
+}
+
+.add-songs-page__review-toggle input,
+.add-song-card__field-toggle input {
+  width: 1.1rem;
+  height: 1.1rem;
+  padding: 0;
+}
+
+.add-songs-page textarea {
+  min-height: 7rem;
+  resize: vertical;
+}
+
+.add-songs-page__drafts {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.add-song-card {
+  display: grid;
+  gap: 1rem;
+  border-top: var(--line);
+  padding: 1.25rem 0 0;
+}
+
+.add-song-card__header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 1rem;
+  align-items: baseline;
+}
+
+.add-song-card__header span {
+  color: var(--color-red);
+  font-family: var(--font-display);
+  font-size: 3rem;
+  line-height: 0.9;
+}
+
+.add-song-card__header strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: clamp(1.4rem, 3vw, 3rem);
+  line-height: 1;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.add-song-card__fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem 1rem;
+}
+
+.add-song-card__fields label {
+  margin: 0;
+}
+
+.add-song-card__field-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  text-transform: uppercase;
+}
+
+.add-song-card input:disabled,
+.add-song-card textarea:disabled,
+.add-songs-page__saved-song input:disabled,
+.add-songs-page__saved-song textarea:disabled {
+  border-color: rgba(0, 0, 0, 0.16);
+  color: var(--color-muted);
+  opacity: 0.68;
+}
+
+.add-songs-page__saved-list {
+  border-top: var(--line);
+}
+
+.add-songs-page__saved-song details {
+  display: grid;
+  gap: 1rem;
+}
+
+.add-songs-page__saved-song summary {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 0.45rem;
+  cursor: pointer;
+  text-transform: uppercase;
 }
 
 /* Modals */
@@ -2050,6 +2165,7 @@ article > section > h3 {
   }
 
   article > h2,
+  .add-songs-page > h2,
   .dashboard-page__header h2,
   .stats-page__hero h2,
   .profile-hero h2 {
@@ -2110,6 +2226,7 @@ article > section > h3 {
 
   article,
   .archive-panel,
+  .add-songs-page,
   .drive-export-panel,
   .profile-page,
   .stats-page,
@@ -2118,6 +2235,7 @@ article > section > h3 {
   }
 
   article > h2,
+  .add-songs-page > h2,
   .dashboard-page__header h2,
   .stats-page__hero h2,
   .profile-hero h2 {
@@ -2140,6 +2258,7 @@ article > section > h3 {
   }
 
   .dashboard-stats,
+  .add-song-card__fields,
   .habit-grid,
   .profile-stats,
   .archive-panel__stats,
@@ -2281,6 +2400,7 @@ article > section > h3 {
   }
 
   article > h2,
+  .add-songs-page > h2,
   .dashboard-page__header h2,
   .stats-page__hero h2,
   .profile-hero h2 {

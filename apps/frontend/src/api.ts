@@ -484,6 +484,36 @@ export const REPAIR_EMBEDDED_LYRICS_FOR_SONG_MUTATION = gql`
   }
 `;
 
+export const CREATE_USER_SONGS_MUTATION = gql`
+  ${SONG_CARD_FIELDS}
+
+  mutation CreateUserSongs($inputs: [UserSongInput!]!) {
+    createUserSongs(inputs: $inputs) {
+      ...SongCardFields
+      lyrics
+      webViewLink
+      mimeType
+      modifiedTime
+      sourceRootFolderId
+    }
+  }
+`;
+
+export const UPDATE_USER_SONG_ATTRIBUTES_MUTATION = gql`
+  ${SONG_CARD_FIELDS}
+
+  mutation UpdateUserSongAttributes($songId: String!, $input: UserSongAttributeInput!) {
+    updateUserSongAttributes(songId: $songId, input: $input) {
+      ...SongCardFields
+      lyrics
+      webViewLink
+      mimeType
+      modifiedTime
+      sourceRootFolderId
+    }
+  }
+`;
+
 export const LIBRARY_STATE_QUERY = gql`
   ${SONG_CARD_FIELDS}
 

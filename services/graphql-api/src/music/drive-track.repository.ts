@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
+import { randomUUID } from "crypto";
 import { DatabaseService } from "../database/database.service";
-import { DriveSyncStatus, Song, SongConnection } from "./music.models";
+import { DriveSyncStatus, Song, SongConnection, UserSongAttributeInput, UserSongInput } from "./music.models";
 
 type DriveTrackRow = {
   id: string;
@@ -22,6 +23,8 @@ type DriveTrackRow = {
   modified_time: Date | string | null;
   size_bytes: string | number | null;
   source_root_folder_id: string | null;
+  owner_user_id: string | null;
+  source_type: string | null;
 };
 
 type CountRow = {
@@ -187,19 +190,33 @@ export class DriveTrackRepository {
     first: number;
     after?: string | null;
     query?: string | null;
+    userId?: string | null;
   }): Promise<SongConnection> {
     const first = Math.max(1, Math.min(options.first || 50, 100));
     const offset = options.after ? Number(Buffer.from(options.after, "base64url").toString("utf8")) : 0;
     const safeOffset = Number.isFinite(offset) && offset >= 0 ? offset : 0;
     const search = options.query?.trim().toLowerCase();
 
-    const where = search
-      ? `WHERE deleted_at IS NULL AND normalized_search ILIKE $1`
-      : `WHERE deleted_at IS NULL`;
+    const params: unknown[] = [];
+    const conditions = [
+      "deleted_at IS NULL",
+      options.userId ? "(owner_user_id IS NULL OR owner_user_id = $1::uuid)" : "owner_user_id IS NULL"
+    ];
 
-    const params: unknown[] = search ? [`%${search}%`, first + 1, safeOffset] : [first + 1, safeOffset];
-    const limitParam = search ? 2 : 1;
-    const offsetParam = search ? 3 : 2;
+    if (options.userId) {
+      params.push(options.userId);
+    }
+
+    if (search) {
+      params.push(`%${search}%`);
+      conditions.push(`normalized_search ILIKE $${params.length}`);
+    }
+
+    params.push(first + 1);
+    const limitParam = params.length;
+    params.push(safeOffset);
+    const offsetParam = params.length;
+    const where = `WHERE ${conditions.join(" AND ")}`;
 
     const rows = (
       await this.database.query<DriveTrackRow>(
@@ -215,7 +232,7 @@ export class DriveTrackRepository {
       )
     ).rows;
 
-    const countParams: unknown[] = search ? [`%${search}%`] : [];
+    const countParams = params.slice(0, params.length - 2);
     const countRows = (
       await this.database.query<CountRow>(
         `
@@ -260,6 +277,30 @@ export class DriveTrackRepository {
     return rows.map((row) => this.rowToSong(row));
   }
 
+  async listDashboardSongsForUser(limit: number, userId?: string | null): Promise<Song[]> {
+    const safeLimit = Math.max(8, Math.min(limit || 40, 80));
+    const visibility = userId
+      ? "(owner_user_id IS NULL OR owner_user_id = $2::uuid)"
+      : "owner_user_id IS NULL";
+    const params: unknown[] = userId ? [safeLimit, userId] : [safeLimit];
+
+    const rows = (
+      await this.database.query<DriveTrackRow>(
+        `
+        SELECT *
+        FROM drive_tracks
+        WHERE deleted_at IS NULL
+          AND ${visibility}
+        ORDER BY random()
+        LIMIT $1
+        `,
+        params
+      )
+    ).rows;
+
+    return rows.map((row) => this.rowToSong(row));
+  }
+
   async getSong(id: string): Promise<Song | null> {
     const rows = (
       await this.database.query<DriveTrackRow>(
@@ -274,6 +315,144 @@ export class DriveTrackRepository {
     ).rows;
 
     return rows[0] ? this.rowToSong(rows[0]) : null;
+  }
+
+  async getSongForUser(id: string, userId?: string | null): Promise<Song | null> {
+    const visibility = userId
+      ? "(owner_user_id IS NULL OR owner_user_id = $2::uuid)"
+      : "owner_user_id IS NULL";
+    const params: unknown[] = userId ? [id, userId] : [id];
+
+    const rows = (
+      await this.database.query<DriveTrackRow>(
+        `
+        SELECT *
+        FROM drive_tracks
+        WHERE id = $1
+          AND deleted_at IS NULL
+          AND ${visibility}
+        LIMIT 1
+        `,
+        params
+      )
+    ).rows;
+
+    return rows[0] ? this.rowToSong(rows[0]) : null;
+  }
+
+  async createUserSongs(userId: string, inputs: UserSongInput[]): Promise<Song[]> {
+    const songs: Song[] = [];
+
+    for (const input of inputs) {
+      const song = this.inputToSong(userId, input);
+      const search = this.normalizedSearch(song);
+
+      await this.database.query(
+        `
+        INSERT INTO drive_tracks (
+          id,
+          drive_file_id,
+          title,
+          artist_name,
+          album_title,
+          duration_seconds,
+          stream_url,
+          genre_names,
+          score,
+          thumbnail_url,
+          lyrics,
+          source_root_folder_id,
+          owner_user_id,
+          source_type,
+          normalized_search,
+          synced_at,
+          deleted_at
+        )
+        VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8,
+          $9, $10, $11, $12, $13, 'user', $14, now(), NULL
+        )
+        `,
+        [
+          song.id,
+          song.id,
+          song.title,
+          song.artistName,
+          song.albumTitle,
+          song.durationSeconds,
+          song.streamUrl,
+          song.genreNames,
+          song.score ?? null,
+          song.thumbnailUrl ?? null,
+          song.lyrics ?? null,
+          song.sourceRootFolderId ?? null,
+          userId,
+          search
+        ]
+      );
+
+      songs.push(song);
+    }
+
+    return songs;
+  }
+
+  async updateUserSongAttributes(
+    userId: string,
+    songId: string,
+    input: UserSongAttributeInput
+  ): Promise<Song | null> {
+    const current = await this.getOwnedUserSong(songId, userId);
+
+    if (!current) {
+      return null;
+    }
+
+    const next: Song = {
+      ...current,
+      title: this.clean(input.title, current.title),
+      artistName: this.clean(input.artistName, current.artistName),
+      albumTitle: this.clean(input.albumTitle, current.albumTitle),
+      durationSeconds: input.durationSeconds ?? current.durationSeconds,
+      streamUrl: this.clean(input.streamUrl, current.streamUrl),
+      genreNames: input.genreNames?.map((genre) => genre.trim()).filter(Boolean) ?? current.genreNames,
+      thumbnailUrl: this.clean(input.thumbnailUrl, current.thumbnailUrl),
+      lyrics: input.lyrics ?? current.lyrics
+    };
+
+    await this.database.query(
+      `
+      UPDATE drive_tracks
+      SET title = $3,
+          artist_name = $4,
+          album_title = $5,
+          duration_seconds = $6,
+          stream_url = $7,
+          genre_names = $8,
+          thumbnail_url = $9,
+          lyrics = $10,
+          normalized_search = $11,
+          synced_at = now()
+      WHERE id = $1
+        AND owner_user_id = $2::uuid
+        AND source_type = 'user'
+      `,
+      [
+        songId,
+        userId,
+        next.title,
+        next.artistName,
+        next.albumTitle,
+        next.durationSeconds,
+        next.streamUrl,
+        next.genreNames,
+        next.thumbnailUrl ?? null,
+        next.lyrics ?? null,
+        this.normalizedSearch(next)
+      ]
+    );
+
+    return this.getSongForUser(songId, userId);
   }
 
   async countTracks(): Promise<number> {
@@ -408,6 +587,65 @@ export class DriveTrackRepository {
       sizeBytes: row.size_bytes ? Number(row.size_bytes) : undefined,
       sourceRootFolderId: row.source_root_folder_id ?? undefined
     };
+  }
+
+  private async getOwnedUserSong(songId: string, userId: string): Promise<Song | null> {
+    const rows = (
+      await this.database.query<DriveTrackRow>(
+        `
+        SELECT *
+        FROM drive_tracks
+        WHERE id = $1
+          AND owner_user_id = $2::uuid
+          AND source_type = 'user'
+          AND deleted_at IS NULL
+        LIMIT 1
+        `,
+        [songId, userId]
+      )
+    ).rows;
+
+    return rows[0] ? this.rowToSong(rows[0]) : null;
+  }
+
+  private inputToSong(userId: string, input: UserSongInput): Song {
+    const title = this.clean(input.title, "Untitled song");
+    const artistName = this.clean(input.artistName, "Unknown Artist");
+    const albumTitle = this.clean(input.albumTitle, "User additions");
+    const genreNames = input.genreNames?.map((genre) => genre.trim()).filter(Boolean) ?? [];
+    const id = `user-${userId}-${randomUUID()}`;
+
+    return {
+      id,
+      title,
+      artistName,
+      albumTitle,
+      durationSeconds: Math.max(0, Math.round(input.durationSeconds ?? 0)),
+      streamUrl: this.clean(input.streamUrl, ""),
+      genreNames,
+      score: 1,
+      thumbnailUrl: this.clean(input.thumbnailUrl, undefined),
+      lyrics: input.lyrics?.trim() || undefined,
+      sourceRootFolderId: "user-private-library"
+    };
+  }
+
+  private normalizedSearch(song: Song): string {
+    return [
+      song.title,
+      song.artistName,
+      song.albumTitle,
+      ...(song.genreNames ?? [])
+    ]
+      .join(" ")
+      .toLowerCase();
+  }
+
+  private clean(value: string | null | undefined, fallback: string): string;
+  private clean(value: string | null | undefined, fallback: string | undefined): string | undefined;
+  private clean(value: string | null | undefined, fallback: string | undefined): string | undefined {
+    const trimmed = value?.trim();
+    return trimmed || fallback;
   }
 
   private dateToString(value: Date | string | null): string | undefined {

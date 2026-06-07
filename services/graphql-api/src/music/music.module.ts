@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { StorageModule } from "../storage/storage.module";
 import { DatabaseModule } from "../database/database.module";
+import { AuthModule } from "../auth/auth.module";
 import { MusicResolver } from "./music.resolver";
 import { MusicService } from "./music.service";
 import { AudioJobsProducer } from "./audio-jobs.producer";
@@ -17,7 +18,7 @@ import { DriveLyricsService } from "./drive-lyrics.service";
 import { LyricsRepairService } from "./lyrics-repair.service";
 
 @Module({
-  imports: [ConfigModule, StorageModule, DatabaseModule],
+  imports: [ConfigModule, StorageModule, DatabaseModule, AuthModule],
   controllers: [GoogleDriveController],
   providers: [
     MusicResolver,

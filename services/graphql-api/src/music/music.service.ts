@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { Album, Artist, Song, SongConnection } from "./music.models";
+import { Album, Artist, Song, SongConnection, UserSongAttributeInput, UserSongInput } from "./music.models";
 import { SignedUrlService } from "../storage/signed-url.service";
 import { AudioJobsProducer } from "./audio-jobs.producer";
 import { GoogleDriveService } from "./google-drive.service";
@@ -25,23 +25,31 @@ export class MusicService {
     return this.googleDriveService.listSongs();
   }
 
-  songPage(first: number, after?: string | null, query?: string | null): Promise<SongConnection> {
-    return this.driveTrackRepository.listSongs({ first, after, query });
+  songPage(first: number, after?: string | null, query?: string | null, userId?: string | null): Promise<SongConnection> {
+    return this.driveTrackRepository.listSongs({ first, after, query, userId });
   }
 
-  async dashboardSongs(limit: number): Promise<Song[]> {
+  async dashboardSongs(limit: number, userId?: string | null): Promise<Song[]> {
     const count = await this.driveTrackRepository.countTracks();
 
     if (count > 0) {
-      return this.driveTrackRepository.listDashboardSongs(limit);
+      return this.driveTrackRepository.listDashboardSongsForUser(limit, userId);
     }
 
     const songs = await this.googleDriveService.listSongs();
     return songs.slice(0, limit);
   }
 
-  songDetails(id: string): Promise<Song | null> {
-    return this.driveTrackRepository.getSong(id);
+  songDetails(id: string, userId?: string | null): Promise<Song | null> {
+    return this.driveTrackRepository.getSongForUser(id, userId);
+  }
+
+  createUserSongs(userId: string, inputs: UserSongInput[]): Promise<Song[]> {
+    return this.driveTrackRepository.createUserSongs(userId, inputs);
+  }
+
+  updateUserSongAttributes(userId: string, songId: string, input: UserSongAttributeInput): Promise<Song | null> {
+    return this.driveTrackRepository.updateUserSongAttributes(userId, songId, input);
   }
 
   async listAlbums(): Promise<Album[]> {
