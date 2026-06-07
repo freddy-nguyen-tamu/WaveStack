@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "@apollo/client";
 import { AlertTriangle, Brain, Sparkles } from "lucide-react";
 import { JUDGE_TASTE_MUTATION } from "../../../api";
+import fancyWritingStyles from "../../../../fancy_writing.json";
 
 type TasteJudgeResult = {
   ok: boolean;
@@ -19,6 +20,11 @@ type TasteJudgePanelProps = {
   period: string;
 };
 
+type FancyWritingStyle = {
+  phrase: string;
+  example?: string;
+};
+
 const loadingLines = [
   "Initializing neural net...",
   "Training on objectively good music...",
@@ -30,6 +36,7 @@ const loadingLines = [
 export function TasteJudgePanel({ period }: TasteJudgePanelProps) {
   const [visibleLines, setVisibleLines] = useState<string[]>([]);
   const [uiError, setUiError] = useState("");
+  const [selectedWritingStyle, setSelectedWritingStyle] = useState<FancyWritingStyle | null>(null);
 
   const [judgeTaste, { data, loading, error }] = useMutation<{
     judgeTaste: TasteJudgeResult;
@@ -73,9 +80,16 @@ export function TasteJudgePanel({ period }: TasteJudgePanelProps) {
 
   async function runJudge() {
     setUiError("");
+    const styles = fancyWritingStyles as FancyWritingStyle[];
+    const nextStyle = styles[Math.floor(Math.random() * styles.length)] ?? null;
+    setSelectedWritingStyle(nextStyle);
 
     await judgeTaste({
-      variables: { period }
+      variables: {
+        period,
+        writingStylePhrase: nextStyle?.phrase,
+        writingStyleExample: nextStyle?.example
+      }
     });
   }
 
@@ -85,8 +99,9 @@ export function TasteJudgePanel({ period }: TasteJudgePanelProps) {
         <p className="eyebrow">AI taste judge</p>
         <h3>How questionable is your WaveStack taste?</h3>
         <p>
-          A playful Groq-powered judge reviews summarized listening stats and
-          returns a roast, badges, and scores.
+          Let WaveStack turn your listening history into a little character
+          study: theatrical, oddly tender, and just merciless enough to feel
+          true.
         </p>
       </div>
 
@@ -129,8 +144,15 @@ export function TasteJudgePanel({ period }: TasteJudgePanelProps) {
             </div>
           </div>
 
-          <p className="taste-verdict__roast">{result.roast}</p>
-          <p className="taste-verdict__summary">{result.summary}</p>
+          <p className="taste-verdict__roast">
+            {selectedWritingStyle?.phrase ? (
+              <>
+                <span className="taste-verdict__style">{selectedWritingStyle.phrase}.</span>
+                <br />
+              </>
+            ) : null}
+            {[result.roast, result.summary].filter(Boolean).join(" ")}
+          </p>
 
           <div className="taste-score-grid">
             <ScorePill label="Taste" value={result.tasteScore} />

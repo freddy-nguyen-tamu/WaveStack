@@ -232,7 +232,9 @@ export class HabitsResolver {
   @Mutation(() => TasteJudgeResult)
   judgeTaste(
     @Context() context: GqlContext,
-    @Args("period", { nullable: true }) period?: string
+    @Args("period", { nullable: true }) period?: string,
+    @Args("writingStylePhrase", { nullable: true }) writingStylePhrase?: string,
+    @Args("writingStyleExample", { nullable: true }) writingStyleExample?: string
   ): Promise<TasteJudgeResult> {
     const userId = this.resolveUserId(context);
 
@@ -250,7 +252,10 @@ export class HabitsResolver {
       });
     }
 
-    return this.habitsService.judgeTaste(userId, period ?? "ALL_TIME");
+    return this.habitsService.judgeTaste(userId, period ?? "ALL_TIME", {
+      phrase: writingStylePhrase,
+      example: writingStyleExample
+    });
   }
 
   @Query(() => GroqDebugStatus)

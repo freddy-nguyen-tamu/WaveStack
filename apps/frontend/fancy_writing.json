@@ -1,0 +1,414 @@
+[
+  {
+    "phrase": "Ornate Victorian elegance with long, polished sentences",
+    "example": "The evening unfurled its velvet banner across the sky, and beneath that imperial dusk the city seemed to compose itself into a symphony of lamps, whispers, and passing carriages. Every window glimmered like a guarded secret, and every footstep upon the pavement sounded as though it belonged to some grander destiny."
+  },
+  {
+    "phrase": "Gothic and shadow-rich, full of dread and beauty",
+    "example": "The house stood at the end of the rain-black road, its windows narrow and watchful, as though some ancient sorrow still breathed behind the glass. Even the wind, slipping through the iron gate, seemed to lower its voice in fear of what slept within."
+  },
+  {
+    "phrase": "Romantic and moonlit, devoted to longing",
+    "example": "She carried his name in silence, as one might carry a candle through a cathedral at midnight. Though the world moved around her with its ordinary noise, her heart remained fixed upon that vanished hour when love had seemed not merely possible, but eternal."
+  },
+  {
+    "phrase": "Baroque and lavish, overflowing with imagery",
+    "example": "Gold light spilled across the marble hall in opulent rivers, touching the columns, the mirrors, the jeweled rims of goblets, until the whole chamber appeared less a room than a kingdom briefly captured inside a jewel. Even the silence seemed embroidered."
+  },
+  {
+    "phrase": "Aristocratic and restrained, elegant without excess",
+    "example": "He received the news with the composure of one accustomed to disappointment, though a faint tightening at the corner of his mouth betrayed what etiquette would not permit him to say. The room remained quiet, and in that quiet his dignity became almost severe."
+  },
+  {
+    "phrase": "Biblical and prophetic, solemn and thunderous",
+    "example": "And the people looked upon the city, and behold, its towers had risen in pride and its gates had forgotten mercy. Yet from the dust came a voice, saying that no crown endures when justice is cast beneath the heel."
+  },
+  {
+    "phrase": "Classical epic style with grandeur and fate",
+    "example": "Across the wine-dark sea of morning, he lifted his eyes toward the distant shore, where fortune waited with a sword in one hand and a laurel in the other. No mortal heart could cross such waters unchanged."
+  },
+  {
+    "phrase": "Shakespearean dramatic nobility",
+    "example": "What is ambition, if not a gilded fever burning in the breast of man? I have seen kings bow before it, beggars dream beneath it, and honest souls barter peace for the glitter of a name."
+  },
+  {
+    "phrase": "Poetic minimalism with refined luxury",
+    "example": "Dawn entered quietly. The silver cup caught the light. For one breath, the world seemed arranged by a gentler hand."
+  },
+  {
+    "phrase": "Academic elegance with elevated precision",
+    "example": "The matter should not be dismissed as a mere disagreement of taste, for beneath its surface lies a sophisticated tension between tradition, authority, and individual agency. To understand it properly, one must examine not only what is said, but what conditions make such speech meaningful."
+  },
+  {
+    "phrase": "Diplomatic and polished, ideal for formal correspondence",
+    "example": "I would be grateful for the opportunity to revisit this matter at your convenience, as I believe a more careful consideration of the surrounding circumstances may lead us toward a mutually beneficial resolution. Your perspective remains highly valued, and I welcome any guidance you may wish to offer."
+  },
+  {
+    "phrase": "Regal and ceremonial, fit for proclamations",
+    "example": "Let it be known that this day shall not pass unmarked, for upon it we affirm the dignity of our purpose and the strength of our shared resolve. May all who gather here carry forward the honor of this moment with steadfast hearts."
+  },
+  {
+    "phrase": "Philosophical and contemplative, rich with abstraction",
+    "example": "To live is to move continually between memory and desire, between the ruins of what has been and the imagined architecture of what might yet be. In that fragile interval, the self is shaped not by certainty, but by the questions it dares to keep."
+  },
+  {
+    "phrase": "Dreamlike and surreal, beautiful but strange",
+    "example": "The clocks bloomed like pale flowers along the corridor, each one ticking in a language she almost remembered. Somewhere beyond the blue door, the ocean was breathing inside a glass jar."
+  },
+  {
+    "phrase": "Decadent and luxurious, scented with excess",
+    "example": "The room was heavy with amber smoke, crushed roses, and the languid gleam of candlelight upon crystal. Every object seemed chosen not for use, but for the pleasure of being desired."
+  },
+  {
+    "phrase": "Noir elegance with smoky sophistication",
+    "example": "The city wore rain like a silk coat, dark and expensive. She appeared beneath the theater sign just as the neon flickered, and for a moment I knew trouble had learned how to smile."
+  },
+  {
+    "phrase": "Mythic and ancient, as if carved into stone",
+    "example": "Before the rivers learned their names and before the mountains lifted their crowns, there walked a queen beneath the first stars. In her hand she carried a flame stolen from the silence before time."
+  },
+  {
+    "phrase": "Renaissance humanist style, graceful and learned",
+    "example": "Man, though fashioned of frail matter, possesses within himself a noble appetite for wisdom. By study, discipline, and the cultivation of virtue, he may rise above mere appetite and become a worthy companion to truth."
+  },
+  {
+    "phrase": "Scientific grandeur, precise yet majestic",
+    "example": "Within the quiet theater of the cell, innumerable processes unfold with astonishing fidelity, each molecule participating in a choreography older than consciousness itself. Life, in this view, is not disorder overcome, but order continuously negotiated."
+  },
+  {
+    "phrase": "Legalistic and stately, formal and authoritative",
+    "example": "It is therefore submitted that the matter, when viewed in its proper factual and procedural context, admits of only one reasonable conclusion. The obligations at issue were neither accidental nor implied, but clearly established by the conduct and representations of the parties."
+  },
+  {
+    "phrase": "Royal court intrigue with polished menace",
+    "example": "No one at the banquet mentioned the missing duke, which was precisely how everyone knew he mattered. The queen smiled over her wine, and every lord at the table understood that silence, too, could be a command."
+  },
+  {
+    "phrase": "High fantasy elegance with enchanted atmosphere",
+    "example": "Beyond the silverwood gates, where the lanterns burned with blue fire and the old songs still wandered among the leaves, the last heir of Aramoor drew her cloak close. The stars above her had begun to rearrange themselves into omens."
+  },
+  {
+    "phrase": "Dark academia style, scholarly and melancholic",
+    "example": "By October, the library had become less a building than a weather system of dust, rainlight, and whispered Latin. We studied as though knowledge might absolve us, though each book seemed only to deepen the elegant ruin of our certainty."
+  },
+  {
+    "phrase": "Parisian literary chic, stylish and introspective",
+    "example": "At the small café near the corner, she stirred her coffee without drinking it, watching the morning arrange itself upon the boulevard. Paris, as always, made even indecision appear cultivated."
+  },
+  {
+    "phrase": "Modern luxury branding style, sleek and elevated",
+    "example": "Crafted for those who recognize refinement not as excess, but as precision, this experience invites a quieter kind of distinction. Every detail is intentional, every surface considered, every moment designed to feel effortlessly rare."
+  },
+  {
+    "phrase": "Old-money understatement, quiet and expensive",
+    "example": "The house did not announce itself. It sat behind the hedges with the serene confidence of something never required to prove its value. Inside, the silver had been polished by the same family for generations."
+  },
+  {
+    "phrase": "Celestial and cosmic, full of stars and eternity",
+    "example": "Above them, the heavens opened in immeasurable silence, scattering light from dead suns across the dark. To stand beneath such a sky was to feel the soul briefly remember that it had once belonged to infinity."
+  },
+  {
+    "phrase": "Ethereal and delicate, soft as silk",
+    "example": "Morning touched the curtains with a pale hand, and the room seemed to float between waking and dream. Her voice, when it came, was scarcely louder than light moving across water."
+  },
+  {
+    "phrase": "Melancholic elegance, sorrowful but graceful",
+    "example": "He returned to the garden after many years and found the roses still climbing the wall, indifferent to absence. Their beauty wounded him gently, as only faithful things can."
+  },
+  {
+    "phrase": "Operatic and emotionally grand",
+    "example": "When she turned away, it was not merely a gesture but an aria of refusal, immense and terrible in its restraint. The room seemed to hold its breath, as though even the chandeliers feared the next note of her grief."
+  },
+  {
+    "phrase": "Sacred and cathedral-like, reverent in tone",
+    "example": "The morning bells entered the air slowly, each note rising like incense toward the vaulted sky. In that sound, the village remembered its smallness and, strangely, was comforted."
+  },
+  {
+    "phrase": "Imperial and commanding, rich with power",
+    "example": "He spoke not loudly, but with the authority of one whose words had moved armies and redrawn borders. Around him, lesser men hurried to agree before the silence could expose them."
+  },
+  {
+    "phrase": "Enlightenment essay style, rational and refined",
+    "example": "It is the duty of a civilized mind to distinguish passion from principle, for the former may inflame a crowd while the latter alone can govern a society. Where reason is abandoned, liberty soon becomes only another name for appetite."
+  },
+  {
+    "phrase": "Aesthetic prose with painterly detail",
+    "example": "The room was all cream linen, dark wood, and a narrow blade of afternoon light laid across the floor. In the vase, three white lilies leaned toward the window like figures listening for distant music."
+  },
+  {
+    "phrase": "Fable-like elegance with moral clarity",
+    "example": "There was once a fox who polished his shadow every morning, believing it to be his soul. But when the noon sun rose and his shadow vanished, he discovered that vanity is a poor companion in bright weather."
+  },
+  {
+    "phrase": "Letters-from-exile style, intimate and refined",
+    "example": "My dear friend, I write to you from a city that has learned to pronounce my loneliness with remarkable fluency. The streets are beautiful, yes, but beauty is a cold host when one has no familiar voice to answer it."
+  },
+  {
+    "phrase": "Socratic and elegant, questioning toward truth",
+    "example": "Tell me, then, whether honor resides in the praise of others or in the quiet governance of the self. For if it depends upon the crowd, then honor is no virtue at all, but a garment borrowed from strangers."
+  },
+  {
+    "phrase": "Mystical and esoteric, filled with hidden meaning",
+    "example": "The old manuscript did not reveal its secrets to the hurried eye. Its symbols required patience, silence, and the peculiar humility of one prepared to learn that the visible world is only the outermost veil."
+  },
+  {
+    "phrase": "Art critic elegance, refined and observant",
+    "example": "The painting succeeds not through spectacle, but through restraint. Its power lies in the measured tension between light and vacancy, inviting the viewer to contemplate not what is shown, but what has been withheld."
+  },
+  {
+    "phrase": "Historical chronicle style, stately and sweeping",
+    "example": "In the winter of that troubled year, when the granaries stood half-empty and the northern roads were choked with snow, the council convened beneath banners faded by three generations of war. What followed would alter the fate of the realm."
+  },
+  {
+    "phrase": "Chivalric and knightly, noble and romantic",
+    "example": "He knelt before her not as a conquered man, but as one who had chosen devotion over pride. His sword lay across his palms, bright as a vow, and the dawn crowned them both in gold."
+  },
+  {
+    "phrase": "Courtly love style, reverent and elevated",
+    "example": "To behold her was to understand why poets have always failed, for language is a small vessel for such radiance. He loved her at a distance, as one loves the moon: faithfully, hopelessly, and without expectation of possession."
+  },
+  {
+    "phrase": "Persuasive statesman style, noble and clear",
+    "example": "We do not gather merely to defend an idea, but to renew our obligation to one another. A nation is not strengthened by fear, but by the courage of citizens who refuse to let justice become a ceremonial word."
+  },
+  {
+    "phrase": "Museum-label sophistication, concise and polished",
+    "example": "This object reveals the quiet intelligence of its maker: a balance of utility and ornament, discipline and grace. Its surface bears the marks of use, yet time has only deepened its authority."
+  },
+  {
+    "phrase": "Spiritual self-reflection with graceful calm",
+    "example": "There comes a moment when the soul grows tired of applause and begins instead to desire peace. In that stillness, one discovers that becoming whole is less an achievement than a return."
+  },
+  {
+    "phrase": "Luxury travel writing, sensuous and polished",
+    "example": "By sunset, the coast had turned the color of honey and old gold, and the terraces above the sea glowed with quiet invitation. Dinner arrived slowly, as all perfect things should, accompanied by salt air and the murmur of waves below."
+  },
+  {
+    "phrase": "Cinematic elegance, visual and dramatic",
+    "example": "The elevator doors opened onto a room filled with blue light, cigarette smoke, and the soft menace of expensive silence. At the far window, he stood with his back to the skyline, already knowing she had come to betray him."
+  },
+  {
+    "phrase": "Epistolary aristocratic style, polished and personal",
+    "example": "I confess, with some reluctance, that your absence has altered the house more profoundly than any storm could have done. The rooms remain unchanged, yet every chair and corridor now seems to ask after you."
+  },
+  {
+    "phrase": "Pastoral elegance, nature-rich and graceful",
+    "example": "The fields lay bright beneath the late sun, and the cattle moved through the grass with the solemn patience of old kings. Beyond the orchard, a stream spoke softly over stones polished by centuries of weather."
+  },
+  {
+    "phrase": "Heroic modern prose, clean but elevated",
+    "example": "He did not know whether he would succeed, only that the hour had come when hesitation was no longer honorable. So he stepped forward, carrying with him every failure that had taught him how to stand."
+  },
+  {
+    "phrase": "Imperial sci-fi grandeur, futuristic and majestic",
+    "example": "The starship emerged from the void like a cathedral built for gods who had outgrown planets. Along its hull, cities of light awakened, each window a testament to humanity’s refusal to remain small."
+  },
+  {
+    "phrase": "Alchemical style, symbolic and antique",
+    "example": "He placed the silver vial beside the blackened flame and waited for the mercury to dream. Transformation, the master had warned, begins not in the furnace, but in the hidden chamber of the will."
+  },
+  {
+    "phrase": "Haute couture fashion prose, sleek and dramatic",
+    "example": "The gown moved like liquid midnight, severe at the shoulder and merciful at the hem. It did not flatter the body so much as command the room to reconsider what elegance meant."
+  },
+  {
+    "phrase": "Grand architectural prose, monumental and precise",
+    "example": "The building rose from the plaza with disciplined confidence, its stone façade arranged in a language of proportion, shadow, and restraint. It did not seek attention; it demanded permanence."
+  },
+  {
+    "phrase": "Lyrical memoir style, intimate and beautiful",
+    "example": "I remember my mother’s kitchen by the sound of rain against the window and the smell of rice warming on the stove. Childhood, to me, is not a sequence of years but a handful of rooms where love was ordinary."
+  },
+  {
+    "phrase": "Theatrical villain elegance, charming and dangerous",
+    "example": "My dear, cruelty is such an ugly word for precision. I merely remove what obstructs the design, and history, being fond of clean lines, usually thanks me afterward."
+  },
+  {
+    "phrase": "Ancient oracle style, cryptic and majestic",
+    "example": "When the white bird drinks from the shadowed well, the gate of iron shall open without a hand. Beware the crown offered in silence, for its jewels remember the blood of former kings."
+  },
+  {
+    "phrase": "Edwardian social comedy, witty and refined",
+    "example": "Lady Harcourt considered sincerity a useful quality in servants and a dangerous one in guests. She therefore greeted every honest remark at dinner with the same expression one reserves for a cracked teacup."
+  },
+  {
+    "phrase": "Byronic and stormy, passionate and proud",
+    "example": "He loved the world best when it wounded him, for suffering gave his pride a stage upon which to perform. Beneath his scorn, however, lay a heart too fierce to survive gentleness."
+  },
+  {
+    "phrase": "Neoclassical balance, polished and orderly",
+    "example": "Beauty, when properly understood, is not extravagance but proportion. The graceful mind seeks harmony in conduct as the architect seeks symmetry in stone."
+  },
+  {
+    "phrase": "Symbolist prose, suggestive and dream-heavy",
+    "example": "A white glove lay upon the stair, and beside it a single violet, crushed but fragrant. No one spoke of the woman who had vanished, though all evening the mirrors seemed unusually awake."
+  },
+  {
+    "phrase": "Ceremonial wedding style, radiant and formal",
+    "example": "Today, before family, friends, and the quiet witness of time itself, two lives are joined in a promise both tender and profound. May their love be not merely a feeling, but a home built daily with patience, laughter, and grace."
+  },
+  {
+    "phrase": "Obituary elegance, dignified and tender",
+    "example": "He lived with a gentleness that never asked to be admired, yet left every room more peaceful than he found it. Those who loved him will remember not only what he did, but the quiet goodness with which he did it."
+  },
+  {
+    "phrase": "Royal biography style, polished and historical",
+    "example": "Born into an age of uncertain alliances and restless courts, she learned early that power was seldom announced and rarely kind. Her reign would be remembered not for conquest alone, but for the discipline with which she turned survival into statecraft."
+  },
+  {
+    "phrase": "Fine dining menu prose, elegant and sensory",
+    "example": "A delicate composition of citrus-cured sea bass, young fennel, and pearl onion, finished with a chilled verbena oil. Bright, restrained, and quietly aromatic, the dish offers a graceful opening note to the evening."
+  },
+  {
+    "phrase": "Old-world explorer style, adventurous and polished",
+    "example": "At first light we crossed the ridge and saw the valley spread beneath us, green and immense, veiled by a mist that seemed older than maps. No road marked the descent, and so we entrusted ourselves to instinct, compass, and wonder."
+  },
+  {
+    "phrase": "Epigrammatic elegance, sharp and aphoristic",
+    "example": "Power rarely announces itself with thunder; more often, it enters softly and sits in the best chair. A wise person studies not the loudest voice in the room, but the one no one dares interrupt."
+  },
+  {
+    "phrase": "Lavish fairy-tale style, enchanted and formal",
+    "example": "In a kingdom bordered by seven blue mountains and one forbidden forest, there lived a princess whose laughter could soften iron. Yet the palace clocks had stopped on the night of her birth, and no one in the realm knew why."
+  },
+  {
+    "phrase": "High-society gossip style, polished and cutting",
+    "example": "It was generally agreed, though never in her presence, that Mrs. Vale had married beneath herself and entertained above her means. This made her parties irresistible, especially to those who claimed to disapprove of them."
+  },
+  {
+    "phrase": "Elegiac war prose, solemn and beautiful",
+    "example": "At dawn, the field was quiet enough for birdsong, though by noon it would belong to smoke and memory. The men wrote letters they pretended were ordinary, folding love into paper as carefully as uniforms."
+  },
+  {
+    "phrase": "Sacred myth retelling, reverent and luminous",
+    "example": "When the goddess descended, the river ceased its murmuring and the reeds bent low in recognition. She did not speak at first, for divinity often announces itself by making the world listen."
+  },
+  {
+    "phrase": "Grand commencement style, inspiring and polished",
+    "example": "You stand today at the threshold between preparation and consequence, carrying not only the knowledge you have earned, but the responsibility it creates. Go forward with courage, and let excellence be measured not by applause, but by service."
+  },
+  {
+    "phrase": "Romantic tragedy style, beautiful and doomed",
+    "example": "They loved each other in the narrow interval before ruin, when every glance still seemed capable of saving them. But fate had already entered the room, patient and invisible, waiting for the music to end."
+  },
+  {
+    "phrase": "Diplomatic rebuke, courteous but severe",
+    "example": "While I appreciate the intention behind your remarks, I must note that their execution left considerable room for greater care. A matter of this significance deserves precision, restraint, and a fuller respect for the facts at hand."
+  },
+  {
+    "phrase": "Golden-age detective style, elegant and clever",
+    "example": "The clue, as is so often the case, had been visible from the beginning and therefore ignored by everyone of consequence. Only the butler’s left glove, faintly damp and entirely unnecessary, troubled the harmony of the scene."
+  },
+  {
+    "phrase": "Refined villain monologue, urbane and theatrical",
+    "example": "You mistake me for a monster because you lack the discipline to admire design. I have merely done what history rewards: chosen a future, then removed those too sentimental to reach it."
+  },
+  {
+    "phrase": "Luxurious product description, smooth and aspirational",
+    "example": "Designed for the discerning few, this piece combines sculptural restraint with an unmistakable sense of presence. It is not simply made to be worn, but to become part of one’s private language of distinction."
+  },
+  {
+    "phrase": "Grand romantic confession, passionate and elevated",
+    "example": "I have tried to reason myself out of loving you, but reason is a poor architect against the cathedral you have built in my heart. Whatever silence I kept was not indifference, but fear standing guard before devotion."
+  },
+  {
+    "phrase": "Elegant apology, sincere and graceful",
+    "example": "I regret not only the mistake itself, but the carelessness it suggested. You deserved greater consideration from me, and I hope to restore, through better conduct rather than mere words, the trust I have placed at risk."
+  },
+  {
+    "phrase": "Refined melancholy city prose",
+    "example": "The city looked most beautiful when it was preparing to forget you. Its lights trembled on the wet streets, its windows glowed with other people’s lives, and every passing taxi seemed to carry away a version of the past."
+  },
+  {
+    "phrase": "Grand courtroom rhetoric, dramatic and formal",
+    "example": "Ladies and gentlemen, this case asks not merely what happened, but what we are willing to accept as truth when convenience has dressed itself as certainty. The evidence does not whisper; it speaks with the grave authority of fact."
+  },
+  {
+    "phrase": "Elegant tech-founder manifesto, polished and visionary",
+    "example": "We are building not another tool, but a quieter architecture for human focus. In a world crowded with noise, the future will belong to systems that make complexity feel graceful, intentional, and almost invisible."
+  },
+  {
+    "phrase": "Imperial military dispatch, formal and decisive",
+    "example": "By order of the high command, the eastern road is to be secured before nightfall, and no banner shall retreat beyond the river. The success of the campaign depends upon discipline, speed, and the unbroken confidence of the line."
+  },
+  {
+    "phrase": "Elegant philosophical aphorism style",
+    "example": "A life spent chasing certainty soon becomes a shrine to fear. Wisdom begins when one learns to move with grace through the unknown."
+  },
+  {
+    "phrase": "Polished literary realism, rich but grounded",
+    "example": "The apartment was small, but she kept it with a precision that made poverty seem almost deliberate. On the table stood a single vase, empty most weeks, though she washed it every Sunday as if expecting beauty to return."
+  },
+  {
+    "phrase": "Velvet-smooth romantic luxury prose",
+    "example": "The night gathered around them like dark silk, and the candles trembled in their crystal cups. When he reached for her hand, the gesture was so gentle it seemed less an action than a promise."
+  },
+  {
+    "phrase": "Ceremonial academic introduction, formal and elevated",
+    "example": "It is my distinct privilege to introduce a speaker whose work has not only advanced the field, but refined the questions by which the field understands itself. Their scholarship exemplifies rigor, imagination, and an enduring commitment to intellectual generosity."
+  },
+  {
+    "phrase": "Elegant nature mysticism, reverent and atmospheric",
+    "example": "The forest did not seem empty, but listening. Every fern, stone, and dark pool held the composure of something ancient enough to have survived the arrogance of names."
+  },
+  {
+    "phrase": "Refined grief prose, quiet and devastating",
+    "example": "After the funeral, the house became unbearably polite. The chairs remained in their places, the clocks continued their duties, and only the unopened letter on the desk seemed honest about what had been lost."
+  },
+  {
+    "phrase": "Grand imperial romance, formal and sweeping",
+    "example": "She was promised to a throne, he to a battlefield, and between them stood the entire machinery of empire. Yet in the garden, beneath the indifferent stars, they spoke as though history itself might be persuaded to look away."
+  },
+  {
+    "phrase": "Elegant educational prose, clear but elevated",
+    "example": "To understand the concept, imagine knowledge as a house built room by room. A strong foundation allows each later idea to stand with confidence, while a weak one causes even beautiful explanations to collapse under their own weight."
+  },
+  {
+    "phrase": "Polished executive style, formal and strategic",
+    "example": "The central priority is to convert complexity into operational clarity. By aligning the team around measurable outcomes and disciplined execution, we can create a structure that supports both immediate progress and long-term resilience."
+  },
+  {
+    "phrase": "Refined adventure fantasy, noble and vivid",
+    "example": "The mountain pass opened before them like a wound in the world, bright with snow and peril. Still, the company pressed onward, for beyond those peaks lay the lost city and the answer to an oath older than any crown."
+  },
+  {
+    "phrase": "Elegant persuasive luxury ad style",
+    "example": "There are objects one purchases, and there are objects one inherits from the person one is becoming. This is made for the latter: composed, enduring, and quietly impossible to forget."
+  },
+  {
+    "phrase": "Tragic imperial history, solemn and majestic",
+    "example": "The empire did not fall in a single night, though later poets preferred the drama of that invention. It declined by ceremonies, by flattering reports, by ministers who confused silence with loyalty and marble with strength."
+  },
+  {
+    "phrase": "Poetic cyberpunk elegance, neon and refined",
+    "example": "Rain fell through the neon haze like shattered glass, silvering the alleys and the faces of those who had sold their names to the network. Above them, the towers glowed with the cold serenity of gods who charged by the hour."
+  },
+  {
+    "phrase": "Refined personal branding style, confident and tasteful",
+    "example": "I build with an eye for clarity, performance, and the kind of polish that makes complexity feel simple. My work sits at the intersection of technical discipline and visual judgment, where function is not allowed to arrive without grace."
+  },
+  {
+    "phrase": "Grand spiritual prophecy, solemn and radiant",
+    "example": "The age of hollow crowns will pass, and from the quiet places shall rise those who kept faith when applause was absent. Their hands will mend what ambition broke, and their names will be written not in gold, but in gratitude."
+  },
+  {
+    "phrase": "Elegant farewell, graceful and emotional",
+    "example": "I leave with gratitude for what was shared, tenderness for what cannot remain, and hope for whatever waits beyond this closing door. Some chapters end not because they failed, but because they have given all they were meant to give."
+  },
+  {
+    "phrase": "Polished intellectual romance, thoughtful and intimate",
+    "example": "They fell in love not through grand declarations, but through footnotes, late arguments, and the strange intimacy of being understood before one had finished explaining. Their affection was less a flame than a lamp, steady and carefully tended."
+  },
+  {
+    "phrase": "High ceremonial fantasy, ancient and formal",
+    "example": "Before the throne of white ash and moonstone, the seven houses bent the knee. The crown was lifted, the old bells answered, and the kingdom held its breath as the nameless heir received a name."
+  },
+  {
+    "phrase": "Elegant modern essay style, polished and reflective",
+    "example": "Modern life often mistakes speed for significance, rewarding the immediate while neglecting the meaningful. Yet the finest things we build, whether relationships, institutions, or works of art, still require patience, revision, and care."
+  },
+  {
+    "phrase": "Refined suspense style, graceful and tense",
+    "example": "The letter arrived without a return address, sealed in black wax and smelling faintly of smoke. By the time he finished reading it, every familiar object in the room had begun to look like evidence."
+  }
+]

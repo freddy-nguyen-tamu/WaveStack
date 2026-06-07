@@ -417,8 +417,8 @@ export const TASTE_COMPARISON_QUERY = gql`
 `;
 
 export const JUDGE_TASTE_MUTATION = gql`
-  mutation JudgeTaste($period: String) {
-    judgeTaste(period: $period) {
+  mutation JudgeTaste($period: String, $writingStylePhrase: String, $writingStyleExample: String) {
+    judgeTaste(period: $period, writingStylePhrase: $writingStylePhrase, writingStyleExample: $writingStyleExample) {
       ok
       verdictTitle
       roast

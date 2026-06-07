@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useApolloClient, useMutation, useQuery } from "@apollo/client";
 import { useInfiniteScroll } from "./hooks/useInfiniteScroll";
 import { Activity, Clock, Heart, Library, ListMusic, Search, TrendingUp } from "lucide-react";
-import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import {
     LISTENING_HABIT_SUMMARY_QUERY,
     ME_QUERY,
@@ -131,6 +131,16 @@ const fallbackSongs: Song[] = [
   }
 ];
 
+const NAV_SCROLL_PATHS = new Set([
+  "/dashboard",
+  "/library",
+  "/search",
+  "/favorites",
+  "/recent",
+  "/stats",
+  "/playlists"
+]);
+
 function readStringArray(key: string): string[] {
   try {
     const value = window.localStorage.getItem(key);
@@ -225,6 +235,7 @@ function LibraryPage({
 }
 
 export function App() {
+  const location = useLocation();
   const [activeSong, setActiveSong] = useState<Song | null>(null);
   const [queue, setQueue] = useState<Song[]>([]);
   const [playSignal, setPlaySignal] = useState(0);
@@ -235,8 +246,52 @@ export function App() {
   const [notice, setNotice] = useState("");
   const [queueDrawerOpen, setQueueDrawerOpen] = useState(false);
   const [detailsSong, setDetailsSong] = useState<Song | null>(null);
+  const pendingNavScrollRef = useRef(false);
 
   const [cachedSongs, setCachedSongs] = useState<Song[]>(readSongCache);
+
+  const scrollRouteContentIntoView = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const nav = document.querySelector<HTMLElement>(".app-nav");
+        const target = document.querySelector<HTMLElement>(
+          "[data-route-content] h2, [data-route-content] h3"
+        );
+
+        if (!nav || !target) {
+          return;
+        }
+
+        const navHeight = nav.getBoundingClientRect().height;
+        const targetTop = target.getBoundingClientRect().top + window.scrollY;
+        window.scrollTo({
+          top: Math.max(0, targetTop - navHeight - 8),
+          behavior: "smooth"
+        });
+      });
+    });
+  }, []);
+
+  function requestNavScroll(path: string) {
+    pendingNavScrollRef.current = true;
+
+    if (location.pathname === path) {
+      pendingNavScrollRef.current = false;
+      scrollRouteContentIntoView();
+    }
+  }
+
+  useEffect(() => {
+    if (!pendingNavScrollRef.current) {
+      return;
+    }
+
+    pendingNavScrollRef.current = false;
+
+    if (NAV_SCROLL_PATHS.has(location.pathname)) {
+      scrollRouteContentIntoView();
+    }
+  }, [location.pathname, scrollRouteContentIntoView]);
 
   const [authUser, setAuthUser] = useState<AuthUser | null>(() => {
     try {
@@ -1404,28 +1459,28 @@ export function App() {
       </header>
 
       <nav className="app-nav" aria-label="Primary">
-        <NavLink to="/dashboard">
+        <NavLink to="/dashboard" onClick={() => requestNavScroll("/dashboard")}>
           <Activity aria-hidden="true" /> Dashboard
         </NavLink>
-        <NavLink to="/library">
+        <NavLink to="/library" onClick={() => requestNavScroll("/library")}>
           <Library aria-hidden="true" /> Library
         </NavLink>
-        <NavLink to="/search">
+        <NavLink to="/search" onClick={() => requestNavScroll("/search")}>
           <Search aria-hidden="true" /> Search
         </NavLink>
-        <NavLink to="/favorites">
+        <NavLink to="/favorites" onClick={() => requestNavScroll("/favorites")}>
           <Heart aria-hidden="true" /> Favorites ({favoriteSongs.length})
         </NavLink>
-        <NavLink to="/recent">
+        <NavLink to="/recent" onClick={() => requestNavScroll("/recent")}>
           <Clock aria-hidden="true" /> Recent ({recentSongs.length})
         </NavLink>
         <button type="button" onClick={() => setQueueDrawerOpen(true)} aria-label="Open queue">
           <ListMusic aria-hidden="true" /> Queue ({queue.length})
         </button>
-        <NavLink to="/stats">
+        <NavLink to="/stats" onClick={() => requestNavScroll("/stats")}>
           <TrendingUp aria-hidden="true" /> Stats
         </NavLink>
-        <NavLink to="/playlists">
+        <NavLink to="/playlists" onClick={() => requestNavScroll("/playlists")}>
           Playlists ({playlists.length})
         </NavLink>
       </nav>
@@ -1458,6 +1513,7 @@ export function App() {
         />
       </section>
 
+      <div className="route-content" data-route-content>
       <Routes>
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route
@@ -1574,6 +1630,7 @@ export function App() {
         />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
+      </div>
 
       {detailsSong ? (
         <SongMetadataModal

@@ -20,6 +20,11 @@ type QueryRows<T> = { rows: T[] } | T[];
 
 type StatsPeriod = "FOUR_WEEKS" | "SIX_MONTHS" | "TWELVE_MONTHS" | "ALL_TIME";
 
+type TasteWritingStyle = {
+  phrase?: string;
+  example?: string;
+};
+
 type StatsEntryRow = {
   key: string;
   label: string;
@@ -859,8 +864,10 @@ export class HabitsService {
     return map[period] ?? "";
   }
 
-  async judgeTaste(userId: string, period = "ALL_TIME"): Promise<TasteJudgeResult> {
+  async judgeTaste(userId: string, period = "ALL_TIME", writingStyle: TasteWritingStyle = {}): Promise<TasteJudgeResult> {
     const generatedAt = new Date().toISOString();
+    const stylePhrase = writingStyle.phrase?.trim().slice(0, 180);
+    const styleExample = writingStyle.example?.trim().slice(0, 900);
 
     const [topTracks, topArtists, topGenres, recent, comparison] = await Promise.all([
       this.topTracks(userId, period as StatsPeriod, 25),
@@ -932,10 +939,12 @@ export class HabitsService {
               "The JSON object must have these keys:",
               "verdictTitle, roast, summary, badges, tasteScore, obscurityScore, chaosScore.",
               "verdictTitle must be short and catchy.",
-              "roast must be 1 to 2 fun sentences.",
+              "roast must be 1 to 2 fun sentences that describe the listener as a character shaped by their listening history.",
               "summary must be 1 friendly sentence.",
               "badges must be an array of 3 to 6 short fun labels.",
-              "scores must be integers from 0 to 100."
+              "scores must be integers from 0 to 100.",
+              stylePhrase ? `Write the roast and summary in this writing style: ${stylePhrase}.` : "",
+              styleExample ? `Use this sample only as tone guidance, not as content to copy: ${styleExample}` : ""
             ].join(" ")
           },
           {

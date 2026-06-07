@@ -403,6 +403,10 @@ main > section[aria-label="Player"] .player-card {
   margin-bottom: 0;
 }
 
+.route-content {
+  width: 100%;
+}
+
 article > h2,
 .dashboard-page__header h2,
 .stats-page__hero h2,
@@ -1754,6 +1758,12 @@ article > section > h3 {
   height: 1rem;
   background: var(--color-ink);
   animation: blink 0.9s steps(2, start) infinite;
+}
+
+.taste-verdict__style {
+  display: inline-block;
+  margin-bottom: 0.45rem;
+  text-transform: uppercase;
 }
 
 @keyframes blink {
