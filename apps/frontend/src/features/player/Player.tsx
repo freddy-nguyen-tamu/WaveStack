@@ -311,12 +311,27 @@ export function Player({
           </label>
         </div>
 
-        <div
-          className="player-card__progress"
-          aria-hidden="true"
-          style={{ "--progress": `${progressPercent}%` } as React.CSSProperties}
-        >
-          <span />
+        <div className="player-card__progress-wrap">
+          <span>{formatSeconds(currentTime)}</span>
+
+          <label className="sr-only" htmlFor="player-card-seek">
+            Seek playback position
+          </label>
+
+          <input
+            id="player-card-seek"
+            className="player-card__progress"
+            type="range"
+            min="0"
+            max={Math.max(safeDuration, 1)}
+            step="0.1"
+            value={Math.min(currentTime, Math.max(safeDuration, 1))}
+            onChange={(event) => handleSeek(event.target.value)}
+            style={{ "--progress": `${progressPercent}%` } as React.CSSProperties}
+            aria-label="Seek playback position"
+          />
+
+          <span>{formatSeconds(safeDuration)}</span>
         </div>
 
       </article>

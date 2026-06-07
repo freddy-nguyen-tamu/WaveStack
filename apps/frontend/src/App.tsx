@@ -280,7 +280,7 @@ export function App() {
     }
   }, []);
 
-  const RECOMMENDATION_PAGE_SIZE = 24;
+  const RECOMMENDATION_PAGE_SIZE = 25;
 
   const [recommendedData, setRecommendedData] = useState<RecommendResult[] | null>(null);
   const [habitSummaries, setHabitSummaries] = useState<Record<string, HabitSummaryEntry[]>>({});

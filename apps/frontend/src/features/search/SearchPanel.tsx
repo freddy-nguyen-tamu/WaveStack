@@ -4,9 +4,9 @@ import { useQuery } from "@apollo/client";
 import { SONG_PAGE_QUERY } from "../../api";
 import type { ClientPlaylist, Song } from "../../App";
 import { formatSongDisplayName } from "../../song-format";
-import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
 import { SongActions } from "../../components/SongActions";
 import { SongArtwork } from "../../components/SongArtwork";
+import { PaginationBar } from "../../components/PaginationBar";
 
 type SongPageQueryData = {
   songPage: {
@@ -38,6 +38,8 @@ type SearchPanelProps = {
   onToggleFavorite: (song: Song) => void;
 };
 
+const PAGE_SIZE = 30;
+
 export function SearchPanel({
   pageKey,
   title,
@@ -56,6 +58,7 @@ export function SearchPanel({
   const [allResults, setAllResults] = useState<Song[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [cursor, setCursor] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -101,13 +104,6 @@ export function SearchPanel({
     }
   }
 
-  const sentinelRef = useInfiniteScroll({
-    enabled: debouncedQuery.length > 0,
-    loading,
-    hasMore,
-    onLoadMore: () => { void loadMore(); }
-  });
-
   const fallbackResults = useMemo(() => {
     if (debouncedQuery) return [];
     const needle = query.trim().toLowerCase();
@@ -119,6 +115,9 @@ export function SearchPanel({
   }, [query, debouncedQuery, songs]);
 
   const results = debouncedQuery ? allResults : fallbackResults;
+  const pageCount = Math.max(1, Math.ceil(results.length / PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+  const pagedResults = results.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
   useEffect(() => {
     setQuery("");
@@ -127,7 +126,12 @@ export function SearchPanel({
     setMessage("");
     setCursor(null);
     setHasMore(false);
+    setPage(1);
   }, [pageKey]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [query, results.length]);
 
   function play(song: Song) {
     onPlay(song);
@@ -157,43 +161,60 @@ export function SearchPanel({
         <input value={query} onChange={(event) => setQuery(event.target.value)} />
       </label>
       {message ? <p role="status">{message}</p> : null}
-      <p>Showing {results.length} song(s){debouncedQuery ? ` (DB search: "${debouncedQuery}")` : ""}{loading ? " — searching..." : ""}</p>
-      {results.length ? (
-        <ul>
-          {results.map((song, index) => {
-            const isFavorite = favoriteIds.includes(song.id);
-            return (
-              <li key={song.id} className="song-list-row">
-                <SongArtwork
-                  song={song}
-                  wrapClassName="song-list-row__art"
-                  fallbackClassName="song-list-row__art-fallback"
-                  imageClassName="song-list-row__art-image"
-                />
-                <div className="song-list-row__body">
-                  <strong>
-                    <span className="song-list-row__index">{index + 1}.</span>{" "}
-                    {formatSongDisplayName(song)}
-                  </strong>
-                  {song.albumTitle ? <small>{song.albumTitle}</small> : null}
-                  <SongActions
+      <p>
+        Showing {pagedResults.length} of {results.length} song(s).
+        {debouncedQuery ? ` (DB search: "${debouncedQuery}")` : ""}
+        {loading ? " — searching..." : ""}
+        {pageCount > 1 ? ` Page ${currentPage} of ${pageCount}.` : ""}
+      </p>
+      {pagedResults.length ? (
+        <>
+          <ul>
+            {pagedResults.map((song, index) => {
+              const isFavorite = favoriteIds.includes(song.id);
+              const absoluteIndex = (currentPage - 1) * PAGE_SIZE + index + 1;
+              return (
+                <li key={song.id} className="song-list-row">
+                  <SongArtwork
                     song={song}
-                    playlists={playlists}
-                    isFavorite={isFavorite}
-                    onPlay={play}
-                    onQueue={queue}
-                    onToggleFavorite={(item) => toggleFavorite(item, isFavorite)}
-                    onAddToPlaylist={add}
+                    wrapClassName="song-list-row__art"
+                    fallbackClassName="song-list-row__art-fallback"
+                    imageClassName="song-list-row__art-image"
                   />
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+                  <div className="song-list-row__body">
+                    <strong>
+                      <span className="song-list-row__index">{absoluteIndex}.</span>{" "}
+                      {formatSongDisplayName(song)}
+                    </strong>
+                    {song.albumTitle ? <small>{song.albumTitle}</small> : null}
+                    <SongActions
+                      song={song}
+                      playlists={playlists}
+                      isFavorite={isFavorite}
+                      onPlay={play}
+                      onQueue={queue}
+                      onToggleFavorite={(item) => toggleFavorite(item, isFavorite)}
+                      onAddToPlaylist={add}
+                    />
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+
+          <PaginationBar
+            currentPage={currentPage}
+            pageCount={pageCount}
+            onPageChange={setPage}
+            label={`${title} pagination`}
+          />
+        </>
       ) : <p>{emptyMessage}</p>}
-      {hasMore ? <div ref={sentinelRef} className="infinite-scroll-sentinel" aria-hidden="true" /> : null}
-      {loading && allResults.length ? <p className="infinite-scroll-status">Loading more results...</p> : null}
-      {!hasMore && allResults.length ? <p className="infinite-scroll-status">End of search results.</p> : null}
+      {hasMore ? (
+        <button type="button" onClick={() => void loadMore()} disabled={loading}>
+          {loading ? "Loading more..." : "Load more search results"}
+        </button>
+      ) : null}
     </article>
   );
 }

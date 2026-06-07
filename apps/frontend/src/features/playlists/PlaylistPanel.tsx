@@ -4,6 +4,7 @@ import type { ClientPlaylist, Song } from "../../App";
 import { formatSongDisplayName } from "../../song-format";
 import { SongActions } from "../../components/SongActions";
 import { SongArtwork } from "../../components/SongArtwork";
+import { PaginationBar } from "../../components/PaginationBar";
 
 type PlaylistPanelProps = {
   songs: Song[];
@@ -225,25 +226,6 @@ export function PlaylistPanel({
           Showing {pagedSongs.length} of {libraryResults.length} song(s). Page {currentPage} of {pageCount}.
         </p>
 
-        {pageCount > 1 ? (
-          <div aria-label="Pagination">
-            <button type="button" onClick={() => setPage(1)} disabled={currentPage === 1}>
-              First
-            </button>
-            <button type="button" onClick={() => setPage((value) => Math.max(1, value - 1))} disabled={currentPage === 1}>
-              Previous
-            </button>
-            <button type="button" onClick={() => setPage((value) => Math.min(pageCount, value + 1))} disabled={currentPage === pageCount}>
-              Next
-            </button>
-            <button type="button" onClick={() => setPage(pageCount)} disabled={currentPage === pageCount}>
-              Last
-            </button>
-          </div>
-        ) : (
-          <p>Pagination appears after more than {PAGE_SIZE} matching songs.</p>
-        )}
-
         <ul>
           {pagedSongs.map((song, index) => {
             const isFavorite = favoriteIds.includes(song.id);
@@ -276,6 +258,13 @@ export function PlaylistPanel({
             );
           })}
         </ul>
+
+        <PaginationBar
+          currentPage={currentPage}
+          pageCount={pageCount}
+          onPageChange={setPage}
+          label="Playlist library pagination"
+        />
       </section>
     </article>
   );

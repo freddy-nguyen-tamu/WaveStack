@@ -265,10 +265,12 @@ export class HabitsService {
 
     let backendRecentIds: string[] = [];
     let playCounts = new Map<string, number>();
+    let habitArtistWeights = new Map<string, number>();
 
     if (userId) {
       backendRecentIds = await this.getRecentListenIds(userId, 80);
       playCounts = await this.getPlayCounts(userId);
+      habitArtistWeights = await this.getTopArtistWeights(userId);
     }
 
     const backendRecentSet = new Set(backendRecentIds);
@@ -318,12 +320,19 @@ export class HabitsService {
         reasons.push("recently played");
       }
 
-      const artistWeight = seedArtists.get(normalize(song.artistName)) ?? 0;
+      const artistKey = normalize(song.artistName);
+      const artistWeight = seedArtists.get(artistKey) ?? 0;
+      const habitArtistWeight = habitArtistWeights.get(artistKey) ?? 0;
       const albumWeight = seedAlbums.get(normalize(song.albumTitle)) ?? 0;
       const genreWeight = (song.genreNames ?? []).reduce(
         (sum, genre) => sum + (seedGenres.get(normalize(genre)) ?? 0),
         0
       );
+
+      if (habitArtistWeight > 0) {
+        score += habitArtistWeight * 15;
+        reasons.push("artist you play");
+      }
 
       if (artistWeight > 0) {
         score += artistWeight * 10;
@@ -410,6 +419,52 @@ export class HabitsService {
     }
 
     return playCounts;
+  }
+
+  private async getTopArtistWeights(userId: string): Promise<Map<string, number>> {
+    const result = await this.database.query(
+      `WITH combined AS (
+         SELECT
+           COALESCE(NULLIF(artist_name, ''), 'Unknown Artist') AS artist_name,
+           1::int AS play_count
+         FROM app_listening_events
+         WHERE user_id = $1
+
+         UNION ALL
+
+         SELECT
+           COALESCE(NULLIF(artist_name, ''), 'Unknown Artist') AS artist_name,
+           play_count::int AS play_count
+         FROM app_listening_monthly_rollups
+         WHERE user_id = $1
+       ),
+       grouped AS (
+         SELECT
+           artist_name,
+           SUM(play_count)::int AS play_count
+         FROM combined
+         GROUP BY artist_name
+       )
+       SELECT artist_name, play_count
+       FROM grouped
+       ORDER BY play_count DESC, artist_name ASC
+       LIMIT 40`,
+      [userId]
+    );
+
+    const rows = this.rows(result) as Array<{ artist_name: string; play_count: string | number }>;
+    const weights = new Map<string, number>();
+    const maxPlayCount = Math.max(1, ...rows.map((row) => Number(row.play_count) || 0));
+
+    for (const row of rows) {
+      const normalizedArtist = normalize(row.artist_name);
+      const playCount = Number(row.play_count) || 0;
+      const weight = Math.max(1, Math.round((playCount / maxPlayCount) * 10));
+
+      addWeighted(weights, normalizedArtist, weight);
+    }
+
+    return weights;
   }
 
   private async getRecentListenIds(userId: string, limit: number): Promise<string[]> {
