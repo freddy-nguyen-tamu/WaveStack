@@ -72,17 +72,27 @@
     />
   </head>
   <body>
-    <noscript>
-      <main class="noscript-page">
-        <h1>WaveStack</h1>
+    <div id="root">
+      <header class="static-app-header">
+        <p class="static-app-brand">WaveStack</p>
+        <p>Cloud-native music streaming platform</p>
+      </header>
+
+      <nav class="static-app-nav" aria-label="Primary navigation">
+        <a href="/">Home</a>
+        <a href="/all">Library</a>
+        <a href="/search">Search</a>
+        <a href="/playlists">Playlists</a>
+      </nav>
+
+      <main class="static-app-main">
+        <h1>WaveStack music library</h1>
         <p>
-          WaveStack needs JavaScript to run the music player, library, queue,
-          playlists, and account features.
+          Search, play, favorite, queue, and organize your cloud music library.
+          JavaScript is required for the full interactive music player.
         </p>
       </main>
-    </noscript>
-
-    <div id="root"></div>
+    </div>
 
     <script
       type="module"
