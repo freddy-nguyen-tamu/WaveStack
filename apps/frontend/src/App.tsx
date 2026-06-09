@@ -133,6 +133,81 @@ const NAV_SCROLL_PATHS = new Set([
   "/add-songs"
 ]);
 
+const DEFAULT_META_DESCRIPTION =
+  "WaveStack is a cloud-native music streaming platform for searching, playing, favoriting, queuing, and organizing your music library.";
+
+const ROUTE_META: Record<string, { title: string; description: string }> = {
+  "/": {
+    title: "WaveStack | Cloud Music Streaming Platform",
+    description: DEFAULT_META_DESCRIPTION
+  },
+  "/all": {
+    title: "All Songs | WaveStack",
+    description: "Browse and play every song available in your WaveStack music library."
+  },
+  "/dashboard": {
+    title: "Dashboard | WaveStack",
+    description: "View recommendations, favorites, recently played songs, and listening summaries in WaveStack."
+  },
+  "/search": {
+    title: "Search Music | WaveStack",
+    description: "Search your WaveStack cloud music library by song, artist, album, and genre."
+  },
+  "/add-songs": {
+    title: "Add Songs | WaveStack",
+    description: "Add local audio files or account songs to your WaveStack music library."
+  },
+  "/favorites": {
+    title: "Favorites | WaveStack",
+    description: "View and play your favorite songs in WaveStack."
+  },
+  "/recent": {
+    title: "Recently Played | WaveStack",
+    description: "Review the songs you recently played in WaveStack."
+  },
+  "/stats": {
+    title: "Listening Stats | WaveStack",
+    description: "Explore your WaveStack listening history, habits, rankings, and music taste statistics."
+  },
+  "/playlists": {
+    title: "Playlists | WaveStack",
+    description: "Create, manage, and play your WaveStack playlists."
+  },
+  "/profile": {
+    title: "Profile | WaveStack",
+    description: "Manage your WaveStack profile, listening archive, favorites, and account actions."
+  },
+  "/oauth-callback": {
+    title: "Signing In | WaveStack",
+    description: "Complete your WaveStack sign-in flow."
+  }
+};
+
+function ensureMetaTag(name: string, content: string) {
+  let tag = document.querySelector<HTMLMetaElement>(`meta[name="${name}"]`);
+
+  if (!tag) {
+    tag = document.createElement("meta");
+    tag.name = name;
+    document.head.appendChild(tag);
+  }
+
+  tag.content = content;
+}
+
+function ensureCanonicalLink(pathname: string) {
+  let tag = document.querySelector<HTMLLinkElement>('link[rel="canonical"]');
+
+  if (!tag) {
+    tag = document.createElement("link");
+    tag.rel = "canonical";
+    document.head.appendChild(tag);
+  }
+
+  const path = pathname === "/" ? "/" : pathname;
+  tag.href = `https://wavestack.duckdns.org${path}`;
+}
+
 function readStringArray(key: string): string[] {
   try {
     const value = window.localStorage.getItem(key);
@@ -174,6 +249,15 @@ function writeLocalJson(key: string, value: unknown) {
 
 export function App() {
   const location = useLocation();
+
+  useEffect(() => {
+    const metadata = ROUTE_META[location.pathname] ?? ROUTE_META["/"];
+
+    document.title = metadata.title;
+    ensureMetaTag("description", metadata.description);
+    ensureCanonicalLink(location.pathname);
+  }, [location.pathname]);
+
   const [activeSong, setActiveSong] = useState<Song | null>(null);
   const [queue, setQueue] = useState<Song[]>([]);
   const [playSignal, setPlaySignal] = useState(0);
@@ -1474,13 +1558,18 @@ export function App() {
   }
 
   return (
-    <main>
-      <header>
+    <>
+      <header className="app-header">
         <div className="app-header__top">
-          <div>
-            <h1>WaveStack</h1>
-            <p>Cloud-native music streaming platform</p>
-          </div>
+          <NavLink
+            className="app-header__brand"
+            to="/all"
+            aria-label="WaveStack home"
+            onClick={() => requestNavScroll("/all")}
+          >
+            WaveStack
+          </NavLink>
+          <p id="app-description">Cloud-native music streaming platform</p>
         </div>
 
         <AuthPanel
@@ -1489,7 +1578,10 @@ export function App() {
         />
       </header>
 
-      <nav className="app-nav" aria-label="Primary">
+      <nav className="app-nav" aria-label="Primary navigation">
+        <a className="skip-link" href="#main-content">
+          Skip to main content
+        </a>
         <NavLink to="/all" onClick={() => requestNavScroll("/all")}>
           <Music2 aria-hidden="true" /> All
         </NavLink>
@@ -1508,7 +1600,7 @@ export function App() {
         <NavLink to="/recent" onClick={() => requestNavScroll("/recent")}>
           <Clock aria-hidden="true" /> Recent ({recentSongs.length})
         </NavLink>
-        <button type="button" onClick={() => setQueueDrawerOpen(true)} aria-label="Open queue">
+        <button type="button" onClick={() => setQueueDrawerOpen(true)}>
           <ListMusic aria-hidden="true" /> Queue ({queue.length})
         </button>
         <NavLink to="/stats" onClick={() => requestNavScroll("/stats")}>
@@ -1518,6 +1610,13 @@ export function App() {
           Playlists ({playlists.length})
         </NavLink>
       </nav>
+
+      <main
+        id="main-content"
+        className="app-main"
+        aria-describedby="app-description"
+      >
+        <h1 className="sr-only">WaveStack music library</h1>
 
       {notice ? (
         <p className="toast-notice toast-notice--status" role="status">
@@ -1777,7 +1876,8 @@ export function App() {
         }}
       />
 
-      <div className="bottom-player-spacer" aria-hidden="true" />
-    </main>
+        <div className="bottom-player-spacer" aria-hidden="true" />
+      </main>
+    </>
   );
 }
