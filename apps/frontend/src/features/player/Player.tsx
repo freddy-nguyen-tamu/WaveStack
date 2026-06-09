@@ -56,6 +56,8 @@ export function Player({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const playRequestRef = useRef(0);
+  const pressedKeysRef = useRef<Set<string>>(new Set());
+  const comboLockRef = useRef<"next" | "previous" | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [hasPlaybackHistory, setHasPlaybackHistory] = useState(false);
   const [pendingAutoplay, setPendingAutoplay] = useState(false);
@@ -205,7 +207,7 @@ export function Player({
   }
 
   useEffect(() => {
-    function isTypingTarget(target: EventTarget | null) {
+    function isTypingTarget(target: EventTarget | null): boolean {
       if (!(target instanceof HTMLElement)) {
         return false;
       }
@@ -213,31 +215,107 @@ export function Player({
       const tagName = target.tagName.toLowerCase();
 
       return (
-        target.isContentEditable ||
         tagName === "input" ||
         tagName === "textarea" ||
-        tagName === "select"
+        tagName === "select" ||
+        target.isContentEditable
       );
     }
 
-    function isNativeButtonTarget(target: EventTarget | null) {
-      if (!(target instanceof HTMLElement)) {
-        return false;
-      }
+    function blurActiveButtonLikeElement() {
+      const activeElement = document.activeElement;
 
-      return target.closest("button, a, [role='button']") !== null;
-    }
-
-    function handleSpacebarToggle(event: KeyboardEvent) {
-      if (event.code !== "Space" && event.key !== " ") {
+      if (!(activeElement instanceof HTMLElement)) {
         return;
       }
 
+      if (activeElement.closest("button, [role='button']")) {
+        activeElement.blur();
+      }
+    }
+
+    function restartCurrentSong(): boolean {
+      const audio = audioRef.current;
+
+      if (!audio) {
+        return false;
+      }
+
+      audio.currentTime = 0;
+      setCurrentTime(0);
+      setHasPlaybackHistory(true);
+      setMessage(`Restarted: ${displayName}`);
+
+      return true;
+    }
+
+    function handleSmartPrevious() {
+      const audio = audioRef.current;
+      const latestTime = audio?.currentTime ?? currentTime;
+
+      if (latestTime > 5) {
+        restartCurrentSong();
+        return;
+      }
+
+      onPrevious();
+    }
+
+    function normalizeKey(event: KeyboardEvent): string {
+      if (event.code === "ArrowRight" || event.key === "ArrowRight") {
+        return "ArrowRight";
+      }
+
+      if (event.code === "ArrowLeft" || event.key === "ArrowLeft") {
+        return "ArrowLeft";
+      }
+
+      if (event.code === "Space" || event.key === " ") {
+        return "Space";
+      }
+
+      return event.key.toLowerCase();
+    }
+
+    function handleKeyboardControls(event: KeyboardEvent) {
       if (isTypingTarget(event.target)) {
         return;
       }
 
-      if (isNativeButtonTarget(event.target)) {
+      const key = normalizeKey(event);
+      pressedKeysRef.current.add(key);
+
+      blurActiveButtonLikeElement();
+
+      const isSpace = key === "Space";
+      const wantsNext =
+        pressedKeysRef.current.has("x") && pressedKeysRef.current.has("ArrowRight");
+      const wantsPrevious =
+        pressedKeysRef.current.has("z") && pressedKeysRef.current.has("ArrowLeft");
+
+      if (wantsNext) {
+        event.preventDefault();
+
+        if (comboLockRef.current !== "next") {
+          comboLockRef.current = "next";
+          onNext();
+        }
+
+        return;
+      }
+
+      if (wantsPrevious) {
+        event.preventDefault();
+
+        if (comboLockRef.current !== "previous") {
+          comboLockRef.current = "previous";
+          handleSmartPrevious();
+        }
+
+        return;
+      }
+
+      if (!isSpace) {
         return;
       }
 
@@ -253,18 +331,87 @@ export function Player({
       void playCurrent();
     }
 
-    window.addEventListener("keydown", handleSpacebarToggle);
+    function handleKeyUp(event: KeyboardEvent) {
+      const key = normalizeKey(event);
+      pressedKeysRef.current.delete(key);
+
+      if (
+        !pressedKeysRef.current.has("x") ||
+        !pressedKeysRef.current.has("ArrowRight")
+      ) {
+        if (comboLockRef.current === "next") {
+          comboLockRef.current = null;
+        }
+      }
+
+      if (
+        !pressedKeysRef.current.has("z") ||
+        !pressedKeysRef.current.has("ArrowLeft")
+      ) {
+        if (comboLockRef.current === "previous") {
+          comboLockRef.current = null;
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyboardControls);
+    window.addEventListener("keyup", handleKeyUp);
 
     return () => {
-      window.removeEventListener("keydown", handleSpacebarToggle);
+      window.removeEventListener("keydown", handleKeyboardControls);
+      window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [isPlaying, activeSong.id, displayName]);
+  }, [isPlaying, currentTime, activeSong.id, displayName, onNext, onPrevious]);
+
+  useEffect(() => {
+    function blurActivatedControl(event: Event) {
+      const target = event.target;
+
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+
+      const control = target.closest("button, [role='button']");
+
+      if (!(control instanceof HTMLElement)) {
+        return;
+      }
+
+      window.setTimeout(() => {
+        if (document.activeElement === control || control.contains(document.activeElement)) {
+          control.blur();
+        }
+      }, 0);
+    }
+
+    document.addEventListener("click", blurActivatedControl, true);
+    document.addEventListener("pointerup", blurActivatedControl, true);
+
+    return () => {
+      document.removeEventListener("click", blurActivatedControl, true);
+      document.removeEventListener("pointerup", blurActivatedControl, true);
+    };
+  }, []);
 
   function skip() {
     onNext();
   }
 
   function previous() {
+    const audio = audioRef.current;
+    const latestTime = audio?.currentTime ?? currentTime;
+
+    if (latestTime > 5) {
+      if (audio) {
+        audio.currentTime = 0;
+      }
+
+      setCurrentTime(0);
+      setHasPlaybackHistory(true);
+      setMessage(`Restarted: ${displayName}`);
+      return;
+    }
+
     onPrevious();
   }
 
@@ -333,7 +480,7 @@ export function Player({
             {isPlaying ? " Pause" : " Play"}
           </button>
 
-          <button type="button" onClick={previous} aria-label="Previous song" disabled={!canGoPrevious}>
+          <button type="button" onClick={previous} aria-label="Restart current song or go to previous song">
             <SkipBack aria-hidden="true" /> Previous
           </button>
 
@@ -389,6 +536,10 @@ export function Player({
 
           <span>{formatSeconds(safeDuration)}</span>
         </div>
+
+        <p className="player-card__shortcuts">
+          <kbd>Space</kbd> Play/Pause &middot; <kbd>Z</kbd> + <kbd>&larr;</kbd> Backtrack &middot; <kbd>X</kbd> + <kbd>&rarr;</kbd> Skip
+        </p>
 
       </article>
 
@@ -449,7 +600,7 @@ export function Player({
                   <Shuffle aria-hidden="true" />
                 </button>
 
-                <button type="button" aria-label="Previous song" onClick={previous} disabled={!canGoPrevious}>
+                <button type="button" aria-label="Restart current song or go to previous song" onClick={previous}>
                   <SkipBack aria-hidden="true" />
                 </button>
 

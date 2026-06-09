@@ -712,6 +712,28 @@ article li small,
   cursor: pointer;
 }
 
+.player-card__shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  margin: 0.75rem 0 0;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.82rem;
+  text-transform: uppercase;
+}
+
+.player-card__shortcuts kbd {
+  min-width: 1.55rem;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 0.35rem;
+  padding: 0.12rem 0.35rem;
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--color-paper);
+  font: inherit;
+  text-align: center;
+}
+
 .bottom-player-spacer {
   display: none;
 }
