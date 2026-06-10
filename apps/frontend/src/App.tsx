@@ -266,7 +266,23 @@ export function App() {
   const [playlists, setPlaylists] = useState<ClientPlaylist[]>(readPlaylists);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState("");
   const [notice, setNotice] = useState("");
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    return window.localStorage.getItem("wavestack:theme") === "dark";
+  });
   const noticeTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const theme = isDarkMode ? "dark" : "light";
+    const themeColor = isDarkMode ? "#000000" : "#ffffff";
+
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    document.body.dataset.theme = theme;
+    document.body.style.colorScheme = theme;
+    window.localStorage.setItem("wavestack:theme", theme);
+    ensureMetaTag("theme-color", themeColor);
+  }, [isDarkMode]);
+
   const [queueDrawerOpen, setQueueDrawerOpen] = useState(false);
   const [detailsSong, setDetailsSong] = useState<Song | null>(null);
   const pendingNavScrollRef = useRef(false);
@@ -1574,6 +1590,8 @@ export function App() {
 
         <AuthPanel
           user={authUser}
+          isDarkMode={isDarkMode}
+          onToggleDarkMode={() => setIsDarkMode((current) => !current)}
           onLogout={logout}
         />
       </header>

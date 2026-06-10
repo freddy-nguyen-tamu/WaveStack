@@ -1,9 +1,12 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { Moon, Sun } from "lucide-react";
 import type { AuthUser } from "../../App";
 
 type AuthPanelProps = {
   user: AuthUser | null;
+  isDarkMode: boolean;
+  onToggleDarkMode: () => void;
   onLogout: () => void;
 };
 
@@ -17,7 +20,7 @@ function apiOrigin(): string {
   }
 }
 
-export function AuthPanel({ user, onLogout }: AuthPanelProps) {
+export function AuthPanel({ user, isDarkMode, onToggleDarkMode, onLogout }: AuthPanelProps) {
   const [isStartingGoogleLogin, setIsStartingGoogleLogin] = useState(false);
   const [error, setError] = useState("");
 
@@ -45,6 +48,20 @@ export function AuthPanel({ user, onLogout }: AuthPanelProps) {
     }
   }
 
+  const themeToggle = (
+    <button
+      type="button"
+      className="auth-panel__theme-toggle"
+      aria-label={isDarkMode ? "Switch to normal mode" : "Switch to dark mode"}
+      aria-pressed={isDarkMode}
+      title={isDarkMode ? "Normal mode" : "Dark mode"}
+      onClick={onToggleDarkMode}
+    >
+      {isDarkMode ? <Moon aria-hidden="true" /> : <Sun aria-hidden="true" />}
+      <span className="sr-only">{isDarkMode ? "Normal mode" : "Dark mode"}</span>
+    </button>
+  );
+
   if (user) {
     const initials = user.displayName
       .split(/\s+/)
@@ -55,6 +72,8 @@ export function AuthPanel({ user, onLogout }: AuthPanelProps) {
 
     return (
       <section className="auth-panel auth-panel--signed-in" aria-label="Account">
+        {themeToggle}
+
         <Link className="auth-panel__profile-link" to="/profile" aria-label={`View profile for ${user.displayName}`}>
           {user.avatarUrl ? (
             <img className="auth-panel__avatar" src={user.avatarUrl} alt="" />
@@ -75,6 +94,8 @@ export function AuthPanel({ user, onLogout }: AuthPanelProps) {
 
   return (
     <section className="auth-panel" aria-label="Account">
+      {themeToggle}
+
       <button
         type="button"
         className="auth-panel__google"
