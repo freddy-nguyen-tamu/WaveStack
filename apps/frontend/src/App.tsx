@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useApolloClient, useMutation, useQuery } from "@apollo/client";
+import { type ApolloQueryResult, useApolloClient, useMutation, useQuery } from "@apollo/client";
 import { Activity, Clock, Heart, ListMusic, Music2, Search, TrendingUp, Upload } from "lucide-react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import {
     LISTENING_HABIT_SUMMARY_QUERY,
     ME_QUERY,
     MUSIC_HOME_QUERY,
+    SONG_PAGE_QUERY,
     RECOMMENDED_SONGS_QUERY,
     RECORD_LISTEN_MUTATION,
     LIBRARY_STATE_QUERY,
@@ -106,6 +107,24 @@ export type ClientPlaylist = {
   updatedAt?: string;
 };
 
+type SongPageQueryData = {
+  songPage: {
+    nodes: Song[];
+    pageInfo: {
+      endCursor?: string | null;
+      hasNextPage: boolean;
+    };
+    totalCount: number;
+  };
+};
+
+type SongPageQueryVariables = {
+  first: number;
+  after?: string | null;
+  query?: string | null;
+  sort?: string | null;
+};
+
 const fallbackSongs: Song[] = [
   {
     id: "demo-1",
@@ -182,6 +201,9 @@ const ROUTE_META: Record<string, { title: string; description: string }> = {
     description: "Complete your WaveStack sign-in flow."
   }
 };
+
+const FULL_LIBRARY_REMEMBER_LIMIT = 10000;
+const FULL_LIBRARY_PAGE_SIZE = 100;
 
 function ensureMetaTag(name: string, content: string) {
   let tag = document.querySelector<HTMLMetaElement>(`meta[name="${name}"]`);
@@ -311,6 +333,7 @@ export function App() {
   });
 
   const [cachedSongs, setCachedSongs] = useState<Song[]>(readSongCache);
+  const [librarySongs, setLibrarySongs] = useState<Song[]>([]);
 
   const scrollRouteContentIntoView = useCallback(() => {
     window.requestAnimationFrame(() => {
@@ -431,6 +454,58 @@ export function App() {
   const [loadingMoreRecommendations, setLoadingMoreRecommendations] = useState(false);
   const apolloClient = useApolloClient();
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadFullBackendLibrary() {
+      const collected: Song[] = [];
+      let after: string | null = null;
+
+      try {
+        do {
+          const queryResult = await apolloClient.query({
+            query: SONG_PAGE_QUERY,
+            variables: {
+              first: FULL_LIBRARY_PAGE_SIZE,
+              after,
+              query: null,
+              sort: "TITLE_ASC"
+            },
+            fetchPolicy: "no-cache"
+          }) as ApolloQueryResult<SongPageQueryData>;
+
+          const pageData: SongPageQueryData["songPage"] | undefined = queryResult.data?.songPage;
+
+          if (!pageData) {
+            break;
+          }
+
+          collected.push(...(pageData.nodes ?? []));
+
+          const unique = uniqueSongsById(collected);
+
+          if (!cancelled) {
+            setLibrarySongs(unique);
+          }
+
+          after = pageData.pageInfo.hasNextPage ? pageData.pageInfo.endCursor ?? null : null;
+        } while (after && !cancelled);
+
+        if (!cancelled && collected.length) {
+          rememberSongObjects(uniqueSongsById(collected));
+        }
+      } catch (error) {
+        console.error("Failed to load full backend library", error);
+      }
+    }
+
+    void loadFullBackendLibrary();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apolloClient]);
+
   const { data: libraryStateData, refetch: refetchLibraryState } = useQuery(LIBRARY_STATE_QUERY, {
     skip: !hasToken,
     fetchPolicy: "network-only"
@@ -495,6 +570,7 @@ export function App() {
   const allKnownSongs = useMemo<Song[]>(() => {
     return uniqueSongsById([
       ...localTracks,
+      ...librarySongs,
       ...cachedSongs,
       ...songs,
       ...homeRecentSongs,
@@ -508,6 +584,7 @@ export function App() {
     ]);
   }, [
     localTracks,
+    librarySongs,
     cachedSongs,
     songs,
     homeRecentSongs,
@@ -677,7 +754,7 @@ export function App() {
 
   function rememberSongObjects(songsToRemember: Song[]) {
     setCachedSongs((items) => {
-      const next = uniqueSongsById([...songsToRemember, ...items]).slice(0, 1500);
+      const next = uniqueSongsById([...songsToRemember, ...items]).slice(0, FULL_LIBRARY_REMEMBER_LIMIT);
       writeLocalJson("wavestack:song-cache", next);
       return next;
     });

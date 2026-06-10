@@ -6,9 +6,31 @@ import {
   useRef,
   useState
 } from "react";
+import { useQuery } from "@apollo/client";
+import { SONG_PAGE_QUERY } from "../../api";
 import type { ClientPlaylist, Song } from "../../App";
 import { SongListRow } from "../../components/SongListRow";
 import { formatSongDisplayName } from "../../song-format";
+
+type SongPageQueryData = {
+  songPage: {
+    nodes: Song[];
+    pageInfo: {
+      endCursor?: string | null;
+      hasNextPage: boolean;
+    };
+    totalCount: number;
+  };
+};
+
+type SongPageQueryVariables = {
+  first: number;
+  after?: string | null;
+  query?: string | null;
+  sort?: string | null;
+};
+
+const ALL_PAGE_SIZE = 60;
 
 type AllPageProps = {
   songs: Song[];
@@ -62,16 +84,35 @@ export function AllPage({
   const [thumbTop, setThumbTop] = useState(0);
   const [isDraggingFastScroll, setIsDraggingFastScroll] = useState(false);
 
+  const { data, loading, fetchMore } = useQuery<SongPageQueryData, SongPageQueryVariables>(
+    SONG_PAGE_QUERY,
+    {
+      variables: {
+        first: ALL_PAGE_SIZE,
+        after: null,
+        query: null,
+        sort: "TITLE_ASC"
+      },
+      fetchPolicy: "cache-and-network"
+    }
+  );
+
+  const backendSongs = data?.songPage?.nodes ?? [];
+  const backendTotalCount = data?.songPage?.totalCount ?? backendSongs.length;
+  const hasMoreBackendSongs = Boolean(data?.songPage?.pageInfo?.hasNextPage);
+  const backendEndCursor = data?.songPage?.pageInfo?.endCursor ?? null;
+
   const allSongs = useMemo(() => {
     const seen = new Set<string>();
-    return [...localTracks, ...songs].filter((song) => {
+    const base = backendSongs.length > 0 || loading ? backendSongs : songs;
+    return [...localTracks, ...base].filter((song) => {
       if (seen.has(song.id)) {
         return false;
       }
       seen.add(song.id);
       return true;
     });
-  }, [localTracks, songs]);
+  }, [localTracks, songs, backendSongs, loading]);
 
   const filteredSongs = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -113,6 +154,36 @@ export function AllPage({
 
   const visibleSongs = filteredSongs.slice(0, visibleCount);
   const hasMore = visibleSongs.length < filteredSongs.length;
+
+  async function loadMoreBackendSongs() {
+    if (!hasMoreBackendSongs || !backendEndCursor) {
+      return;
+    }
+
+    await fetchMore({
+      variables: {
+        first: ALL_PAGE_SIZE,
+        after: backendEndCursor,
+        query: null,
+        sort: "TITLE_ASC"
+      },
+      updateQuery: (previous, { fetchMoreResult }) => {
+        if (!fetchMoreResult?.songPage) {
+          return previous;
+        }
+
+        return {
+          songPage: {
+            ...fetchMoreResult.songPage,
+            nodes: [
+              ...(previous.songPage?.nodes ?? []),
+              ...(fetchMoreResult.songPage.nodes ?? [])
+            ]
+          }
+        };
+      }
+    });
+  }
 
   const updateThumbFromWindowScroll = useCallback(() => {
     const track = fastScrollTrackRef.current;
@@ -337,6 +408,14 @@ export function AllPage({
           aria-label="Fast scroll all songs"
         />
       </div>
+
+      {hasMoreBackendSongs && (
+        <div className="pagination-bar">
+          <button type="button" onClick={loadMoreBackendSongs} disabled={loading}>
+            {loading ? "Loading..." : "Load more songs"}
+          </button>
+        </div>
+      )}
 
       <div className="bottom-player-spacer" aria-hidden="true" />
     </article>

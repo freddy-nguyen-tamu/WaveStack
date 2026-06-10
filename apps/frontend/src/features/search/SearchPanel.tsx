@@ -22,6 +22,7 @@ type SongPageQueryVariables = {
   first: number;
   after?: string | null;
   query?: string | null;
+  sort?: string | null;
 };
 
 type SearchPanelProps = {
@@ -74,9 +75,8 @@ export function SearchPanel({
   const { data, fetchMore, loading } = useQuery<SongPageQueryData, SongPageQueryVariables>(
     SONG_PAGE_QUERY,
     {
-      variables: { first: 30, after: null, query: debouncedQuery || null },
-      fetchPolicy: "cache-and-network",
-      skip: !debouncedQuery
+      variables: { first: 30, after: null, query: debouncedQuery || null, sort: "TITLE_ASC" },
+      fetchPolicy: "cache-and-network"
     }
   );
 
@@ -91,7 +91,7 @@ export function SearchPanel({
   async function loadMore() {
     if (!cursor || !hasMore) return;
     const result = await fetchMore({
-      variables: { first: 30, after: cursor, query: debouncedQuery || null }
+      variables: { first: 30, after: cursor, query: debouncedQuery || null, sort: "TITLE_ASC" }
     });
     const page = result.data?.songPage;
     if (page?.nodes) {
@@ -106,16 +106,20 @@ export function SearchPanel({
   }
 
   const fallbackResults = useMemo(() => {
-    if (debouncedQuery) return [];
     const needle = query.trim().toLowerCase();
-    if (!needle) return songs;
+
+    if (!needle) {
+      return songs;
+    }
+
     return songs.filter((song) => {
       const haystack = [song.title, song.artistName, song.albumTitle, formatSongDisplayName(song), ...song.genreNames].join(" ").toLowerCase();
       return haystack.includes(needle);
     });
-  }, [query, debouncedQuery, songs]);
+  }, [query, songs]);
 
-  const results = debouncedQuery ? allResults : fallbackResults;
+  const results = allResults.length ? allResults : fallbackResults;
+  const backendTotalCount = data?.songPage?.totalCount ?? results.length;
   const pageCount = Math.max(1, Math.ceil(results.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
   const pagedResults = results.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
@@ -179,7 +183,7 @@ export function SearchPanel({
         </p>
       ) : null}
       <p>
-        Showing {pagedResults.length} of {results.length} song(s).
+        Showing {pagedResults.length} loaded of {backendTotalCount} matching song(s).
         {debouncedQuery ? ` (DB search: "${debouncedQuery}")` : ""}
         {loading ? " — searching..." : ""}
         {pageCount > 1 ? ` Page ${currentPage} of ${pageCount}.` : ""}
