@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { MockedProvider } from "@apollo/client/testing";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it } from "vitest";
 import { App } from "./App";
 
@@ -10,16 +11,16 @@ describe("App", () => {
 
   it("renders the WaveStack music dashboard", () => {
     render(
-      <MockedProvider>
-        <App />
-      </MockedProvider>
+      <MemoryRouter>
+        <MockedProvider>
+          <App />
+        </MockedProvider>
+      </MemoryRouter>
     );
 
-    expect(screen.getByRole("heading", { name: "WaveStack" })).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /switch to dark mode|switch to normal mode/i })
-    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /wavestack home/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /switch to dark mode/i })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Player" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Dashboard" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "All songs" })).toBeInTheDocument();
   });
 });

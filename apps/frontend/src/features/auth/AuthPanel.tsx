@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Moon, Sun } from "lucide-react";
 import type { AuthUser } from "../../App";
 
 type AuthPanelProps = {
@@ -49,17 +48,22 @@ export function AuthPanel({ user, isDarkMode, onToggleDarkMode, onLogout }: Auth
   }
 
   const themeToggle = (
-    <button
-      type="button"
-      className="auth-panel__theme-toggle"
-      aria-label={isDarkMode ? "Switch to normal mode" : "Switch to dark mode"}
-      aria-pressed={isDarkMode}
-      title={isDarkMode ? "Normal mode" : "Dark mode"}
-      onClick={onToggleDarkMode}
-    >
-      {isDarkMode ? <Moon aria-hidden="true" /> : <Sun aria-hidden="true" />}
-      <span className="sr-only">{isDarkMode ? "Normal mode" : "Dark mode"}</span>
-    </button>
+    <div className="auth-panel__theme-mode mode-toggle noselect" aria-label="Color mode">
+      <span className="label-dark" aria-hidden="true">Dark</span>
+
+      <button
+        type="button"
+        className="auth-panel__theme-toggle toggle-switch"
+        aria-label={isDarkMode ? "Switch to normal mode" : "Switch to dark mode"}
+        aria-pressed={isDarkMode}
+        title={isDarkMode ? "Normal mode" : "Dark mode"}
+        onClick={onToggleDarkMode}
+      >
+        <span className="sr-only">{isDarkMode ? "Normal mode" : "Dark mode"}</span>
+      </button>
+
+      <span className="label-light" aria-hidden="true">Light</span>
+    </div>
   );
 
   if (user) {
