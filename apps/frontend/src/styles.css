@@ -1054,6 +1054,18 @@ article li small,
   font-size: 1.25rem;
 }
 
+.dashboard-page__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.dashboard-page__actions p {
+  margin: 0;
+}
+
 .dashboard-stats,
 .habit-grid {
   display: grid;
@@ -2894,6 +2906,10 @@ html[data-theme="dark"] .queue-drawer__item:hover {
   .profile-hero,
   .archive-panel__header {
     display: grid;
+  }
+
+  .dashboard-page__actions {
+    justify-content: flex-start;
   }
 
   .dashboard-stats,

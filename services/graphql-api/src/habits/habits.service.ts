@@ -243,142 +243,33 @@ export class HabitsService {
     }
   ): Promise<RecommendedSongsPage> {
     const safeLimit = Math.max(1, Math.min(options.limit, 60));
-    const safeOffset = Math.max(0, options.offset);
     const excludedSet = new Set(uniqueStrings(options.excludedSongIds));
 
-    const allSongs = (await this.getRecommendationPool(10000, userId)).filter((song) => !excludedSet.has(song.id));
+    const poolLimit = Math.max(safeLimit, Math.min(80, safeLimit + excludedSet.size + 20));
+    const randomPool = await this.musicService.dashboardSongs(poolLimit, userId);
 
-    if (!allSongs.length) {
-      return {
-        nodes: [],
-        totalCount: 0,
-        hasNextPage: false,
-        nextOffset: safeOffset
-      };
+    let randomSongs = randomPool
+      .filter((song) => !excludedSet.has(song.id))
+      .slice(0, safeLimit);
+
+    if (randomSongs.length < safeLimit && excludedSet.size > 0) {
+      const backupPool = await this.musicService.dashboardSongs(safeLimit, userId);
+      const seen = new Set(randomSongs.map((song) => song.id));
+
+      randomSongs = [
+        ...randomSongs,
+        ...backupPool.filter((song) => !seen.has(song.id))
+      ].slice(0, safeLimit);
     }
-
-    const byId = new Map(allSongs.map((song) => [song.id, song]));
-    const favoriteIds = uniqueStrings(options.favoriteSongIds);
-    const frontendRecentIds = uniqueStrings(options.recentSongIds);
-    const favoriteSet = new Set(favoriteIds);
-    const frontendRecentSet = new Set(frontendRecentIds);
-
-    let backendRecentIds: string[] = [];
-    let playCounts = new Map<string, number>();
-    let habitArtistWeights = new Map<string, number>();
-
-    if (userId) {
-      backendRecentIds = await this.getRecentListenIds(userId, 80);
-      playCounts = await this.getPlayCounts(userId);
-      habitArtistWeights = await this.getTopArtistWeights(userId);
-    }
-
-    const backendRecentSet = new Set(backendRecentIds);
-
-    const seedIds = uniqueStrings([
-      ...favoriteIds,
-      ...frontendRecentIds,
-      ...backendRecentIds,
-      ...Array.from(playCounts.keys())
-    ]);
-
-    const seedSongs = seedIds
-      .map((id) => byId.get(id))
-      .filter((song): song is Song => Boolean(song));
-
-    const seedArtists = new Map<string, number>();
-    const seedAlbums = new Map<string, number>();
-    const seedGenres = new Map<string, number>();
-
-    for (const seed of seedSongs) {
-      addWeighted(seedArtists, normalize(seed.artistName), 1);
-      addWeighted(seedAlbums, normalize(seed.albumTitle), 1);
-
-      for (const genre of seed.genreNames ?? []) {
-        addWeighted(seedGenres, normalize(genre), 1);
-      }
-    }
-
-    const scored = allSongs.map((song) => {
-      let score = stableSongScore(song.id);
-      const reasons: string[] = [];
-
-      const playCount = playCounts.get(song.id) ?? 0;
-
-      if (playCount > 0) {
-        score += playCount * 6;
-        reasons.push(`played ${playCount} time(s)`);
-      }
-
-      if (favoriteSet.has(song.id)) {
-        score += 30;
-        reasons.push("favorited");
-      }
-
-      if (frontendRecentSet.has(song.id) || backendRecentSet.has(song.id)) {
-        score += 16;
-        reasons.push("recently played");
-      }
-
-      const artistKey = normalize(song.artistName);
-      const artistWeight = seedArtists.get(artistKey) ?? 0;
-      const habitArtistWeight = habitArtistWeights.get(artistKey) ?? 0;
-      const albumWeight = seedAlbums.get(normalize(song.albumTitle)) ?? 0;
-      const genreWeight = (song.genreNames ?? []).reduce(
-        (sum, genre) => sum + (seedGenres.get(normalize(genre)) ?? 0),
-        0
-      );
-
-      if (habitArtistWeight > 0) {
-        score += habitArtistWeight * 15;
-        reasons.push("artist you play");
-      }
-
-      if (artistWeight > 0) {
-        score += artistWeight * 10;
-        reasons.push("same artist");
-      }
-
-      if (albumWeight > 0) {
-        score += albumWeight * 4;
-        reasons.push("same source");
-      }
-
-      if (genreWeight > 0) {
-        score += genreWeight * 5;
-        reasons.push("similar genre");
-      }
-
-      if (!reasons.length) {
-        reasons.push(userId ? "explore your library" : "random pick");
-      }
-
-      return {
-        song,
-        score,
-        reason: reasons.slice(0, 2).join(", ")
-      };
-    });
-
-    scored.sort((left, right) => {
-      if (right.score !== left.score) {
-        return right.score - left.score;
-      }
-
-      return left.song.id.localeCompare(right.song.id);
-    });
-
-    const totalCount = scored.length;
-    const page = scored.slice(safeOffset, safeOffset + safeLimit);
 
     return {
-      nodes: page.map((item) => ({
-        song: item.song,
-        reason: item.reason
+      nodes: randomSongs.map((song) => ({
+        song,
+        reason: "Random pick"
       })),
-      totalCount,
-      hasNextPage: safeOffset + safeLimit < totalCount,
-      nextOffset: safeOffset + page.length
+      totalCount: randomSongs.length,
+      hasNextPage: false,
+      nextOffset: 0
     };
   }
 

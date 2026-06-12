@@ -1,8 +1,8 @@
-import { Activity, Clock, Flame, Heart, TrendingUp } from "lucide-react";
+import { Activity, Clock, Flame, Heart, Shuffle, TrendingUp } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { HabitSummaryEntry, RecommendResult, Song } from "../../App";
 import type { ClientPlaylist } from "../../App";
-import { formatSeconds, getSongCardSize, getWeightedSongLength } from "../../song-format";
+import { formatSeconds, getSongCardSize } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
 import { SongMetadataModal } from "./SongMetadataModal";
 import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
@@ -25,6 +25,8 @@ type DashboardProps = {
   onLoadMoreRecommendations?: () => void;
   hasMoreRecommendations?: boolean;
   loadingMoreRecommendations?: boolean;
+  onShuffleRecommendations?: () => void;
+  shufflingRecommendations?: boolean;
 };
 
 export function Dashboard({
@@ -43,7 +45,9 @@ export function Dashboard({
   userName,
   onLoadMoreRecommendations,
   hasMoreRecommendations,
-  loadingMoreRecommendations
+  loadingMoreRecommendations,
+  onShuffleRecommendations,
+  shufflingRecommendations
 }: DashboardProps) {
   const [selectedSong, setSelectedSong] = useState<Song | null>(null);
 
@@ -62,14 +66,9 @@ export function Dashboard({
       return recommendations.map((item) => item.song);
     }
 
-    return [...songs].sort((a, b) => {
-      const aDuration = getWeightedSongLength(a);
-      const bDuration = getWeightedSongLength(b);
-      const aScore = (a.score ?? 0) * 1000 + aDuration * 0.6;
-      const bScore = (b.score ?? 0) * 1000 + bDuration * 0.6;
-
-      return bScore - aScore;
-    });
+    return [...songs]
+      .sort(() => Math.random() - 0.5)
+      .slice(0, 25);
   }, [recommendations, songs]);
 
   useEffect(() => {
@@ -122,16 +121,28 @@ export function Dashboard({
     <article className="dashboard-page">
       <div className="dashboard-page__header">
         <div>
-          <p className="eyebrow">{userName ? "Personalized dashboard" : "Public dashboard"}</p>
-          <h2>{userName ? `For ${userName}` : "Suggested songs"}</h2>
+          <p className="eyebrow">{userName ? "Random discovery" : "Public discovery"}</p>
+          <h2>{userName ? `Random picks for ${userName}` : "Random songs"}</h2>
           <p>
-            {userName
-              ? "Recommendations are weighted by your listening habits and refreshed as you play more songs."
-              : "Sign in with Google to unlock personalized recommendations and habit summaries."}
+            Suggestions are intentionally random because this library has messy filenames and incomplete metadata.
+            Shuffle anytime to discover a different set of tracks.
           </p>
         </div>
 
-        {loading ? <p>Loading music data...</p> : null}
+        <div className="dashboard-page__actions">
+          {onShuffleRecommendations ? (
+            <button
+              type="button"
+              onClick={() => onShuffleRecommendations()}
+              disabled={Boolean(shufflingRecommendations)}
+            >
+              <Shuffle aria-hidden="true" />
+              {shufflingRecommendations ? "Shuffling..." : "Shuffle suggestions"}
+            </button>
+          ) : null}
+
+          {loading ? <p>Loading music data...</p> : null}
+        </div>
       </div>
 
       <section className="dashboard-stats" aria-label="Library summary">

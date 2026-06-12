@@ -64,10 +64,11 @@ export function SearchPanel({
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      setDebouncedQuery(query);
+      setDebouncedQuery(query.trim());
       setAllResults([]);
       setCursor(null);
       setHasMore(false);
+      setPage(1);
     }, 300);
     return () => clearTimeout(timer);
   }, [query]);
@@ -75,8 +76,10 @@ export function SearchPanel({
   const { data, fetchMore, loading } = useQuery<SongPageQueryData, SongPageQueryVariables>(
     SONG_PAGE_QUERY,
     {
-      variables: { first: 30, after: null, query: debouncedQuery || null, sort: "TITLE_ASC" },
-      fetchPolicy: "cache-and-network"
+      variables: { first: 30, after: null, query: debouncedQuery.trim() || null, sort: "TITLE_ASC" },
+      fetchPolicy: "network-only",
+      nextFetchPolicy: "cache-first",
+      notifyOnNetworkStatusChange: true
     }
   );
 
@@ -118,7 +121,8 @@ export function SearchPanel({
     });
   }, [query, songs]);
 
-  const results = allResults.length ? allResults : fallbackResults;
+  const backendHasResponded = Boolean(data?.songPage);
+  const results = backendHasResponded || loading ? allResults : fallbackResults;
   const backendTotalCount = data?.songPage?.totalCount ?? results.length;
   const pageCount = Math.max(1, Math.ceil(results.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);

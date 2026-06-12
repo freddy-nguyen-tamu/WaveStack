@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ApolloQueryResult, useApolloClient, useMutation, useQuery } from "@apollo/client";
-import { Activity, Clock, Heart, ListMusic, Music2, Search, TrendingUp, Upload } from "lucide-react";
+import { Activity, Clock, Heart, ListMusic, Music2, RefreshCw, Search, TrendingUp, Upload } from "lucide-react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import {
     LISTENING_HABIT_SUMMARY_QUERY,
@@ -30,6 +30,7 @@ import { QueueDrawer } from "./features/queue/QueueDrawer";
 import { StatsPage } from "./features/stats/StatsPage";
 import { AddSongsPage } from "./features/add-songs/AddSongsPage";
 import { uploadTrack } from "./api";
+import { refreshWaveStackLibraryCache } from "./library-refresh";
 import { formatSongDisplayName } from "./song-format";
 
 export type Song = {
@@ -452,6 +453,8 @@ export function App() {
   const [recommendationOffset, setRecommendationOffset] = useState(0);
   const [hasMoreRecommendations, setHasMoreRecommendations] = useState(true);
   const [loadingMoreRecommendations, setLoadingMoreRecommendations] = useState(false);
+  const [shufflingRecommendations, setShufflingRecommendations] = useState(false);
+  const [isRefreshingLibrary, setIsRefreshingLibrary] = useState(false);
   const apolloClient = useApolloClient();
 
   useEffect(() => {
@@ -1484,7 +1487,10 @@ export function App() {
     return () => clearTimeout(timer);
   }, [authUser, currentSong, recordListen]);
 
-  async function fetchRecommendedPage(offset: number): Promise<{
+  async function fetchRecommendedPage(
+    offset: number,
+    excludedSongIds: string[] = dismissedRecommendationIds
+  ): Promise<{
     nodes: RecommendResult[];
     totalCount: number;
     hasNextPage: boolean;
@@ -1496,9 +1502,9 @@ export function App() {
       variables: {
         limit: RECOMMENDATION_PAGE_SIZE,
         offset,
-        favoriteSongIds: favoriteIds,
-        recentSongIds,
-        excludedSongIds: dismissedRecommendationIds
+        favoriteSongIds: [],
+        recentSongIds: [],
+        excludedSongIds
       }
     });
 
@@ -1574,6 +1580,32 @@ export function App() {
     }
   }
 
+  async function shuffleRecommendations() {
+    if (shufflingRecommendations) {
+      return;
+    }
+
+    setShufflingRecommendations(true);
+    setLoadingMoreRecommendations(true);
+
+    try {
+      setDismissedRecommendationIds([]);
+
+      const page = await fetchRecommendedPage(0, []);
+
+      setRecommendedData(page.nodes);
+      setRecommendationOffset(page.nextOffset);
+      setHasMoreRecommendations(page.hasNextPage);
+      showNotice("Loaded random suggestions.");
+    } catch (error) {
+      console.error("Failed to shuffle recommendations", error);
+      showNotice("Could not load random suggestions.");
+    } finally {
+      setShufflingRecommendations(false);
+      setLoadingMoreRecommendations(false);
+    }
+  }
+
   async function createPlaylistFromSongIds(songIds: string[]) {
     const name = `Chart ${new Date().toLocaleDateString()}`;
 
@@ -1626,6 +1658,23 @@ export function App() {
     } catch (error) {
       console.error("Failed to create playlist from song IDs", error);
       showNotice("Could not create playlist in your account.");
+    }
+  }
+
+  async function handleRefreshLibraryCache() {
+    if (isRefreshingLibrary) {
+      return;
+    }
+
+    setIsRefreshingLibrary(true);
+    showNotice("Refreshing music library...");
+
+    try {
+      await refreshWaveStackLibraryCache();
+    } catch (error) {
+      console.error("Failed to refresh library cache", error);
+      showNotice("Could not refresh the music library.");
+      setIsRefreshingLibrary(false);
     }
   }
 
@@ -1697,6 +1746,15 @@ export function App() {
         </NavLink>
         <button type="button" onClick={() => setQueueDrawerOpen(true)}>
           <ListMusic aria-hidden="true" /> Queue ({queue.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleRefreshLibraryCache()}
+          disabled={isRefreshingLibrary}
+          title="Clear local music cache and reload the latest library"
+        >
+          <RefreshCw aria-hidden="true" />
+          {isRefreshingLibrary ? "Refreshing..." : "Refresh Library"}
         </button>
         <NavLink to="/stats" onClick={() => requestNavScroll("/stats")}>
           <TrendingUp aria-hidden="true" /> Stats
@@ -1801,6 +1859,8 @@ export function App() {
                 onLoadMoreRecommendations={hasToken ? loadMoreRecommendations : undefined}
                 hasMoreRecommendations={hasToken && hasMoreRecommendations}
                 loadingMoreRecommendations={loadingMoreRecommendations}
+                onShuffleRecommendations={shuffleRecommendations}
+                shufflingRecommendations={shufflingRecommendations}
               />
             </section>
           }
