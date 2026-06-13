@@ -21,6 +21,7 @@ type DriveTrackRow = {
   web_view_link: string | null;
   mime_type: string | null;
   modified_time: Date | string | null;
+  drive_created_time: Date | string | null;
   first_seen_at: Date | string | null;
   size_bytes: string | number | null;
   source_root_folder_id: string | null;
@@ -79,6 +80,7 @@ export class DriveTrackRepository {
           web_view_link,
           mime_type,
           modified_time,
+          drive_created_time,
           first_seen_at,
           size_bytes,
           source_root_folder_id,
@@ -89,7 +91,7 @@ export class DriveTrackRepository {
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15,
-          $16, $17, now(), $18, $19, $20, now(), NULL
+          $16, $17, $18, now(), $19, $20, $21, now(), NULL
         )
         ON CONFLICT (id)
         DO UPDATE SET
@@ -109,6 +111,8 @@ export class DriveTrackRepository {
           web_view_link = EXCLUDED.web_view_link,
           mime_type = EXCLUDED.mime_type,
           modified_time = EXCLUDED.modified_time,
+          drive_created_time = COALESCE(EXCLUDED.drive_created_time, drive_tracks.drive_created_time),
+          first_seen_at = COALESCE(drive_tracks.first_seen_at, EXCLUDED.first_seen_at, now()),
           size_bytes = EXCLUDED.size_bytes,
           source_root_folder_id = EXCLUDED.source_root_folder_id,
           normalized_search = EXCLUDED.normalized_search,
@@ -133,6 +137,7 @@ export class DriveTrackRepository {
           song.webViewLink ?? null,
           song.mimeType ?? null,
           song.modifiedTime ?? null,
+          song.createdTime ?? null,
           song.sizeBytes ?? null,
           song.sourceRootFolderId ?? null,
           search
@@ -206,8 +211,8 @@ export class DriveTrackRepository {
         : sort === "ARTIST_ASC"
           ? "ORDER BY lower(artist_name) ASC, lower(title) ASC, id ASC"
           : sort === "DATE_ASC"
-            ? "ORDER BY first_seen_at ASC NULLS LAST, synced_at ASC, id ASC"
-            : "ORDER BY first_seen_at DESC NULLS LAST, synced_at DESC, id DESC";
+            ? "ORDER BY drive_created_time ASC NULLS LAST, modified_time ASC NULLS LAST, first_seen_at ASC NULLS LAST, synced_at ASC, id ASC"
+            : "ORDER BY drive_created_time DESC NULLS LAST, modified_time DESC NULLS LAST, first_seen_at DESC NULLS LAST, synced_at DESC, id DESC";
 
     const params: unknown[] = [];
     const conditions = [
@@ -597,7 +602,8 @@ export class DriveTrackRepository {
       webViewLink: row.web_view_link ?? undefined,
       mimeType: row.mime_type ?? undefined,
       modifiedTime: this.dateToString(row.modified_time),
-      addedAt: this.dateToString(row.first_seen_at),
+      createdTime: this.dateToString(row.drive_created_time),
+      addedAt: this.dateToString(row.drive_created_time ?? row.modified_time ?? row.first_seen_at),
       sizeBytes: row.size_bytes ? Number(row.size_bytes) : undefined,
       sourceRootFolderId: row.source_root_folder_id ?? undefined
     };

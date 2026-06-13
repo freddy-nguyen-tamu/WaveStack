@@ -19,6 +19,7 @@ type DriveFile = {
   mimeType?: string;
   size?: string;
   modifiedTime?: string;
+  createdTime?: string;
   resourceKey?: string;
   webViewLink?: string;
   thumbnailLink?: string;
@@ -150,6 +151,7 @@ export class GoogleDriveService {
         webViewLink: file.webViewLink,
         mimeType: file.mimeType,
         modifiedTime: file.modifiedTime,
+        createdTime: file.createdTime,
         sizeBytes,
         sourceRootFolderId: file.sourceRootFolderId
       };
@@ -339,7 +341,7 @@ export class GoogleDriveService {
         key: this.apiKey,
         q: `'${folderId}' in parents and trashed = false`,
         fields:
-          "nextPageToken,files(id,name,mimeType,size,modifiedTime,resourceKey,webViewLink,thumbnailLink,properties,appProperties,imageMediaMetadata(width,height),videoMediaMetadata(durationMillis),shortcutDetails(targetId,targetMimeType))",
+          "nextPageToken,files(id,name,mimeType,size,createdTime,modifiedTime,resourceKey,webViewLink,thumbnailLink,properties,appProperties,imageMediaMetadata(width,height),videoMediaMetadata(durationMillis),shortcutDetails(targetId,targetMimeType))",
         pageSize: "1000",
         supportsAllDrives: "true",
         includeItemsFromAllDrives: "true"
@@ -367,7 +369,7 @@ export class GoogleDriveService {
     const params = new URLSearchParams({
       key: this.apiKey,
       fields:
-        "id,name,mimeType,size,modifiedTime,resourceKey,webViewLink,thumbnailLink,properties,appProperties,imageMediaMetadata(width,height),videoMediaMetadata(durationMillis),shortcutDetails(targetId,targetMimeType)",
+        "id,name,mimeType,size,createdTime,modifiedTime,resourceKey,webViewLink,thumbnailLink,properties,appProperties,imageMediaMetadata(width,height),videoMediaMetadata(durationMillis),shortcutDetails(targetId,targetMimeType)",
       supportsAllDrives: "true"
     });
 

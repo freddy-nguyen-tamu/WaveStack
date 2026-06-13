@@ -51,6 +51,9 @@ export class Song {
   modifiedTime?: string;
 
   @Field({ nullable: true })
+  createdTime?: string;
+
+  @Field({ nullable: true })
   addedAt?: string;
 
   @Field(() => Int, { nullable: true })
