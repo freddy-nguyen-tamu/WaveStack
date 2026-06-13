@@ -243,9 +243,10 @@ export class HabitsService {
     }
   ): Promise<RecommendedSongsPage> {
     const safeLimit = Math.max(1, Math.min(options.limit, 60));
+    const safeOffset = Math.max(0, options.offset);
     const excludedSet = new Set(uniqueStrings(options.excludedSongIds));
 
-    const poolLimit = Math.max(safeLimit, Math.min(80, safeLimit + excludedSet.size + 20));
+    const poolLimit = Math.max(safeLimit * 3, Math.min(200, safeLimit + excludedSet.size + 80));
     const randomPool = await this.musicService.dashboardSongs(poolLimit, userId);
 
     let randomSongs = randomPool
@@ -253,12 +254,12 @@ export class HabitsService {
       .slice(0, safeLimit);
 
     if (randomSongs.length < safeLimit && excludedSet.size > 0) {
-      const backupPool = await this.musicService.dashboardSongs(safeLimit, userId);
+      const backupPool = await this.musicService.dashboardSongs(safeLimit * 3, userId);
       const seen = new Set(randomSongs.map((song) => song.id));
 
       randomSongs = [
         ...randomSongs,
-        ...backupPool.filter((song) => !seen.has(song.id))
+        ...backupPool.filter((song) => !seen.has(song.id) && !excludedSet.has(song.id))
       ].slice(0, safeLimit);
     }
 
@@ -268,8 +269,8 @@ export class HabitsService {
         reason: "Random pick"
       })),
       totalCount: randomSongs.length,
-      hasNextPage: false,
-      nextOffset: 0
+      hasNextPage: randomSongs.length === safeLimit,
+      nextOffset: safeOffset + safeLimit
     };
   }
 

@@ -455,6 +455,8 @@ export function App() {
   const [loadingMoreRecommendations, setLoadingMoreRecommendations] = useState(false);
   const [shufflingRecommendations, setShufflingRecommendations] = useState(false);
   const [isRefreshingLibrary, setIsRefreshingLibrary] = useState(false);
+  const recommendationsLoadedForSessionRef = useRef(false);
+  const recommendationsLoadingRef = useRef(false);
   const apolloClient = useApolloClient();
 
   useEffect(() => {
@@ -1363,6 +1365,10 @@ export function App() {
     setAuthToken(null);
     setAuthUser(null);
     setRecommendedData(null);
+    setRecommendationOffset(0);
+    setHasMoreRecommendations(true);
+    recommendationsLoadedForSessionRef.current = false;
+    recommendationsLoadingRef.current = false;
     setHabitSummaries({});
     showNotice("Signed out.");
   }
@@ -1376,10 +1382,19 @@ export function App() {
   useEffect(() => {
     if (!getAuthToken()) {
       setRecommendedData(null);
+      setRecommendationOffset(0);
+      setHasMoreRecommendations(true);
+      recommendationsLoadedForSessionRef.current = false;
+      recommendationsLoadingRef.current = false;
+      return;
+    }
+
+    if (recommendationsLoadedForSessionRef.current || recommendationsLoadingRef.current) {
       return;
     }
 
     let cancelled = false;
+    recommendationsLoadingRef.current = true;
 
     async function run() {
       setRecommendationOffset(0);
@@ -1387,7 +1402,7 @@ export function App() {
       setRecommendedData([]);
 
       try {
-        const page = await fetchRecommendedPage(0);
+        const page = await fetchRecommendedPage(0, []);
 
         if (cancelled) {
           return;
@@ -1396,6 +1411,7 @@ export function App() {
         setRecommendedData(page.nodes);
         setRecommendationOffset(page.nextOffset);
         setHasMoreRecommendations(page.hasNextPage);
+        recommendationsLoadedForSessionRef.current = true;
       } catch (error) {
         if (cancelled) {
           return;
@@ -1405,6 +1421,10 @@ export function App() {
         setRecommendedData([]);
         setRecommendationOffset(0);
         setHasMoreRecommendations(false);
+      } finally {
+        if (!cancelled) {
+          recommendationsLoadingRef.current = false;
+        }
       }
     }
 
@@ -1412,10 +1432,12 @@ export function App() {
 
     return () => {
       cancelled = true;
+      recommendationsLoadingRef.current = false;
     };
-    // Do not include dismissedRecommendationIds here, or the wall resets every time a song ends.
+    // Load recommendations once for this app session. Do not depend on favorites,
+    // recent songs, dismissed IDs, route navigation, or playback state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authToken, favoriteIds.join("|"), recentSongIds.join("|")]);
+  }, [authToken]);
 
   useEffect(() => {
     if (!getAuthToken()) {
@@ -1489,7 +1511,7 @@ export function App() {
 
   async function fetchRecommendedPage(
     offset: number,
-    excludedSongIds: string[] = dismissedRecommendationIds
+    excludedSongIds: string[] = []
   ): Promise<{
     nodes: RecommendResult[];
     totalCount: number;
@@ -1550,7 +1572,13 @@ export function App() {
     setLoadingMoreRecommendations(true);
 
     try {
-      const page = await fetchRecommendedPage(recommendationOffset);
+      const currentRecommendationIds = (recommendedData ?? []).map((item) => item.song.id);
+      const excludedSongIds = Array.from(new Set([
+        ...dismissedRecommendationIds,
+        ...currentRecommendationIds
+      ]));
+
+      const page = await fetchRecommendedPage(recommendationOffset, excludedSongIds);
 
       setRecommendedData((current) => {
         const map = new Map<string, RecommendResult>();
@@ -1571,7 +1599,7 @@ export function App() {
       });
 
       setRecommendationOffset(page.nextOffset);
-      setHasMoreRecommendations(page.hasNextPage);
+      setHasMoreRecommendations(page.hasNextPage && page.nodes.length > 0);
     } catch (error) {
       console.error("Failed to load more recommendations", error);
       setHasMoreRecommendations(false);
@@ -1595,7 +1623,8 @@ export function App() {
 
       setRecommendedData(page.nodes);
       setRecommendationOffset(page.nextOffset);
-      setHasMoreRecommendations(page.hasNextPage);
+      setHasMoreRecommendations(page.hasNextPage && page.nodes.length > 0);
+      recommendationsLoadedForSessionRef.current = true;
       showNotice("Loaded random suggestions.");
     } catch (error) {
       console.error("Failed to shuffle recommendations", error);
@@ -1678,7 +1707,13 @@ export function App() {
     }
   }
 
-  function renderSongsPage(title: string, pageSongs: Song[], emptyMessage: string, contextPlay?: (song: Song) => void) {
+  function renderSongsPage(
+    title: string,
+    pageSongs: Song[],
+    emptyMessage: string,
+    contextPlay?: (song: Song) => void,
+    backendSearch = false
+  ) {
     return (
       <section aria-label={title}>
         <SearchPanel
@@ -1689,6 +1724,7 @@ export function App() {
           playlists={playlists}
           favoriteIds={favoriteIds}
           emptyMessage={emptyMessage}
+          backendSearch={backendSearch}
           onAddToPlaylist={addToPlaylist}
           onPlay={contextPlay ?? playSong}
           onQueue={queueSong}
@@ -1867,13 +1903,18 @@ export function App() {
         />
         <Route
           path="/search"
-          element={renderSongsPage("Search", allKnownSongs, "No songs found.", (song: Song) =>
-            playSongFromContext(song, {
-              id: "search",
-              label: "Search",
-              source: "search",
-              songs: allKnownSongs
-            })
+          element={renderSongsPage(
+            "Search",
+            allKnownSongs,
+            "No songs found.",
+            (song: Song) =>
+              playSongFromContext(song, {
+                id: "search",
+                label: "Search",
+                source: "search",
+                songs: allKnownSongs
+              }),
+            true
           )}
         />
         <Route

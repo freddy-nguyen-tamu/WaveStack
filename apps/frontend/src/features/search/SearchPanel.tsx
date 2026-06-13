@@ -32,6 +32,7 @@ type SearchPanelProps = {
   playlists: ClientPlaylist[];
   favoriteIds: string[];
   emptyMessage?: string;
+  backendSearch?: boolean;
   onAddToPlaylist: (playlistId: string, song: Song) => void;
   onPlay: (song: Song) => void;
   onQueue: (song: Song) => void;
@@ -48,6 +49,7 @@ export function SearchPanel({
   playlists,
   favoriteIds,
   emptyMessage = "No songs found.",
+  backendSearch = false,
   onAddToPlaylist,
   onPlay,
   onQueue,
@@ -76,33 +78,53 @@ export function SearchPanel({
   const { data, fetchMore, loading } = useQuery<SongPageQueryData, SongPageQueryVariables>(
     SONG_PAGE_QUERY,
     {
-      variables: { first: 30, after: null, query: debouncedQuery.trim() || null, sort: "TITLE_ASC" },
+      variables: {
+        first: 30,
+        after: null,
+        query: debouncedQuery.trim() || null,
+        sort: "TITLE_ASC"
+      },
       fetchPolicy: "network-only",
       nextFetchPolicy: "cache-first",
-      notifyOnNetworkStatusChange: true
+      notifyOnNetworkStatusChange: true,
+      skip: !backendSearch
     }
   );
 
   useEffect(() => {
-    if (data?.songPage) {
-      setAllResults(data.songPage.nodes ?? []);
-      setCursor(data.songPage.pageInfo.endCursor ?? null);
-      setHasMore(data.songPage.pageInfo.hasNextPage);
+    if (!backendSearch || !data?.songPage) {
+      return;
     }
-  }, [data]);
+
+    setAllResults(data.songPage.nodes ?? []);
+    setCursor(data.songPage.pageInfo.endCursor ?? null);
+    setHasMore(data.songPage.pageInfo.hasNextPage);
+    setPage(1);
+  }, [backendSearch, data]);
 
   async function loadMore() {
-    if (!cursor || !hasMore) return;
+    if (!backendSearch || !cursor || !hasMore) {
+      return;
+    }
+
     const result = await fetchMore({
-      variables: { first: 30, after: cursor, query: debouncedQuery || null, sort: "TITLE_ASC" }
+      variables: {
+        first: 30,
+        after: cursor,
+        query: debouncedQuery.trim() || null,
+        sort: "TITLE_ASC"
+      }
     });
+
     const page = result.data?.songPage;
+
     if (page?.nodes) {
       setAllResults((prev) => {
         const seen = new Set(prev.map((s) => s.id));
         const deduped = page.nodes.filter((n) => !seen.has(n.id));
         return [...prev, ...deduped];
       });
+
       setCursor(page.pageInfo.endCursor ?? null);
       setHasMore(page.pageInfo.hasNextPage);
     }
@@ -121,9 +143,13 @@ export function SearchPanel({
     });
   }, [query, songs]);
 
-  const backendHasResponded = Boolean(data?.songPage);
-  const results = backendHasResponded || loading ? allResults : fallbackResults;
-  const backendTotalCount = data?.songPage?.totalCount ?? results.length;
+  const backendHasResponded = backendSearch && Boolean(data?.songPage);
+  const results = backendSearch ? allResults : fallbackResults;
+
+  const totalMatchingCount = backendSearch
+    ? data?.songPage?.totalCount ?? results.length
+    : results.length;
+
   const pageCount = Math.max(1, Math.ceil(results.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
   const pagedResults = results.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
@@ -187,9 +213,13 @@ export function SearchPanel({
         </p>
       ) : null}
       <p>
-        Showing {pagedResults.length} loaded of {backendTotalCount} matching song(s).
-        {debouncedQuery ? ` (DB search: "${debouncedQuery}")` : ""}
-        {loading ? " — searching..." : ""}
+        {backendSearch ? (
+          <>Showing {pagedResults.length} loaded of {totalMatchingCount} matching song(s).</>
+        ) : (
+          <>Showing {pagedResults.length} of {totalMatchingCount} matching song(s).</>
+        )}
+        {backendSearch && debouncedQuery ? ` (DB search: "${debouncedQuery}")` : ""}
+        {backendSearch && loading ? " — searching..." : ""}
         {pageCount > 1 ? ` Page ${currentPage} of ${pageCount}.` : ""}
       </p>
       {pagedResults.length ? (
@@ -219,7 +249,7 @@ export function SearchPanel({
           />
         </>
       ) : <p>{emptyMessage}</p>}
-      {hasMore ? (
+      {backendSearch && hasMore ? (
         <button type="button" onClick={() => void loadMore()} disabled={loading}>
           {loading ? "Loading more..." : "Load more search results"}
         </button>
