@@ -44,13 +44,18 @@ type AllPageProps = {
   onOpenDetails?: (song: Song) => void;
 };
 
-type SortMode = "az" | "newest" | "oldest";
+type SortMode = "az" | "artist" | "newest" | "oldest";
 
 const INITIAL_VISIBLE_COUNT = 60;
 const LOAD_CHUNK_SIZE = 60;
 const FAST_SCROLL_THUMB_HEIGHT = 86;
 
 function getSongDateValue(song: Song): number {
+  if (song.addedAt) {
+    const addedAt = Date.parse(song.addedAt);
+    if (Number.isFinite(addedAt)) return addedAt;
+  }
+
   const modifiedTime = song.modifiedTime ? Date.parse(song.modifiedTime) : Number.NaN;
 
   if (Number.isFinite(modifiedTime)) {
@@ -58,6 +63,15 @@ function getSongDateValue(song: Song): number {
   }
 
   return 0;
+}
+
+function getBackendSort(sortMode: SortMode): string {
+  switch (sortMode) {
+    case "newest": return "DATE_DESC";
+    case "oldest": return "DATE_ASC";
+    case "artist": return "ARTIST_ASC";
+    default: return "TITLE_ASC";
+  }
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -94,6 +108,12 @@ export function AllPage({
     return () => window.clearTimeout(timer);
   }, [query]);
 
+  const backendSort = useMemo(() => getBackendSort(sortMode), [sortMode]);
+
+  useEffect(() => {
+    setVisibleCount(INITIAL_VISIBLE_COUNT);
+  }, [sortMode]);
+
   const { data, loading, fetchMore } = useQuery<SongPageQueryData, SongPageQueryVariables>(
     SONG_PAGE_QUERY,
     {
@@ -101,7 +121,7 @@ export function AllPage({
         first: ALL_PAGE_SIZE,
         after: null,
         query: debouncedQuery || null,
-        sort: "TITLE_ASC"
+        sort: backendSort
       },
       fetchPolicy: "network-only",
       nextFetchPolicy: "cache-first",
@@ -127,13 +147,33 @@ export function AllPage({
   }, [localTracks, songs, backendSongs, loading]);
 
   const filteredSongs = useMemo(() => {
-    return [...allSongs].sort((left, right) => {
-      if (sortMode === "newest") {
-        return getSongDateValue(right) - getSongDateValue(left);
-      }
+    if (sortMode === "artist") {
+      return [...allSongs].sort((left, right) => {
+        const artistCompare = String(left.artistName ?? "").localeCompare(
+          String(right.artistName ?? ""),
+          undefined,
+          { numeric: true, sensitivity: "base" }
+        );
 
-      if (sortMode === "oldest") {
-        return getSongDateValue(left) - getSongDateValue(right);
+        if (artistCompare !== 0) return artistCompare;
+
+        return String(left.title ?? "").localeCompare(
+          String(right.title ?? ""),
+          undefined,
+          { numeric: true, sensitivity: "base" }
+        );
+      });
+    }
+
+    return [...allSongs].sort((left, right) => {
+      if (sortMode === "newest" || sortMode === "oldest") {
+        const diff = getSongDateValue(right) - getSongDateValue(left);
+        if (diff !== 0) return sortMode === "newest" ? diff : -diff;
+        return formatSongDisplayName(left).localeCompare(
+          formatSongDisplayName(right),
+          undefined,
+          { numeric: true, sensitivity: "base" }
+        );
       }
 
       return formatSongDisplayName(left).localeCompare(
@@ -160,7 +200,7 @@ export function AllPage({
         first: ALL_PAGE_SIZE,
         after: backendEndCursor,
         query: debouncedQuery || null,
-        sort: "TITLE_ASC"
+        sort: backendSort
       },
       updateQuery: (previous, { fetchMoreResult }) => {
         if (!fetchMoreResult?.songPage) {
@@ -349,9 +389,10 @@ export function AllPage({
         <label className="all-page__sort">
           Sort
           <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)}>
-            <option value="az">A-Z</option>
-            <option value="newest">Date descending</option>
-            <option value="oldest">Date ascending</option>
+            <option value="az">Title A-Z</option>
+            <option value="artist">Author A-Z</option>
+            <option value="newest">Newest added</option>
+            <option value="oldest">Oldest added</option>
           </select>
         </label>
       </section>

@@ -50,6 +50,7 @@ export type Song = {
   webViewLink?: string;
   mimeType?: string;
   modifiedTime?: string;
+  addedAt?: string;
   sizeBytes?: number;
   sourceRootFolderId?: string;
 };

@@ -125,6 +125,8 @@ const SONG_CARD_FIELDS = gql`
     localThumbnailUrl
     driveThumbnailUrl
     embeddedArtworkUrl
+    modifiedTime
+    addedAt
     sizeBytes
   }
 `;
@@ -147,6 +149,7 @@ const SONG_DETAIL_FIELDS = gql`
     webViewLink
     mimeType
     modifiedTime
+    addedAt
     sizeBytes
     sourceRootFolderId
   }

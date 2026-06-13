@@ -21,6 +21,7 @@ type DriveTrackRow = {
   web_view_link: string | null;
   mime_type: string | null;
   modified_time: Date | string | null;
+  first_seen_at: Date | string | null;
   size_bytes: string | number | null;
   source_root_folder_id: string | null;
   owner_user_id: string | null;
@@ -78,6 +79,7 @@ export class DriveTrackRepository {
           web_view_link,
           mime_type,
           modified_time,
+          first_seen_at,
           size_bytes,
           source_root_folder_id,
           normalized_search,
@@ -87,7 +89,7 @@ export class DriveTrackRepository {
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15,
-          $16, $17, $18, $19, $20, now(), NULL
+          $16, $17, now(), $18, $19, $20, now(), NULL
         )
         ON CONFLICT (id)
         DO UPDATE SET
@@ -201,9 +203,11 @@ export class DriveTrackRepository {
     const orderBy =
       sort === "TITLE_ASC"
         ? "ORDER BY lower(title) ASC, lower(artist_name) ASC, id ASC"
-        : sort === "DATE_ASC"
-          ? "ORDER BY synced_at ASC, id ASC"
-          : "ORDER BY synced_at DESC, id ASC";
+        : sort === "ARTIST_ASC"
+          ? "ORDER BY lower(artist_name) ASC, lower(title) ASC, id ASC"
+          : sort === "DATE_ASC"
+            ? "ORDER BY first_seen_at ASC NULLS LAST, synced_at ASC, id ASC"
+            : "ORDER BY first_seen_at DESC NULLS LAST, synced_at DESC, id DESC";
 
     const params: unknown[] = [];
     const conditions = [
@@ -372,13 +376,14 @@ export class DriveTrackRepository {
           source_root_folder_id,
           owner_user_id,
           source_type,
+          first_seen_at,
           normalized_search,
           synced_at,
           deleted_at
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
-          $9, $10, $11, $12, $13, 'user', $14, now(), NULL
+          $9, $10, $11, $12, $13, 'user', now(), $14, now(), NULL
         )
         `,
         [
@@ -592,6 +597,7 @@ export class DriveTrackRepository {
       webViewLink: row.web_view_link ?? undefined,
       mimeType: row.mime_type ?? undefined,
       modifiedTime: this.dateToString(row.modified_time),
+      addedAt: this.dateToString(row.first_seen_at),
       sizeBytes: row.size_bytes ? Number(row.size_bytes) : undefined,
       sourceRootFolderId: row.source_root_folder_id ?? undefined
     };
