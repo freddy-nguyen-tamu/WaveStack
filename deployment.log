@@ -1136,3 +1136,12 @@ sudo docker compose logs graphql-api --tail=120
 curl -s "https://api.wavestack.duckdns.org/graphql" \
   -H "content-type: application/json" \
   --data '{"query":"{ songs { id title artistName streamUrl genreNames } }"}'
+
+update database:
+ssh -i ~/.ssh/wavestack_azure azureuser@20.225.235.88
+
+cd ~/WaveStack
+git pull
+docker compose build frontend
+docker compose up -d frontend
+docker compose exec postgres psql -U wavestack -d wavestack

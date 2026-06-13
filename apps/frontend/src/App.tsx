@@ -324,6 +324,8 @@ export function App() {
   const playHistoryRef = useRef<Song[]>([]);
   const playbackContextRef = useRef<PlaybackContext | null>(null);
   const queueRef = useRef<Song[]>([]);
+  const seededStartupAllContextRef = useRef(false);
+  const startupAllContextFallbackTimerRef = useRef<number | null>(null);
 
   const [localTracks, setLocalTracks] = useState<Song[]>(() => {
     try {
@@ -603,6 +605,15 @@ export function App() {
     detailsSong
   ]);
 
+  const startupAllSongs = useMemo<Song[]>(() => {
+    const backendAllSongs = librarySongs.length ? librarySongs : cachedSongs;
+
+    return uniqueSongsById([
+      ...localTracks,
+      ...backendAllSongs
+    ]);
+  }, [localTracks, librarySongs, cachedSongs]);
+
   const songById = useMemo(
     () => new Map(allKnownSongs.map((song) => [song.id, song])),
     [allKnownSongs]
@@ -679,18 +690,66 @@ export function App() {
   }, [playlists, selectedPlaylistId]);
 
   useEffect(() => {
-    if (!songs.length) {
+    if (seededStartupAllContextRef.current) {
       return;
     }
 
-    setActiveSong((currentSong) => {
-      if (currentSong && songById.has(currentSong.id)) {
-        return currentSong;
+    if (startupAllContextFallbackTimerRef.current) {
+      window.clearTimeout(startupAllContextFallbackTimerRef.current);
+      startupAllContextFallbackTimerRef.current = null;
+    }
+
+    const hasFreshBackendAllSongs = librarySongs.length > 0;
+    const canUseFallbackCache = startupAllSongs.length > 0;
+
+    if (!hasFreshBackendAllSongs && !canUseFallbackCache) {
+      return;
+    }
+
+    function seedStartupAllContext() {
+      if (seededStartupAllContextRef.current || !startupAllSongs.length) {
+        return;
       }
 
-      return songs[0];
-    });
-  }, [songs, songById]);
+      const randomIndex = Math.floor(Math.random() * startupAllSongs.length);
+      const startupSong = startupAllSongs[randomIndex] ?? startupAllSongs[0];
+
+      if (!startupSong) {
+        return;
+      }
+
+      const startupContext: PlaybackContext = {
+        id: "all:startup",
+        label: "All Songs",
+        source: "all",
+        songs: startupAllSongs
+      };
+
+      seededStartupAllContextRef.current = true;
+      playbackContextRef.current = startupContext;
+      currentSongRef.current = startupSong;
+
+      setPlaybackContext(startupContext);
+      setPlayHistory([]);
+      setActiveSong(startupSong);
+    }
+
+    if (hasFreshBackendAllSongs) {
+      seedStartupAllContext();
+      return;
+    }
+
+    startupAllContextFallbackTimerRef.current = window.setTimeout(() => {
+      seedStartupAllContext();
+    }, 1200);
+
+    return () => {
+      if (startupAllContextFallbackTimerRef.current) {
+        window.clearTimeout(startupAllContextFallbackTimerRef.current);
+        startupAllContextFallbackTimerRef.current = null;
+      }
+    };
+  }, [librarySongs.length, startupAllSongs]);
 
   useEffect(() => {
     if (!authToken || !libraryStateData?.libraryState) {
@@ -716,7 +775,7 @@ export function App() {
     ]);
   }, [authToken, libraryStateData]);
 
-  const currentSong = activeSong ?? songs[0] ?? fallbackSongs[0];
+  const currentSong = activeSong ?? startupAllSongs[0] ?? songs[0] ?? fallbackSongs[0];
 
   function showNotice(message: string) {
     if (noticeTimerRef.current) {
@@ -953,18 +1012,48 @@ export function App() {
   function playPreviousFromHistory() {
     const latestHistory = playHistoryRef.current;
 
-    if (!latestHistory.length) {
+    if (latestHistory.length) {
+      const previousSong = latestHistory[latestHistory.length - 1];
+      const remainingHistory = latestHistory.slice(0, -1);
+
+      playHistoryRef.current = remainingHistory;
+      setPlayHistory(remainingHistory);
+
+      startSong(previousSong, { preserveContext: true });
+      rememberRecent(previousSong);
+      return;
+    }
+
+    const latestCurrentSong = currentSongRef.current;
+    const latestContext = playbackContextRef.current;
+    const contextSongs = latestContext?.songs?.filter(Boolean) ?? [];
+
+    if (!latestCurrentSong || !contextSongs.length) {
       showNotice("No previous song available.");
       return;
     }
 
-    const previousSong = latestHistory[latestHistory.length - 1];
-    const remainingHistory = latestHistory.slice(0, -1);
+    const currentIndex = contextSongs.findIndex((song) => song.id === latestCurrentSong.id);
 
-    playHistoryRef.current = remainingHistory;
-    setPlayHistory(remainingHistory);
+    if (currentIndex < 0) {
+      showNotice("No previous song available.");
+      return;
+    }
+
+    const previousSong =
+      currentIndex > 0
+        ? contextSongs[currentIndex - 1]
+        : repeatModeRef.current === "all"
+          ? contextSongs[contextSongs.length - 1]
+          : null;
+
+    if (!previousSong) {
+      showNotice("No previous song available.");
+      return;
+    }
 
     startSong(previousSong, { preserveContext: true });
+    rememberRecent(previousSong);
   }
 
   function toggleShuffle() {
@@ -1826,7 +1915,7 @@ export function App() {
             isFavorite={favoriteIds.includes(currentSong.id)}
             shuffleEnabled={shuffleEnabled}
             repeatMode={repeatMode}
-            canGoPrevious={playHistory.length > 0}
+            canGoPrevious={playHistory.length > 0 || playbackContext.songs.length > 1}
             onToggleFavorite={() => toggleFavorite(currentSong)}
             onToggleShuffle={toggleShuffle}
             onCycleRepeatMode={cycleRepeatMode}
