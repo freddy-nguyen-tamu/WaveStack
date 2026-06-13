@@ -1667,7 +1667,7 @@ export function App() {
     }
 
     setIsRefreshingLibrary(true);
-    showNotice("Refreshing music library...");
+    showNotice("Syncing Drive library. This may take a moment...");
 
     try {
       await refreshWaveStackLibraryCache();
@@ -1751,10 +1751,10 @@ export function App() {
           type="button"
           onClick={() => void handleRefreshLibraryCache()}
           disabled={isRefreshingLibrary}
-          title="Clear local music cache and reload the latest library"
+          title="Scan Drive, clear local music cache, and reload the latest library"
         >
           <RefreshCw aria-hidden="true" />
-          {isRefreshingLibrary ? "Refreshing..." : "Refresh Library"}
+          {isRefreshingLibrary ? "Syncing..." : "Sync Library"}
         </button>
         <NavLink to="/stats" onClick={() => requestNavScroll("/stats")}>
           <TrendingUp aria-hidden="true" /> Stats

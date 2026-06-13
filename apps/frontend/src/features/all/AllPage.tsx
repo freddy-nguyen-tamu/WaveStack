@@ -79,10 +79,20 @@ export function AllPage({
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const fastScrollTrackRef = useRef<HTMLDivElement | null>(null);
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("az");
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_COUNT);
   const [thumbTop, setThumbTop] = useState(0);
   const [isDraggingFastScroll, setIsDraggingFastScroll] = useState(false);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedQuery(query.trim());
+      setVisibleCount(INITIAL_VISIBLE_COUNT);
+    }, 300);
+
+    return () => window.clearTimeout(timer);
+  }, [query]);
 
   const { data, loading, fetchMore } = useQuery<SongPageQueryData, SongPageQueryVariables>(
     SONG_PAGE_QUERY,
@@ -90,10 +100,12 @@ export function AllPage({
       variables: {
         first: ALL_PAGE_SIZE,
         after: null,
-        query: null,
+        query: debouncedQuery || null,
         sort: "TITLE_ASC"
       },
-      fetchPolicy: "cache-and-network"
+      fetchPolicy: "network-only",
+      nextFetchPolicy: "cache-first",
+      notifyOnNetworkStatusChange: true
     }
   );
 
@@ -115,24 +127,7 @@ export function AllPage({
   }, [localTracks, songs, backendSongs, loading]);
 
   const filteredSongs = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const matches = needle
-      ? allSongs.filter((song) => {
-          const haystack = [
-            formatSongDisplayName(song),
-            song.title,
-            song.artistName,
-            song.albumTitle,
-            ...(song.genreNames ?? [])
-          ]
-            .join(" ")
-            .toLowerCase();
-
-          return haystack.includes(needle);
-        })
-      : allSongs;
-
-    return [...matches].sort((left, right) => {
+    return [...allSongs].sort((left, right) => {
       if (sortMode === "newest") {
         return getSongDateValue(right) - getSongDateValue(left);
       }
@@ -150,7 +145,7 @@ export function AllPage({
         }
       );
     });
-  }, [allSongs, query, sortMode]);
+  }, [allSongs, sortMode]);
 
   const visibleSongs = filteredSongs.slice(0, visibleCount);
   const hasMore = visibleSongs.length < filteredSongs.length;
@@ -164,7 +159,7 @@ export function AllPage({
       variables: {
         first: ALL_PAGE_SIZE,
         after: backendEndCursor,
-        query: null,
+        query: debouncedQuery || null,
         sort: "TITLE_ASC"
       },
       updateQuery: (previous, { fetchMoreResult }) => {
@@ -337,7 +332,7 @@ export function AllPage({
       <div className="all-page__header-row">
         <div>
           <p className="eyebrow">Library</p>
-          <h2>All Songs ({filteredSongs.length})</h2>
+          <h2>All Songs ({backendTotalCount})</h2>
         </div>
       </div>
 

@@ -1,4 +1,4 @@
-import { apolloCache, apolloClient } from "./api";
+import { apolloCache, apolloClient, SYNC_DRIVE_LIBRARY_MUTATION } from "./api";
 
 function removeLocalStorageKey(key: string) {
   try {
@@ -29,6 +29,17 @@ function deleteIndexedDbDatabase(name: string): Promise<void> {
 }
 
 export async function refreshWaveStackLibraryCache(): Promise<void> {
+  const result = await apolloClient.mutate({
+    mutation: SYNC_DRIVE_LIBRARY_MUTATION,
+    fetchPolicy: "no-cache"
+  });
+
+  const syncResult = result.data?.syncDriveLibrary;
+
+  if (syncResult && !syncResult.ok) {
+    throw new Error(syncResult.message || "Drive library sync failed.");
+  }
+
   removeLocalStorageKey("wavestack:song-cache");
   removeLocalStorageKey("wavestack:apollo-cache");
   removeLocalStorageKey("apollo-cache-persist");
