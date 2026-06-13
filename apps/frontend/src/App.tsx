@@ -1399,7 +1399,6 @@ export function App() {
     async function run() {
       setRecommendationOffset(0);
       setHasMoreRecommendations(true);
-      setRecommendedData([]);
 
       try {
         const page = await fetchRecommendedPage(0, []);

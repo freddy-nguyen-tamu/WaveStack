@@ -62,14 +62,8 @@ export function Dashboard({
   }, [recommendations]);
 
   const suggestions = useMemo(() => {
-    if (recommendations.length > 0) {
-      return recommendations.map((item) => item.song);
-    }
-
-    return [...songs]
-      .sort(() => Math.random() - 0.5)
-      .slice(0, 25);
-  }, [recommendations, songs]);
+    return recommendations.map((item) => item.song);
+  }, [recommendations]);
 
   useEffect(() => {
     if (!selectedSong) {
@@ -100,7 +94,7 @@ export function Dashboard({
     onLoadMore: () => {
       onLoadMoreRecommendations?.();
     },
-    rootMargin: "1000px"
+    rootMargin: "250px"
   });
 
   const periodLabels: Record<string, string> = {
@@ -224,7 +218,9 @@ export function Dashboard({
           })}
         </section>
       ) : (
-        <p>No song suggestions available.</p>
+        <p>
+          {loadingMoreRecommendations ? "Loading random suggestions..." : "No random suggestions loaded yet."}
+        </p>
       )}
 
       <div
