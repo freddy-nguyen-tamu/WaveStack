@@ -129,14 +129,14 @@ type SongPageQueryVariables = {
 
 const fallbackSongs: Song[] = [
   {
-    id: "demo-1",
-    title: "Cloudline",
-    artistName: "The Latency",
-    albumTitle: "Regions",
-    durationSeconds: 213,
-    streamUrl: "/demo/cloudline.mp3",
-    genreNames: ["electronic", "ambient"],
-    thumbnailUrl: "https://images.unsplash.com/photo-1493246507139-91e8fad9978e?auto=format&fit=crop&w=900&q=80",
+    id: "demo-monkeys-spinning-monkeys",
+    title: "Monkeys Spinning Monkeys",
+    artistName: "Kevin MacLeod",
+    albumTitle: "Demo Library",
+    durationSeconds: 125,
+    streamUrl: "/demo/monkeys-spinning-monkeys.mp3",
+    genreNames: ["instrumental", "background", "comedy"],
+    thumbnailUrl: "https://images.unsplash.com/photo-1516280440614-37939bbacd81?auto=format&fit=crop&w=900&q=80",
     driveThumbnailUrl: undefined,
     embeddedArtworkUrl: undefined,
     lyrics: "Instrumental demo track."
