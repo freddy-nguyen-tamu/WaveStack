@@ -6,6 +6,7 @@ import type { ClientPlaylist, Song } from "../../App";
 import { formatSongDisplayName } from "../../song-format";
 import { SongListRow } from "../../components/SongListRow";
 import { PaginationBar } from "../../components/PaginationBar";
+import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
 
 type SongPageQueryData = {
   songPage: {
@@ -103,7 +104,7 @@ export function SearchPanel({
   }, [backendSearch, data]);
 
   async function loadMore() {
-    if (!backendSearch || !cursor || !hasMore) {
+    if (!backendSearch || !cursor || !hasMore || loading) {
       return;
     }
 
@@ -130,6 +131,16 @@ export function SearchPanel({
     }
   }
 
+  const searchSentinelRef = useInfiniteScroll({
+    enabled: backendSearch,
+    loading,
+    hasMore,
+    onLoadMore: () => {
+      void loadMore();
+    },
+    rootMargin: "800px"
+  });
+
   const fallbackResults = useMemo(() => {
     const needle = query.trim().toLowerCase();
 
@@ -143,7 +154,6 @@ export function SearchPanel({
     });
   }, [query, songs]);
 
-  const backendHasResponded = backendSearch && Boolean(data?.songPage);
   const results = backendSearch ? allResults : fallbackResults;
 
   const totalMatchingCount = backendSearch
@@ -153,6 +163,7 @@ export function SearchPanel({
   const pageCount = Math.max(1, Math.ceil(results.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
   const pagedResults = results.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const displayedResults = backendSearch ? results : pagedResults;
 
   useEffect(() => {
     setQuery("");
@@ -214,22 +225,22 @@ export function SearchPanel({
       ) : null}
       <p>
         {backendSearch ? (
-          <>Showing {pagedResults.length} loaded of {totalMatchingCount} matching song(s).</>
+          <>Showing {displayedResults.length} loaded of {totalMatchingCount} matching song(s).</>
         ) : (
-          <>Showing {pagedResults.length} of {totalMatchingCount} matching song(s).</>
+          <>Showing {displayedResults.length} of {totalMatchingCount} matching song(s).</>
         )}
         {backendSearch && debouncedQuery ? ` (DB search: "${debouncedQuery}")` : ""}
         {backendSearch && loading ? " — searching..." : ""}
-        {pageCount > 1 ? ` Page ${currentPage} of ${pageCount}.` : ""}
+        {!backendSearch && pageCount > 1 ? ` Page ${currentPage} of ${pageCount}.` : ""}
       </p>
-      {pagedResults.length ? (
+      {displayedResults.length ? (
         <>
           <ul className="song-list">
-            {pagedResults.map((song, index) => (
+            {displayedResults.map((song, index) => (
               <SongListRow
                 key={song.id}
                 song={song}
-                index={(currentPage - 1) * PAGE_SIZE + index}
+                index={backendSearch ? index : (currentPage - 1) * PAGE_SIZE + index}
                 playlists={playlists}
                 favoriteIds={favoriteIds}
                 onPlay={play}
@@ -241,18 +252,21 @@ export function SearchPanel({
             ))}
           </ul>
 
-          <PaginationBar
-            currentPage={currentPage}
-            pageCount={pageCount}
-            onPageChange={setPage}
-            label={`${title} pagination`}
-          />
+          {!backendSearch && pageCount > 1 ? (
+            <PaginationBar
+              currentPage={currentPage}
+              pageCount={pageCount}
+              onPageChange={setPage}
+              label={`${title} pagination`}
+            />
+          ) : null}
         </>
       ) : <p>{emptyMessage}</p>}
-      {backendSearch && hasMore ? (
-        <button type="button" onClick={() => void loadMore()} disabled={loading}>
-          {loading ? "Loading more..." : "Load more search results"}
-        </button>
+      {backendSearch ? (
+        <div ref={searchSentinelRef} className="infinite-scroll-sentinel" aria-hidden="true" />
+      ) : null}
+      {backendSearch && loading && displayedResults.length ? (
+        <p className="infinite-scroll-status">Loading more search results...</p>
       ) : null}
     </article>
   );

@@ -190,7 +190,7 @@ export function AllPage({
   const visibleSongs = filteredSongs.slice(0, visibleCount);
   const hasMore = visibleSongs.length < filteredSongs.length;
 
-  async function loadMoreBackendSongs() {
+  const loadMoreBackendSongs = useCallback(async () => {
     if (!hasMoreBackendSongs || !backendEndCursor) {
       return;
     }
@@ -218,7 +218,7 @@ export function AllPage({
         };
       }
     });
-  }
+  }, [backendEndCursor, backendSort, debouncedQuery, fetchMore, hasMoreBackendSongs]);
 
   const updateThumbFromWindowScroll = useCallback(() => {
     const track = fastScrollTrackRef.current;
@@ -322,15 +322,23 @@ export function AllPage({
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
+    const canLoadMoreBackendSongs = hasMoreBackendSongs && !loading && Boolean(backendEndCursor);
 
-    if (!sentinel || !hasMore) {
+    if (!sentinel || (!hasMore && !canLoadMoreBackendSongs)) {
       return;
     }
 
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          setVisibleCount((count) => Math.min(count + LOAD_CHUNK_SIZE, filteredSongs.length));
+          if (hasMore) {
+            setVisibleCount((count) => Math.min(count + LOAD_CHUNK_SIZE, filteredSongs.length));
+            return;
+          }
+
+          if (canLoadMoreBackendSongs) {
+            void loadMoreBackendSongs();
+          }
         }
       },
       {
@@ -343,7 +351,7 @@ export function AllPage({
     observer.observe(sentinel);
 
     return () => observer.disconnect();
-  }, [filteredSongs.length, hasMore]);
+  }, [backendEndCursor, filteredSongs.length, hasMore, hasMoreBackendSongs, loadMoreBackendSongs, loading]);
 
   useEffect(() => {
     updateThumbFromWindowScroll();
@@ -445,13 +453,9 @@ export function AllPage({
         />
       </div>
 
-      {hasMoreBackendSongs && (
-        <div className="pagination-bar">
-          <button type="button" onClick={loadMoreBackendSongs} disabled={loading}>
-            {loading ? "Loading..." : "Load more songs"}
-          </button>
-        </div>
-      )}
+      {hasMoreBackendSongs && loading ? (
+        <p className="infinite-scroll-status">Loading more songs...</p>
+      ) : null}
 
       <div className="bottom-player-spacer" aria-hidden="true" />
     </article>

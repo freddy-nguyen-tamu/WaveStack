@@ -324,6 +324,8 @@ export function App() {
   const playHistoryRef = useRef<Song[]>([]);
   const playbackContextRef = useRef<PlaybackContext | null>(null);
   const queueRef = useRef<Song[]>([]);
+  const allKnownSongsRef = useRef<Song[]>([]);
+  const playedSinceManualPlayIdsRef = useRef<Set<string>>(new Set());
   const seededStartupAllContextRef = useRef(false);
   const startupAllContextFallbackTimerRef = useRef<number | null>(null);
 
@@ -826,11 +828,17 @@ export function App() {
   }
 
   async function handleLocalUploads(files: File[]) {
-    const audioFiles = files.filter((file) => file.type.startsWith("audio/") || /\.(mp3|m4a|wav|flac|aac|ogg|opus|webm|mp4)$/i.test(file.name));
+    const audioFilePattern = /\.(aac|aif|aiff|alac|flac|m4a|m4b|mp3|mp4|oga|ogg|opus|wav|weba|webm|wma)$/i;
+    const audioFiles = files.filter((file) => file.size > 0 && (file.type.startsWith("audio/") || audioFilePattern.test(file.name)));
+    const skippedFiles = files.filter((file) => !audioFiles.includes(file));
 
     if (!audioFiles.length) {
-      showNotice("Choose at least one audio file.");
+      showNotice("Choose at least one readable audio file.");
       return;
+    }
+
+    if (skippedFiles.length) {
+      showNotice(`Skipped ${skippedFiles.length} non-audio or empty file(s): ${skippedFiles.map((file) => file.name).slice(0, 3).join(", ")}${skippedFiles.length > 3 ? "..." : ""}`);
     }
 
     showNotice(`Uploading ${audioFiles.length} local audio file(s)...`);
@@ -838,13 +846,11 @@ export function App() {
     const uploaded: Song[] = [];
 
     for (const file of audioFiles) {
-      const nameWithoutExt = file.name.replace(/\.[^/.]+$/, "");
-
       try {
-        const result = await uploadTrack(file, nameWithoutExt, "Local Upload", "Local Uploads");
+        const result = await uploadTrack(file, "", "", "");
         const track = result as unknown as Song;
 
-        if (track?.id) {
+        if (track?.id && track.streamUrl) {
           uploaded.push(track);
         }
       } catch (error) {
@@ -892,6 +898,7 @@ export function App() {
   playHistoryRef.current = playHistory;
   playbackContextRef.current = playbackContext;
   queueRef.current = queue;
+  allKnownSongsRef.current = allKnownSongs;
 
   type PlaybackAdvanceReason = "manual" | "ended";
 
@@ -917,15 +924,85 @@ export function App() {
     return nextSong;
   }
 
-  function pickRandomSongExcluding(songs: Song[], currentSongId: string): Song | null {
-    const candidates = songs.filter((song) => song.id !== currentSongId);
+  function getPolicySongs(context: PlaybackContext): Song[] {
+    if (context.source === "all" || context.source === "dashboard") {
+      const fullLibrary = allKnownSongsRef.current.filter(Boolean);
 
+      if (fullLibrary.length > context.songs.length) {
+        return uniqueSongsById(fullLibrary);
+      }
+    }
+
+    return uniqueSongsById(context.songs.filter(Boolean));
+  }
+
+  function pickRandomSong(candidates: Song[]): Song | null {
     if (!candidates.length) {
       return null;
     }
 
     const randomIndex = Math.floor(Math.random() * candidates.length);
     return candidates[randomIndex] ?? null;
+  }
+
+  function getUnplayedSongs(contextSongs: Song[], currentSongId: string): Song[] {
+    const playedIds = playedSinceManualPlayIdsRef.current;
+    return contextSongs.filter((song) => song.id !== currentSongId && !playedIds.has(song.id));
+  }
+
+  function resetPlayedSession(song: Song) {
+    playedSinceManualPlayIdsRef.current = new Set([song.id]);
+  }
+
+  function markPlayed(song: Song) {
+    playedSinceManualPlayIdsRef.current.add(song.id);
+  }
+
+  function resetExhaustedRepeatSession(currentSong: Song): Song[] {
+    playedSinceManualPlayIdsRef.current = new Set([currentSong.id]);
+
+    const latestContext = playbackContextRef.current;
+
+    if (!latestContext) {
+      return [];
+    }
+
+    return getPolicySongs(latestContext).filter((song) => song.id !== currentSong.id);
+  }
+
+  function findNextSequentialSong(contextSongs: Song[], currentSongId: string): Song | null {
+    const currentIndex = contextSongs.findIndex((song) => song.id === currentSongId);
+
+    if (currentIndex < 0) {
+      return getUnplayedSongs(contextSongs, currentSongId)[0] ?? contextSongs[0] ?? null;
+    }
+
+    const afterCurrent = contextSongs.slice(currentIndex + 1).find((song) => !playedSinceManualPlayIdsRef.current.has(song.id));
+
+    if (afterCurrent) {
+      return afterCurrent;
+    }
+
+    return contextSongs.slice(0, currentIndex).find((song) => !playedSinceManualPlayIdsRef.current.has(song.id)) ?? null;
+  }
+
+  function findNextRepeatAllSong(contextSongs: Song[], currentSong: Song, shuffle: boolean): Song | null {
+    const freshCandidates = resetExhaustedRepeatSession(currentSong);
+
+    if (!freshCandidates.length) {
+      return null;
+    }
+
+    if (shuffle) {
+      return pickRandomSong(freshCandidates);
+    }
+
+    const currentIndex = contextSongs.findIndex((song) => song.id === currentSong.id);
+    return (
+      contextSongs.slice(Math.max(0, currentIndex + 1)).find((song) => song.id !== currentSong.id) ??
+      contextSongs.find((song) => song.id !== currentSong.id) ??
+      null
+    );
   }
 
   function resolveNextSongFromCurrentPolicy(reason: PlaybackAdvanceReason): Song | null {
@@ -944,44 +1021,44 @@ export function App() {
       return null;
     }
 
-    const contextSongs = latestContext.songs.filter(Boolean);
+    const contextSongs = getPolicySongs(latestContext);
 
     if (!contextSongs.length) {
       return null;
     }
+
+    playedSinceManualPlayIdsRef.current.add(latestCurrentSong.id);
 
     if (latestRepeatMode === "one" && reason === "ended") {
       return latestCurrentSong;
     }
 
     if (latestShuffleEnabled) {
-      const shuffledPick = pickRandomSongExcluding(contextSongs, latestCurrentSong.id);
+      const shuffledPick = pickRandomSong(getUnplayedSongs(contextSongs, latestCurrentSong.id));
 
       if (shuffledPick) {
         return shuffledPick;
       }
 
-      if (latestRepeatMode === "all" || latestRepeatMode === "one") {
+      if (latestRepeatMode === "all") {
+        return findNextRepeatAllSong(contextSongs, latestCurrentSong, true);
+      }
+
+      if (latestRepeatMode === "one") {
         return latestCurrentSong;
       }
 
       return null;
     }
 
-    const currentIndex = contextSongs.findIndex((song) => song.id === latestCurrentSong.id);
-
-    if (currentIndex < 0) {
-      return contextSongs[0] ?? null;
-    }
-
-    const nextSong = contextSongs[currentIndex + 1];
+    const nextSong = findNextSequentialSong(contextSongs, latestCurrentSong.id);
 
     if (nextSong) {
       return nextSong;
     }
 
     if (latestRepeatMode === "all") {
-      return contextSongs[0] ?? null;
+      return findNextRepeatAllSong(contextSongs, latestCurrentSong, false);
     }
 
     return null;
@@ -1003,6 +1080,7 @@ export function App() {
     }
 
     startSong(nextSong, { preserveContext: true });
+    markPlayed(nextSong);
 
     if (nextSong.id !== latestCurrentSong?.id) {
       rememberRecent(nextSong);
@@ -1089,6 +1167,7 @@ export function App() {
 
     playHistoryRef.current = [];
     setPlayHistory([]);
+    resetPlayedSession(song);
 
     startSong(song, { preserveContext: true });
     rememberRecent(song);
@@ -1096,9 +1175,12 @@ export function App() {
   }
 
   function playSong(song: Song) {
-    startSong(song);
-    rememberRecent(song);
-    showNotice(`Now playing: ${formatSongDisplayName(song)}`);
+    playSongFromContext(song, {
+      id: "manual:all",
+      label: "All Songs",
+      source: "manual",
+      songs: allKnownSongsRef.current.length ? allKnownSongsRef.current : [song]
+    });
   }
 
   function queueSong(song: Song) {
@@ -1971,12 +2053,12 @@ export function App() {
                 favoriteIds={favoriteIds}
                 onPlay={(song: Song) =>
                   playSongFromContext(song, {
-                    id: "dashboard:recommendations",
-                    label: "Dashboard recommendations",
-                    source: "dashboard",
-                    songs: recommendationSongs.length ? recommendationSongs : songs
-                  })
-                }
+	                    id: "dashboard:recommendations",
+	                    label: "Dashboard recommendations",
+	                    source: "dashboard",
+	                    songs: allKnownSongs.length ? allKnownSongs : recommendationSongs.length ? recommendationSongs : songs
+	                  })
+	                }
                 onQueue={queueSong}
                 onToggleFavorite={toggleFavorite}
                 onAddToPlaylist={addToPlaylist}

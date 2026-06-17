@@ -83,9 +83,9 @@ export function uploadTrack(
     const token = window.localStorage.getItem("wavestack:auth-token");
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("title", title);
-    formData.append("artistName", artistName);
-    if (albumTitle) formData.append("albumTitle", albumTitle);
+    if (title.trim()) formData.append("title", title);
+    if (artistName.trim()) formData.append("artistName", artistName);
+    if (albumTitle?.trim()) formData.append("albumTitle", albumTitle);
 
     const baseUrl = import.meta.env.VITE_GRAPHQL_URL ?? "http://localhost:3000/graphql";
     const apiOrigin = baseUrl.replace(/\/graphql$/, "");
@@ -102,7 +102,19 @@ export function uploadTrack(
           reject(new Error("Invalid JSON response"));
         }
       } else {
-        reject(new Error(`Upload failed: ${xhr.status} ${xhr.statusText}`));
+        let message = `Upload failed: ${xhr.status} ${xhr.statusText}`;
+
+        try {
+          const body = JSON.parse(xhr.responseText) as { message?: string | string[] };
+          const bodyMessage = Array.isArray(body.message) ? body.message.join(" ") : body.message;
+          if (bodyMessage) {
+            message = bodyMessage;
+          }
+        } catch {
+          // Keep the HTTP status message when the server did not return JSON.
+        }
+
+        reject(new Error(message));
       }
     };
 

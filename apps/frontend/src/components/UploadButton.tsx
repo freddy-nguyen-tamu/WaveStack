@@ -51,7 +51,7 @@ export function UploadButton({
       <input
         ref={inputRef}
         type="file"
-        accept="audio/*,.mp3,.m4a,.wav,.flac,.aac,.ogg,.opus,.webm,.mp4"
+        accept="audio/*,.aac,.aif,.aiff,.alac,.flac,.m4a,.m4b,.mp3,.mp4,.oga,.ogg,.opus,.wav,.weba,.webm,.wma"
         multiple={multiple}
         onChange={handleChange}
         className="sr-only"
