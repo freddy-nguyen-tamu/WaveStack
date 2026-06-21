@@ -3591,3 +3591,417 @@ article.dashboard-page .song-actions--tile select {
   margin-bottom: 1.75rem;
   font-size: 6rem;
 }
+
+/* Responsive app hardening */
+
+@media (max-width: 760px) {
+  html {
+    scroll-padding-top: calc(4.1rem + env(safe-area-inset-top, 0px));
+  }
+
+  body {
+    overflow-x: hidden;
+    overflow-x: clip;
+  }
+
+  .app-header {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+    padding: 16px var(--space-page) 12px;
+  }
+
+  .app-header__brand {
+    font-size: clamp(2.55rem, 15vw, 3.5rem);
+    max-width: 100%;
+    overflow-wrap: normal;
+  }
+
+  .app-header__brand + p {
+    max-width: 18rem;
+    font-size: 0.92rem;
+    line-height: 1.15;
+  }
+
+  header .auth-panel,
+  .auth-panel,
+  .auth-panel--signed-in {
+    width: 100%;
+    min-width: 0;
+    justify-content: flex-start;
+  }
+
+  .auth-panel--signed-in {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0.65rem;
+    align-items: center;
+  }
+
+  .auth-panel__profile-link {
+    min-width: 0;
+    justify-content: flex-start;
+  }
+
+  .auth-panel__user {
+    min-width: 0;
+  }
+
+  .auth-panel__user strong,
+  .auth-panel__user small {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .auth-panel--signed-in button {
+    min-width: 0;
+    padding-right: 0.85rem;
+    padding-left: 0.85rem;
+  }
+
+  .app-nav {
+    top: env(safe-area-inset-top, 0px);
+    z-index: 120;
+    justify-content: flex-start;
+    gap: 0.85rem;
+    max-width: 100vw;
+    padding: 0.72rem var(--space-page);
+    overflow-x: auto;
+    overflow-y: hidden;
+    background: var(--color-paper);
+    scroll-padding-inline: var(--space-page);
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .app-nav a,
+  .app-nav button {
+    scroll-snap-align: start;
+    min-width: max-content;
+    font-size: 0.86rem;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  main > section[aria-label="Player"] {
+    padding: 24px var(--space-page) 12px;
+  }
+
+  .player-card {
+    min-height: 23rem;
+    padding: 1.2rem 1rem 3.2rem;
+  }
+
+  .player-card__identity {
+    min-height: 7.4rem;
+  }
+
+  .player-card h2 {
+    min-height: 4.8rem;
+    font-size: clamp(2.1rem, 12vw, 3rem);
+    -webkit-line-clamp: 2;
+  }
+
+  .player-card__identity p,
+  .player-card__message[role="status"] {
+    font-size: 1rem;
+  }
+
+  .player-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .player-actions button,
+  .player-actions label {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .song-list-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "identity duration"
+      "actions actions";
+    gap: 0.7rem 0.75rem;
+    padding: 0.85rem 0;
+  }
+
+  .song-list-row__identity {
+    grid-area: identity;
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: clamp(3.7rem, 18vw, 4.8rem) minmax(0, 1fr);
+    gap: 0.75rem;
+    min-height: clamp(3.7rem, 18vw, 4.8rem);
+  }
+
+  .song-list-row__art,
+  .song-list-row__art-fallback,
+  .song-list-row__art-image {
+    width: clamp(3.7rem, 18vw, 4.8rem);
+    height: clamp(3.7rem, 18vw, 4.8rem);
+    min-width: clamp(3.7rem, 18vw, 4.8rem);
+  }
+
+  .song-list-row__text,
+  .dashboard-song-card__text,
+  .queue-drawer__body {
+    min-width: 0;
+  }
+
+  .song-list-row__title,
+  .song-list-row__artist,
+  .dashboard-song-card__text strong,
+  .dashboard-song-card__text small,
+  article.dashboard-page .song-tile__overlay strong,
+  article.dashboard-page .song-tile__overlay small {
+    overflow-wrap: break-word;
+    word-break: normal;
+    hyphens: auto;
+  }
+
+  .song-list-row__title {
+    font-size: clamp(1rem, 4.4vw, 1.18rem);
+    line-height: 1.1;
+  }
+
+  .song-list-row__artist {
+    font-size: 0.88rem;
+  }
+
+  .song-list-row__duration {
+    grid-area: duration;
+    align-self: start;
+    padding-top: 0.2rem;
+    font-size: 0.86rem;
+  }
+
+  .song-list-row__actions,
+  .song-actions__buttons {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .song-list-row__actions {
+    grid-area: actions;
+  }
+
+  .song-actions__buttons {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.4rem;
+  }
+
+  .song-actions__buttons button,
+  .song-actions__playlist-picker button {
+    width: 100%;
+    min-width: 0;
+    padding-right: 0.45rem;
+    padding-left: 0.45rem;
+    overflow: hidden;
+    font-size: 0.74rem;
+    line-height: 1.05;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .song-actions__buttons svg {
+    flex: 0 0 auto;
+    width: 0.9rem;
+    height: 0.9rem;
+  }
+
+  .song-actions__playlist-picker {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .all-page__list {
+    padding-right: 0.75rem;
+  }
+
+  .all-page__fast-scroll {
+    top: calc(3.8rem + env(safe-area-inset-top, 0px));
+    bottom: calc(10.25rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .queue-drawer {
+    width: 100%;
+    max-width: 100dvw;
+    border-left: 0;
+  }
+
+  .queue-drawer__item {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.65rem;
+  }
+
+  .queue-drawer__identity {
+    min-width: 0;
+  }
+
+  .queue-drawer__body {
+    grid-column: 1 / -1;
+  }
+
+  .queue-drawer__remove {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .mini-player {
+    gap: 0.65rem;
+  }
+
+  .mini-player__track {
+    grid-template-columns: 3.15rem minmax(0, 1fr) auto;
+    gap: 0.75rem;
+  }
+
+  .mini-player__cover-button,
+  .mini-player__cover {
+    width: 3.15rem;
+    height: 3.15rem;
+  }
+
+  .mini-player__controls {
+    justify-content: space-between;
+    gap: 0.2rem;
+  }
+
+  .mini-player__progress {
+    grid-template-columns: 2.35rem minmax(0, 1fr) 2.35rem;
+    gap: 0.45rem;
+  }
+
+  .song-modal-backdrop {
+    padding: 0;
+    align-items: stretch;
+  }
+
+  .song-modal {
+    width: 100%;
+    max-width: 100dvw;
+    max-height: 100dvh;
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+  }
+
+  .song-modal__body,
+  .song-modal__content {
+    padding: 1.15rem;
+  }
+
+  .song-modal__content h2 {
+    max-width: calc(100% - 3.25rem);
+    font-size: clamp(2.25rem, 12vw, 3.4rem);
+  }
+
+  .song-modal__actions {
+    gap: 0.45rem;
+  }
+
+  .metadata-grid div {
+    grid-template-columns: 1fr;
+    gap: 0.35rem;
+  }
+}
+
+@media (max-width: 430px) {
+  :root {
+    --space-page: 12px;
+    --space-section: 34px;
+  }
+
+  .app-header {
+    padding-top: 12px;
+  }
+
+  .auth-panel--signed-in {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .auth-panel--signed-in > button {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .app-nav {
+    padding-top: 0.62rem;
+    padding-bottom: 0.62rem;
+  }
+
+  .app-nav a,
+  .app-nav button {
+    font-size: 0.78rem;
+  }
+
+  .player-card {
+    min-height: 20rem;
+  }
+
+  .player-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .song-actions__buttons,
+  article.dashboard-page .song-actions--tile .song-actions__buttons {
+    grid-template-columns: 1fr;
+  }
+
+  .song-list-row {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "identity"
+      "duration"
+      "actions";
+  }
+
+  .song-list-row__duration {
+    justify-self: start;
+    padding-top: 0;
+  }
+
+  .song-list-row__identity {
+    grid-template-columns: 3.45rem minmax(0, 1fr);
+    min-height: 3.45rem;
+  }
+
+  .song-list-row__art,
+  .song-list-row__art-fallback,
+  .song-list-row__art-image {
+    width: 3.45rem;
+    height: 3.45rem;
+    min-width: 3.45rem;
+  }
+
+  .song-list-row__title {
+    font-size: 0.98rem;
+  }
+
+  .song-actions__buttons button,
+  .song-actions__playlist-picker button {
+    min-height: 2.15rem;
+    font-size: 0.68rem;
+  }
+
+  .mini-player {
+    min-height: auto;
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .mini-player__controls button,
+  .mini-player__icon-button,
+  .mini-player__mode-button {
+    width: 2rem;
+    height: 2rem;
+  }
+
+  .mini-player__play {
+    width: 3.05rem !important;
+    height: 2.7rem !important;
+  }
+}
