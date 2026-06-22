@@ -271,6 +271,20 @@ function writeLocalJson(key: string, value: unknown) {
   }
 }
 
+function isUnauthenticatedGraphqlError(error: unknown): boolean {
+  const graphQLErrors =
+    (error as { graphQLErrors?: Array<{ message?: string; extensions?: { code?: string } }> })
+      ?.graphQLErrors ?? [];
+
+  return graphQLErrors.some((item) => {
+    const message = item.message ?? "";
+    return (
+      item.extensions?.code === "UNAUTHENTICATED" ||
+      /session expired|sign in again|unauthorized/i.test(message)
+    );
+  });
+}
+
 export function App() {
   const location = useLocation();
 
@@ -552,9 +566,14 @@ export function App() {
     };
   }, [apolloClient]);
 
-  const { data: libraryStateData, refetch: refetchLibraryState } = useQuery(LIBRARY_STATE_QUERY, {
+  const {
+    data: libraryStateData,
+    error: libraryStateError,
+    refetch: refetchLibraryState
+  } = useQuery(LIBRARY_STATE_QUERY, {
     skip: !hasToken,
-    fetchPolicy: "network-only"
+    fetchPolicy: "network-only",
+    notifyOnNetworkStatusChange: true
   });
 
   const dismissedRecommendationSet = useMemo(
@@ -572,9 +591,14 @@ export function App() {
     [visibleRecommendations]
   );
 
-  const { data: meData, refetch: refetchMe } = useQuery(ME_QUERY, {
+  const {
+    data: meData,
+    error: meError,
+    refetch: refetchMe
+  } = useQuery(ME_QUERY, {
     skip: !hasToken,
-    fetchPolicy: "network-only"
+    fetchPolicy: "network-only",
+    notifyOnNetworkStatusChange: true
   });
 
   useEffect(() => {
@@ -585,10 +609,31 @@ export function App() {
   }, [meData]);
 
   useEffect(() => {
-    if (authToken) {
-      void refetchMe();
+    if (!authToken) {
+      return;
     }
-  }, [authToken, refetchMe]);
+
+    void refetchMe();
+    void refetchLibraryState();
+  }, [authToken, refetchMe, refetchLibraryState]);
+
+  useEffect(() => {
+    if (!authToken) {
+      return;
+    }
+
+    if (!isUnauthenticatedGraphqlError(meError) && !isUnauthenticatedGraphqlError(libraryStateError)) {
+      return;
+    }
+
+    window.localStorage.removeItem("wavestack:auth-token");
+    window.localStorage.removeItem("wavestack:auth-user");
+
+    setAuthToken(null);
+    setAuthUser(null);
+
+    showNotice("Your WaveStack session expired. Sign in again.");
+  }, [authToken, meError, libraryStateError]);
 
   const { data, loading, error, refetch } = useQuery(MUSIC_HOME_QUERY, {
     fetchPolicy: "cache-and-network"
