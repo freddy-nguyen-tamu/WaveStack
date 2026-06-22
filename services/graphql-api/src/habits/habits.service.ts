@@ -339,30 +339,12 @@ export class HabitsService {
 
   private async getTopArtistWeights(userId: string): Promise<Map<string, number>> {
     const result = await this.database.query(
-      `WITH combined AS (
-         SELECT
-           COALESCE(NULLIF(artist_name, ''), 'Unknown Artist') AS artist_name,
-           1::int AS play_count
-         FROM app_listening_events_combined
-         WHERE user_id = $1
-
-         UNION ALL
-
-         SELECT
-           COALESCE(NULLIF(artist_name, ''), 'Unknown Artist') AS artist_name,
-           play_count::int AS play_count
-         FROM app_listening_monthly_rollups
-         WHERE user_id = $1
-       ),
-       grouped AS (
-         SELECT
-           artist_name,
-           SUM(play_count)::int AS play_count
-         FROM combined
-         GROUP BY artist_name
-       )
-       SELECT artist_name, play_count
-       FROM grouped
+      `SELECT
+         COALESCE(NULLIF(artist_name, ''), 'Unknown Artist') AS artist_name,
+         COUNT(*)::int AS play_count
+       FROM app_listening_events_combined
+       WHERE user_id = $1
+       GROUP BY COALESCE(NULLIF(artist_name, ''), 'Unknown Artist')
        ORDER BY play_count DESC, artist_name ASC
        LIMIT 40`,
       [userId]
@@ -514,42 +496,20 @@ export class HabitsService {
     await this.ensureArchiveCacheForPeriod(userId, period);
     const safeLimit = Math.max(1, Math.min(limit, 100));
     const periodWhere = this.statsPeriodWhereAlias("e", period);
-    const rollupWhere = this.rollupPeriodWhere("r", period);
 
     const result = await this.database.query(
-      `WITH combined AS (
+      `WITH grouped AS (
         SELECT
-          e.song_id,
-          COALESCE(NULLIF(e.title, ''), 'Unknown Track') AS title,
-          COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist') AS artist_name,
-          1::int AS play_count,
-          COALESCE(e.duration_seconds, 0)::int AS total_duration_seconds
-         FROM app_listening_events_combined e
-         WHERE e.user_id = $1
-           ${periodWhere}
-
-         UNION ALL
-
-         SELECT
-           r.song_id,
-          COALESCE(NULLIF(r.title, ''), 'Unknown Track') AS title,
-          COALESCE(NULLIF(r.artist_name, ''), 'Unknown Artist') AS artist_name,
-          r.play_count::int AS play_count,
-          r.total_duration_seconds::int AS total_duration_seconds
-        FROM app_listening_monthly_rollups r
-        WHERE r.user_id = $1
-          ${rollupWhere}
-      ),
-      grouped AS (
-        SELECT
-          song_id AS key,
-          MAX(title) AS label,
-          MAX(artist_name) AS subtitle,
-          SUM(play_count)::int AS play_count,
-          SUM(total_duration_seconds)::float8 AS total_duration_seconds,
-          song_id
-        FROM combined
-        GROUP BY song_id
+          e.song_id AS key,
+          MAX(COALESCE(NULLIF(e.title, ''), 'Unknown Track')) AS label,
+          MAX(COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')) AS subtitle,
+          COUNT(*)::int AS play_count,
+          SUM(COALESCE(e.duration_seconds, 0))::float8 AS total_duration_seconds,
+          e.song_id
+        FROM app_listening_events_combined e
+        WHERE e.user_id = $1
+          ${periodWhere}
+        GROUP BY e.song_id
       )
       SELECT
         g.key,
@@ -577,39 +537,21 @@ export class HabitsService {
     await this.ensureArchiveCacheForPeriod(userId, period);
     const safeLimit = Math.max(1, Math.min(limit, 100));
     const periodWhere = this.statsPeriodWhereAlias("e", period);
-    const rollupWhere = this.rollupPeriodWhere("r", period);
 
     const result = await this.database.query(
-      `WITH combined AS (
+      `WITH grouped AS (
         SELECT
-          COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist') AS artist_name,
-          e.song_id,
-          1::int AS play_count,
-          COALESCE(e.duration_seconds, 0)::int AS total_duration_seconds
-         FROM app_listening_events_combined e
-         WHERE e.user_id = $1
-           ${periodWhere}
-
-         UNION ALL
-
-         SELECT
-           COALESCE(NULLIF(r.artist_name, ''), 'Unknown Artist') AS artist_name,
-          r.song_id,
-          r.play_count::int AS play_count,
-          r.total_duration_seconds::int AS total_duration_seconds
-        FROM app_listening_monthly_rollups r
-        WHERE r.user_id = $1
-          ${rollupWhere}
-      ),
-      grouped AS (
-        SELECT
-          lower(artist_name) AS key,
-          artist_name AS label,
-          COUNT(DISTINCT song_id)::int AS distinct_tracks,
-          SUM(play_count)::int AS play_count,
-          SUM(total_duration_seconds)::float8 AS total_duration_seconds
-        FROM combined
-        GROUP BY lower(artist_name), artist_name
+          lower(COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')) AS key,
+          COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist') AS label,
+          COUNT(DISTINCT e.song_id)::int AS distinct_tracks,
+          COUNT(*)::int AS play_count,
+          SUM(COALESCE(e.duration_seconds, 0))::float8 AS total_duration_seconds
+        FROM app_listening_events_combined e
+        WHERE e.user_id = $1
+          ${periodWhere}
+        GROUP BY
+          lower(COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')),
+          COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')
       )
       SELECT
         key,

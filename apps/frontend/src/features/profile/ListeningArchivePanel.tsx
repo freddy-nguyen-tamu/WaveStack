@@ -78,7 +78,7 @@ export function ListeningArchivePanel() {
 
   async function runDryRun() {
     await archiveOldEvents({
-      variables: { daysToKeep: 180, dryRun: true }
+      variables: { daysToKeep: 30, dryRun: true }
     });
     await statusQuery.refetch();
     await readThroughQuery.refetch();
@@ -90,7 +90,7 @@ export function ListeningArchivePanel() {
     );
     if (!confirmed) return;
     await archiveOldEvents({
-      variables: { daysToKeep: 180, dryRun: false }
+      variables: { daysToKeep: 30, dryRun: false }
     });
     await statusQuery.refetch();
     await readThroughQuery.refetch();
