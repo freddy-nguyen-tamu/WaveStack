@@ -272,8 +272,9 @@ export class HabitsResolver {
   }
 
   @Query(() => ListeningArchiveStatus)
-  listeningArchiveStatus(): Promise<ListeningArchiveStatus> {
-    return this.listeningArchiveService.status();
+  listeningArchiveStatus(@Context() context: GqlContext): Promise<ListeningArchiveStatus> {
+    const userId = this.resolveUserId(context);
+    return this.listeningArchiveService.status(userId ?? undefined);
   }
 
   @Mutation(() => ListeningArchiveResult)
@@ -297,7 +298,8 @@ export class HabitsResolver {
     }
 
     return this.listeningArchiveService.archiveOldEvents({
-      daysToKeep: daysToKeep ?? 180,
+      userId,
+      daysToKeep: daysToKeep ?? 30,
       dryRun: dryRun ?? true
     });
   }

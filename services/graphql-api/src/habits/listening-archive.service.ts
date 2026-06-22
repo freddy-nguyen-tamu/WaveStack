@@ -79,17 +79,19 @@ export class ListeningArchiveService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async status(): Promise<ListeningArchiveStatus> {
+  async status(userId?: string): Promise<ListeningArchiveStatus> {
     const result = await this.database.query(
       `WITH event_stats AS (
         SELECT
           COUNT(*)::int AS raw_event_count,
           MIN(started_at) AS oldest_raw_event_at
         FROM app_listening_events
+        WHERE ($1::uuid IS NULL OR user_id = $1::uuid)
       ),
       rollup_stats AS (
         SELECT COUNT(*)::int AS archived_rollup_row_count
         FROM app_listening_monthly_rollups
+        WHERE ($1::uuid IS NULL OR user_id = $1::uuid)
       ),
       run_stats AS (
         SELECT
@@ -114,7 +116,8 @@ export class ListeningArchiveService implements OnModuleInit, OnModuleDestroy {
       FROM event_stats
       CROSS JOIN rollup_stats
       CROSS JOIN run_stats
-      LEFT JOIN latest_run ON true`
+      LEFT JOIN latest_run ON true`,
+      [userId ?? null]
     );
 
     const row = this.rows<ArchiveStatusRow>(result)[0];
@@ -131,6 +134,7 @@ export class ListeningArchiveService implements OnModuleInit, OnModuleDestroy {
   }
 
   async archiveOldEvents(options: {
+    userId?: string;
     daysToKeep: number;
     dryRun: boolean;
     batchLimit?: number;
@@ -139,6 +143,7 @@ export class ListeningArchiveService implements OnModuleInit, OnModuleDestroy {
     const batchLimit = Math.max(100, Math.min(options.batchLimit ?? 5000, 20000));
     const dryRun = options.dryRun;
     const cutoffAt = new Date(Date.now() - daysToKeep * 24 * 60 * 60 * 1000);
+    const userId = options.userId ?? null;
 
     const runResult = await this.database.query(
       `INSERT INTO app_listening_event_archive_runs (cutoff_at, dry_run, status)
@@ -165,9 +170,10 @@ export class ListeningArchiveService implements OnModuleInit, OnModuleDestroy {
          FROM app_listening_events e
          INNER JOIN app_users u ON u.id = e.user_id
          WHERE e.started_at < $1
+           AND ($3::uuid IS NULL OR e.user_id = $3::uuid)
          ORDER BY e.user_id ASC, e.started_at ASC
          LIMIT $2`,
-        [cutoffAt.toISOString(), batchLimit]
+        [cutoffAt.toISOString(), batchLimit, userId]
       );
 
       const candidates = this.rows<ArchiveCandidateRow>(candidateResult);

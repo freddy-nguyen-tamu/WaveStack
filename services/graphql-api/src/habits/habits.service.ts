@@ -15,6 +15,7 @@ import {
 } from "./habits.models";
 import { DrivePrivateExportService } from "./drive-private-export.service";
 import { GroqTasteService } from "./groq-taste.service";
+import { ListeningArchiveService } from "./listening-archive.service";
 
 type QueryRows<T> = { rows: T[] } | T[];
 
@@ -63,8 +64,31 @@ export class HabitsService {
     private readonly database: DatabaseService,
     private readonly musicService: MusicService,
     private readonly drivePrivateExport: DrivePrivateExportService,
-    private readonly groqTasteService: GroqTasteService
+    private readonly groqTasteService: GroqTasteService,
+    private readonly listeningArchiveService: ListeningArchiveService
   ) {}
+
+  private async ensureArchiveCacheForPeriod(userId: string, period: string): Promise<void> {
+    try {
+      const enabled = String(process.env.LISTENING_ARCHIVE_READ_THROUGH_ENABLED ?? "false").toLowerCase() !== "false";
+
+      if (!enabled) {
+        return;
+      }
+
+      const mappedPeriod = period === "DAY" ? "FOUR_WEEKS"
+        : period === "WEEK" ? "FOUR_WEEKS"
+        : period === "MONTH" ? "SIX_MONTHS"
+        : period === "YEAR" ? "ALL_TIME"
+        : period;
+
+      await this.listeningArchiveService.warmArchiveCacheForPeriod(userId, mappedPeriod, false);
+    } catch (error) {
+      this.logger.warn(
+        `Archive read-through cache warm failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
 
   async recordListen(
     userId: string,
@@ -379,6 +403,7 @@ export class HabitsService {
   }
 
   async summarize(userId: string, period: "DAY" | "WEEK" | "MONTH" | "YEAR"): Promise<HabitSummaryEntry[]> {
+    await this.ensureArchiveCacheForPeriod(userId, period);
     const interval = this.periodIntervalSql(period);
 
     const result = await this.database.query(
@@ -486,6 +511,7 @@ export class HabitsService {
   }
 
   async topTracks(userId: string, period: StatsPeriod, limit = 50): Promise<ListeningStatsEntry[]> {
+    await this.ensureArchiveCacheForPeriod(userId, period);
     const safeLimit = Math.max(1, Math.min(limit, 100));
     const periodWhere = this.statsPeriodWhereAlias("e", period);
     const rollupWhere = this.rollupPeriodWhere("r", period);
@@ -548,6 +574,7 @@ export class HabitsService {
   }
 
   async topArtists(userId: string, period: StatsPeriod, limit = 50): Promise<ListeningStatsEntry[]> {
+    await this.ensureArchiveCacheForPeriod(userId, period);
     const safeLimit = Math.max(1, Math.min(limit, 100));
     const periodWhere = this.statsPeriodWhereAlias("e", period);
     const rollupWhere = this.rollupPeriodWhere("r", period);
@@ -605,6 +632,7 @@ export class HabitsService {
   }
 
   async topGenres(userId: string, period: StatsPeriod, limit = 50): Promise<ListeningStatsEntry[]> {
+    await this.ensureArchiveCacheForPeriod(userId, period);
     const interval = this.statsPeriodIntervalSql(period);
 
     const result = await this.database.query(
@@ -635,6 +663,7 @@ export class HabitsService {
   }
 
   async recentlyPlayedDetailed(userId: string, period: StatsPeriod, limit = 50): Promise<RecentlyPlayedEntry[]> {
+    await this.ensureArchiveCacheForPeriod(userId, period);
     const interval = this.statsPeriodIntervalSql(period);
 
     const result = await this.database.query(
@@ -812,6 +841,7 @@ export class HabitsService {
   }
 
   async judgeTaste(userId: string, period = "ALL_TIME", writingStyle: TasteWritingStyle = {}): Promise<TasteJudgeResult> {
+    await this.ensureArchiveCacheForPeriod(userId, period);
     const generatedAt = new Date().toISOString();
     const stylePhrase = writingStyle.phrase?.trim().slice(0, 180);
     const styleExample = writingStyle.example?.trim().slice(0, 900);
@@ -937,6 +967,7 @@ export class HabitsService {
   }
 
   async tasteComparison(userId: string, period = "ALL_TIME"): Promise<TasteComparisonResult> {
+    await this.ensureArchiveCacheForPeriod(userId, period);
     const periodWhere = this.statsPeriodWhere(period);
 
     const userPlayCountResult = await this.database.query(
