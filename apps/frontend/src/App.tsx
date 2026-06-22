@@ -294,6 +294,42 @@ export function App() {
     return window.localStorage.getItem("wavestack:theme") === "dark";
   });
   const noticeTimerRef = useRef<number | null>(null);
+  const favoriteIdsRef = useRef<string[]>(favoriteIds);
+  const recentSongIdsRef = useRef<string[]>(recentSongIds);
+  const playlistsRef = useRef<ClientPlaylist[]>(playlists);
+  const emptyBackendLibraryStateWarningShownRef = useRef(false);
+
+  useEffect(() => {
+    favoriteIdsRef.current = favoriteIds;
+  }, [favoriteIds]);
+
+  useEffect(() => {
+    recentSongIdsRef.current = recentSongIds;
+  }, [recentSongIds]);
+
+  useEffect(() => {
+    playlistsRef.current = playlists;
+  }, [playlists]);
+
+  function applyFavoriteIds(nextIds: string[]) {
+    const next = Array.from(new Set(nextIds.filter(Boolean)));
+    favoriteIdsRef.current = next;
+    setFavoriteIds(next);
+    writeLocalJson("wavestack:favorites", next);
+  }
+
+  function applyRecentSongIds(nextIds: string[]) {
+    const next = Array.from(new Set(nextIds.filter(Boolean))).slice(0, 100);
+    recentSongIdsRef.current = next;
+    setRecentSongIds(next);
+    writeLocalJson("wavestack:recent", next);
+  }
+
+  function applyPlaylists(nextPlaylists: ClientPlaylist[]) {
+    playlistsRef.current = nextPlaylists;
+    setPlaylists(nextPlaylists);
+    writeLocalJson("wavestack:playlists", nextPlaylists);
+  }
 
   useEffect(() => {
     const theme = isDarkMode ? "dark" : "light";
@@ -761,14 +797,36 @@ export function App() {
     const backendFavorites = libraryStateData.libraryState.favorites ?? [];
     const backendRecent = libraryStateData.libraryState.recentlyPlayed ?? [];
     const backendPlaylists = libraryStateData.libraryState.playlists ?? [];
+    const backendFavoriteIds = backendFavorites.map((song: Song) => song.id);
+    const backendRecentIds = backendRecent.map((song: Song) => song.id);
 
-    setFavoriteIds(backendFavorites.map((song: Song) => song.id));
-    setRecentSongIds(backendRecent.map((song: Song) => song.id));
-    setPlaylists(backendPlaylists);
+    const backendHasAnyState =
+      backendFavoriteIds.length > 0 ||
+      backendRecentIds.length > 0 ||
+      backendPlaylists.length > 0;
 
-    writeLocalJson("wavestack:favorites", backendFavorites.map((song: Song) => song.id));
-    writeLocalJson("wavestack:recent", backendRecent.map((song: Song) => song.id));
-    writeLocalJson("wavestack:playlists", backendPlaylists);
+    const localHasAnyState =
+      favoriteIdsRef.current.length > 0 ||
+      recentSongIdsRef.current.length > 0 ||
+      playlistsRef.current.length > 0;
+
+    if (!backendHasAnyState && localHasAnyState) {
+      console.warn(
+        "libraryState returned empty while local user-state exists. Keeping local favorites/recent/playlists instead of wiping them."
+      );
+
+      if (!emptyBackendLibraryStateWarningShownRef.current) {
+        emptyBackendLibraryStateWarningShownRef.current = true;
+        showNotice("Could not load saved account library yet; keeping local favorites/recent/playlists.");
+      }
+
+      return;
+    }
+
+    emptyBackendLibraryStateWarningShownRef.current = false;
+    applyFavoriteIds(backendFavoriteIds);
+    applyRecentSongIds(backendRecentIds);
+    applyPlaylists(backendPlaylists);
 
     rememberSongObjects([
       ...backendFavorites,
@@ -803,11 +861,10 @@ export function App() {
   function rememberRecent(song: Song) {
     rememberSongObjects([song]);
 
-    setRecentSongIds((items) => {
-      const next = [song.id, ...items.filter((id) => id !== song.id)].slice(0, 100);
-      writeLocalJson("wavestack:recent", next);
-      return next;
-    });
+    applyRecentSongIds([
+      song.id,
+      ...recentSongIdsRef.current.filter((id) => id !== song.id)
+    ]);
 
     rememberPlayedSong(song);
   }
@@ -1212,23 +1269,22 @@ export function App() {
 
   async function toggleFavorite(song: Song) {
     rememberSongObjects([song]);
-    const isFavorite = favoriteIds.includes(song.id);
+
+    const currentFavoriteIds = favoriteIdsRef.current;
+    const isFavorite = currentFavoriteIds.includes(song.id);
+    const optimisticFavoriteIds = isFavorite
+      ? currentFavoriteIds.filter((id) => id !== song.id)
+      : [song.id, ...currentFavoriteIds];
+
+    applyFavoriteIds(optimisticFavoriteIds);
+
+    showNotice(
+      isFavorite
+        ? `Removed favorite: ${formatSongDisplayName(song)}`
+        : `Added favorite: ${formatSongDisplayName(song)}`
+    );
 
     if (!authToken) {
-      setFavoriteIds((items) => {
-        const next = items.includes(song.id)
-          ? items.filter((id) => id !== song.id)
-          : [song.id, ...items];
-
-        writeLocalJson("wavestack:favorites", next);
-        return next;
-      });
-
-      showNotice(
-        isFavorite
-          ? `Removed favorite locally: ${formatSongDisplayName(song)}`
-          : `Added favorite locally: ${formatSongDisplayName(song)}`
-      );
       return;
     }
 
@@ -1243,20 +1299,36 @@ export function App() {
       });
 
       const favorites = result.data?.favoriteSong ?? result.data?.unfavoriteSong ?? [];
+      const returnedFavoriteIds = favorites.map((item) => item.id);
 
-      setFavoriteIds(favorites.map((item) => item.id));
-      rememberSongObjects(favorites);
+      if (isFavorite) {
+        applyFavoriteIds(returnedFavoriteIds);
+        rememberSongObjects(favorites);
+      } else if (returnedFavoriteIds.includes(song.id)) {
+        applyFavoriteIds(returnedFavoriteIds);
+        rememberSongObjects(favorites);
+      } else {
+        console.warn(
+          "favoriteSong did not return the added song after adding. Keeping optimistic favorite state."
+        );
+
+        applyFavoriteIds([
+          song.id,
+          ...returnedFavoriteIds,
+          ...optimisticFavoriteIds.filter((id) => id !== song.id)
+        ]);
+
+        rememberSongObjects(favorites);
+      }
 
       await refetchLibraryState();
-
+    } catch (error) {
+      console.error("Failed to sync favorite", error);
       showNotice(
         isFavorite
-          ? `Removed favorite: ${formatSongDisplayName(song)}`
-          : `Added favorite: ${formatSongDisplayName(song)}`
+          ? "Removed favorite locally, but account sync failed. Sign in again if it reappears."
+          : "Added favorite locally, but account sync failed. Sign in again if it does not sync."
       );
-    } catch (error) {
-      console.error("Failed to update favorite", error);
-      showNotice("Could not save favorite to your account.");
     }
   }
 
@@ -1296,7 +1368,7 @@ export function App() {
       });
 
       const next = result.data?.createUserPlaylist ?? [];
-      setPlaylists(next);
+      applyPlaylists(next);
       setSelectedPlaylistId(next[0]?.id ?? "");
       rememberSongObjects(next.flatMap((playlist) => playlist.songs ?? []));
       await refetchLibraryState();
@@ -1330,7 +1402,7 @@ export function App() {
       });
 
       const next = result.data?.deleteUserPlaylist ?? [];
-      setPlaylists(next);
+      applyPlaylists(next);
       setSelectedPlaylistId(next[0]?.id ?? "");
       await refetchLibraryState();
 
@@ -1403,7 +1475,7 @@ export function App() {
         });
 
         const next = addResult.data?.addSongToUserPlaylist ?? [];
-        setPlaylists(next);
+        applyPlaylists(next);
         setSelectedPlaylistId(created.id);
         rememberSongObjects(next.flatMap((playlist) => playlist.songs ?? []));
         await refetchLibraryState();
@@ -1463,7 +1535,7 @@ export function App() {
       });
 
       const next = result.data?.addSongToUserPlaylist ?? [];
-      setPlaylists(next);
+      applyPlaylists(next);
       rememberSongObjects(next.flatMap((item) => item.songs ?? []));
       await refetchLibraryState();
 
@@ -1516,7 +1588,7 @@ export function App() {
       });
 
       const next = result.data?.removeSongFromUserPlaylist ?? [];
-      setPlaylists(next);
+      applyPlaylists(next);
       rememberSongObjects(next.flatMap((item) => item.songs ?? []));
       await refetchLibraryState();
 

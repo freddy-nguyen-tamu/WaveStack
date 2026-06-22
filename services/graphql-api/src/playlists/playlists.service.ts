@@ -218,7 +218,9 @@ export class PlaylistsService {
   }
 
   async getRecentlyPlayedSongs(userId: string, limit = 100): Promise<Song[]> {
-    const result = await this.database.query(
+    const safeLimit = Math.max(1, Math.min(limit, 200));
+
+    const rawResult = await this.database.query(
       `WITH latest AS (
          SELECT
            e.song_id,
@@ -231,11 +233,27 @@ export class PlaylistsService {
        FROM latest
        ORDER BY latest_started_at DESC
        LIMIT $2`,
-      [userId, Math.max(1, Math.min(limit, 200))]
+      [userId, safeLimit]
     );
 
-    const ids = this.rows<FavoriteRow>(result).map((row) => row.song_id);
-    return this.songsByIds(ids, userId);
+    const rawIds = this.rows<FavoriteRow>(rawResult).map((row) => row.song_id);
+
+    if (rawIds.length) {
+      return this.songsByIds(rawIds, userId);
+    }
+
+    const rollupResult = await this.database.query(
+      `SELECT song_id
+       FROM app_listening_monthly_rollups
+       WHERE user_id = $1
+       GROUP BY song_id
+       ORDER BY MAX(month_start) DESC, SUM(play_count) DESC, MAX(updated_at) DESC
+       LIMIT $2`,
+      [userId, safeLimit]
+    );
+
+    const rollupIds = this.rows<FavoriteRow>(rollupResult).map((row) => row.song_id);
+    return this.songsByIds(rollupIds, userId);
   }
 
   private async touchPlaylist(playlistId: string, userId: string): Promise<void> {

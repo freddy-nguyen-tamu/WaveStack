@@ -1,3 +1,4 @@
+import { UnauthorizedException } from "@nestjs/common";
 import { Args, Context, Mutation, Query, Resolver } from "@nestjs/graphql";
 import { AuthService } from "../auth/auth.service";
 import { Song } from "../music/music.models";
@@ -25,101 +26,111 @@ export class PlaylistsResolver {
   ) {}
 
   @Query(() => LibraryState)
-  async libraryState(@Context() context: GqlContext): Promise<LibraryState> {
-    const userId = this.resolveUserId(context);
-    return userId
-      ? this.playlistsService.getLibraryState(userId)
-      : { favorites: [], playlists: [], recentlyPlayed: [] };
+  libraryState(@Context() context: GqlContext): Promise<LibraryState> {
+    return this.playlistsService.getLibraryState(this.requireUserId(context));
   }
 
   @Query(() => [UserPlaylist])
-  async playlists(@Context() context: GqlContext): Promise<UserPlaylist[]> {
-    const userId = this.resolveUserId(context);
-    return userId ? this.playlistsService.getPlaylists(userId) : [];
+  playlists(@Context() context: GqlContext): Promise<UserPlaylist[]> {
+    const userId = this.resolveOptionalUserId(context);
+    return userId ? this.playlistsService.getPlaylists(userId) : Promise.resolve([]);
   }
 
   @Query(() => [Song])
-  async favoriteSongs(@Context() context: GqlContext): Promise<Song[]> {
-    const userId = this.resolveUserId(context);
-    return userId ? this.playlistsService.getFavoriteSongs(userId) : [];
+  favoriteSongs(@Context() context: GqlContext): Promise<Song[]> {
+    return this.playlistsService.getFavoriteSongs(this.requireUserId(context));
   }
 
   @Query(() => [UserPlaylist])
-  async userPlaylists(@Context() context: GqlContext): Promise<UserPlaylist[]> {
-    const userId = this.resolveUserId(context);
-    return userId ? this.playlistsService.getPlaylists(userId) : [];
+  userPlaylists(@Context() context: GqlContext): Promise<UserPlaylist[]> {
+    return this.playlistsService.getPlaylists(this.requireUserId(context));
   }
 
   @Mutation(() => [Song])
-  async favoriteSong(
+  favoriteSong(
     @Context() context: GqlContext,
     @Args("songId") songId: string
   ): Promise<Song[]> {
-    const userId = this.resolveUserId(context);
-    return userId ? this.playlistsService.favoriteSong(userId, songId) : [];
+    return this.playlistsService.favoriteSong(this.requireUserId(context), songId);
   }
 
   @Mutation(() => [Song])
-  async unfavoriteSong(
+  unfavoriteSong(
     @Context() context: GqlContext,
     @Args("songId") songId: string
   ): Promise<Song[]> {
-    const userId = this.resolveUserId(context);
-    return userId ? this.playlistsService.unfavoriteSong(userId, songId) : [];
+    return this.playlistsService.unfavoriteSong(this.requireUserId(context), songId);
   }
 
   @Mutation(() => [Song])
-  async toggleFavoriteSong(
+  toggleFavoriteSong(
     @Context() context: GqlContext,
     @Args("songId") songId: string
   ): Promise<Song[]> {
-    const userId = this.resolveUserId(context);
-    return userId ? this.playlistsService.toggleFavorite(userId, songId) : [];
+    return this.playlistsService.toggleFavorite(this.requireUserId(context), songId);
   }
 
   @Mutation(() => [UserPlaylist])
-  async createUserPlaylist(
+  createUserPlaylist(
     @Context() context: GqlContext,
     @Args("name") name: string
   ): Promise<UserPlaylist[]> {
-    const userId = this.resolveUserId(context);
-    return userId ? this.playlistsService.createPlaylist(userId, name) : [];
+    return this.playlistsService.createPlaylist(this.requireUserId(context), name);
   }
 
   @Mutation(() => [UserPlaylist])
-  async deleteUserPlaylist(
+  deleteUserPlaylist(
     @Context() context: GqlContext,
     @Args("playlistId") playlistId: string
   ): Promise<UserPlaylist[]> {
-    const userId = this.resolveUserId(context);
-    return userId ? this.playlistsService.deletePlaylist(userId, playlistId) : [];
+    return this.playlistsService.deletePlaylist(this.requireUserId(context), playlistId);
   }
 
   @Mutation(() => [UserPlaylist])
-  async addSongToUserPlaylist(
+  addSongToUserPlaylist(
     @Context() context: GqlContext,
     @Args("playlistId") playlistId: string,
     @Args("songId") songId: string
   ): Promise<UserPlaylist[]> {
-    const userId = this.resolveUserId(context);
-    return userId
-      ? this.playlistsService.addSongToPlaylist(userId, playlistId, songId)
-      : [];
+    return this.playlistsService.addSongToPlaylist(this.requireUserId(context), playlistId, songId);
   }
 
   @Mutation(() => [UserPlaylist])
-  async removeSongFromUserPlaylist(
+  removeSongFromUserPlaylist(
     @Context() context: GqlContext,
     @Args("playlistId") playlistId: string,
     @Args("songId") songId: string
   ): Promise<UserPlaylist[]> {
-    const userId = this.resolveUserId(context);
-    return userId
-      ? this.playlistsService.removeSongFromPlaylist(userId, playlistId, songId)
-      : [];
+    return this.playlistsService.removeSongFromPlaylist(this.requireUserId(context), playlistId, songId);
   }
 
-  private resolveUserId(context: GqlContext): string | null {
+  private requireUserId(context: GqlContext): string {
+    const contextUserId =
+      context.req?.user?.userId ??
+      context.req?.user?.id ??
+      context.req?.user?.sub ??
+      null;
+
+    if (contextUserId) {
+      return contextUserId;
+    }
+
+    const authHeader = context.req?.headers?.authorization ?? "";
+
+    if (!authHeader.startsWith("Bearer ")) {
+      throw new UnauthorizedException("Sign in again to load or change your WaveStack library.");
+    }
+
+    try {
+      const token = authHeader.slice(7);
+      const payload = this.authService.verifyToken(token);
+      return payload.userId;
+    } catch {
+      throw new UnauthorizedException("Your WaveStack session expired. Sign in again.");
+    }
+  }
+
+  private resolveOptionalUserId(context: GqlContext): string | null {
     const contextUserId =
       context.req?.user?.userId ??
       context.req?.user?.id ??
