@@ -269,3 +269,60 @@ export class TasteComparisonResult {
   @Field(() => [ListeningStatsEntry])
   commonArtists!: ListeningStatsEntry[];
 }
+
+@ObjectType()
+export class ArchiveReadThroughStatus {
+  @Field()
+  readThroughEnabled!: boolean;
+
+  @Field()
+  deleteAfterExport!: boolean;
+
+  @Field({ nullable: true })
+  rootFolderId?: string;
+
+  @Field({ nullable: true })
+  rootFolderWebViewLink?: string;
+
+  @Field(() => Int)
+  archiveFileCount!: number;
+
+  @Field(() => Int)
+  cachedArchiveFileCount!: number;
+
+  @Field(() => Int)
+  cachedEventCount!: number;
+
+  @Field({ nullable: true })
+  latestCachedAt?: string;
+
+  @Field({ nullable: true })
+  latestReadAt?: string;
+
+  @Field({ nullable: true })
+  message?: string;
+}
+
+@ObjectType()
+export class ArchiveWarmResult {
+  @Field()
+  ok!: boolean;
+
+  @Field()
+  message!: string;
+
+  @Field(() => Int)
+  filesScanned!: number;
+
+  @Field(() => Int)
+  filesRead!: number;
+
+  @Field(() => Int)
+  eventsCached!: number;
+
+  @Field(() => Int)
+  skippedFiles!: number;
+
+  @Field(() => [String])
+  errors!: string[];
+}

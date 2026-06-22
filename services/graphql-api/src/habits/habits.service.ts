@@ -295,7 +295,7 @@ export class HabitsService {
   private async getPlayCounts(userId: string): Promise<Map<string, number>> {
     const result = await this.database.query(
       `SELECT song_id, COUNT(*) AS play_count
-       FROM app_listening_events
+       FROM app_listening_events_combined
        WHERE user_id = $1
        GROUP BY song_id
        ORDER BY play_count DESC
@@ -319,7 +319,7 @@ export class HabitsService {
          SELECT
            COALESCE(NULLIF(artist_name, ''), 'Unknown Artist') AS artist_name,
            1::int AS play_count
-         FROM app_listening_events
+         FROM app_listening_events_combined
          WHERE user_id = $1
 
          UNION ALL
@@ -363,11 +363,11 @@ export class HabitsService {
     const result = await this.database.query(
       `SELECT song_id
        FROM (
-         SELECT song_id, MAX(started_at) AS last_played_at
-         FROM app_listening_events
-         WHERE user_id = $1
-         GROUP BY song_id
-       ) recent
+           SELECT song_id, MAX(started_at) AS last_played_at
+           FROM app_listening_events_combined
+           WHERE user_id = $1
+           GROUP BY song_id
+         ) recent
        ORDER BY last_played_at DESC
        LIMIT $2`,
       [userId, limit]
@@ -386,7 +386,7 @@ export class HabitsService {
          COALESCE(NULLIF(artist_name, ''), 'Unknown') AS label,
          COUNT(*)::int AS count,
          COALESCE(SUM(duration_seconds), 0)::float8 AS total_duration_seconds
-       FROM app_listening_events
+       FROM app_listening_events_combined
        WHERE user_id = $1 AND started_at >= now() - ${interval}
        GROUP BY label
        ORDER BY count DESC
@@ -438,7 +438,7 @@ export class HabitsService {
       const result = await this.database.query(
         `SELECT
            song_id, artist_name, title, duration_seconds, completed_play_ratio, started_at
-         FROM app_listening_events
+         FROM app_listening_events_combined
          WHERE user_id = $1 ${intervalWhere}
          ORDER BY started_at DESC
          LIMIT 5000`,
@@ -498,14 +498,14 @@ export class HabitsService {
           COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist') AS artist_name,
           1::int AS play_count,
           COALESCE(e.duration_seconds, 0)::int AS total_duration_seconds
-        FROM app_listening_events e
-        WHERE e.user_id = $1
-          ${periodWhere}
+         FROM app_listening_events_combined e
+         WHERE e.user_id = $1
+           ${periodWhere}
 
-        UNION ALL
+         UNION ALL
 
-        SELECT
-          r.song_id,
+         SELECT
+           r.song_id,
           COALESCE(NULLIF(r.title, ''), 'Unknown Track') AS title,
           COALESCE(NULLIF(r.artist_name, ''), 'Unknown Artist') AS artist_name,
           r.play_count::int AS play_count,
@@ -559,14 +559,14 @@ export class HabitsService {
           e.song_id,
           1::int AS play_count,
           COALESCE(e.duration_seconds, 0)::int AS total_duration_seconds
-        FROM app_listening_events e
-        WHERE e.user_id = $1
-          ${periodWhere}
+         FROM app_listening_events_combined e
+         WHERE e.user_id = $1
+           ${periodWhere}
 
-        UNION ALL
+         UNION ALL
 
-        SELECT
-          COALESCE(NULLIF(r.artist_name, ''), 'Unknown Artist') AS artist_name,
+         SELECT
+           COALESCE(NULLIF(r.artist_name, ''), 'Unknown Artist') AS artist_name,
           r.song_id,
           r.play_count::int AS play_count,
           r.total_duration_seconds::int AS total_duration_seconds
@@ -621,7 +621,7 @@ export class HabitsService {
          NULL AS thumbnail_url
        FROM (
          SELECT unnest(dt.genre_names) AS genre_name
-         FROM app_listening_events ale
+         FROM app_listening_events_combined ale
          LEFT JOIN drive_tracks dt ON dt.id = ale.song_id OR dt.drive_file_id = ale.song_id
          WHERE ale.user_id = $1 AND ale.started_at >= now() - ${interval}
        ) sub
@@ -645,7 +645,7 @@ export class HabitsService {
          duration_seconds,
          completed_play_ratio,
          started_at
-       FROM app_listening_events
+       FROM app_listening_events_combined
        WHERE user_id = $1 AND started_at >= now() - ${interval}
        ORDER BY started_at DESC
        LIMIT $2`,
@@ -941,14 +941,14 @@ export class HabitsService {
 
     const userPlayCountResult = await this.database.query(
       `SELECT COUNT(*)::int AS count
-       FROM app_listening_events e
+       FROM app_listening_events_combined e
        WHERE e.user_id = $1 ${periodWhere}`,
       [userId]
     );
 
     const libraryUserCountResult = await this.database.query(
       `SELECT COUNT(DISTINCT user_id)::int AS count
-       FROM app_listening_events`
+       FROM app_listening_events_combined`
     );
 
     const rareArtistsResult = await this.database.query(
@@ -958,22 +958,22 @@ export class HabitsService {
            COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist') AS artist_name,
            COUNT(*)::int AS user_plays,
            COALESCE(SUM(e.duration_seconds), 0)::float8 AS total_duration_seconds
-         FROM app_listening_events e
-         WHERE e.user_id = $1 ${periodWhere}
-         GROUP BY lower(COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')), COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')
-       ),
-       global_artists AS (
-         SELECT
-           lower(COALESCE(NULLIF(artist_name, ''), 'Unknown Artist')) AS artist_key,
-           COUNT(DISTINCT user_id)::int AS listener_count,
-           COUNT(*)::int AS global_plays
-         FROM app_listening_events
-         GROUP BY lower(COALESCE(NULLIF(artist_name, ''), 'Unknown Artist'))
-       )
-       SELECT
-         ua.artist_key AS key,
-         ua.artist_name AS label,
-         ga.listener_count::text || ' listener(s) in WaveStack' AS subtitle,
+          FROM app_listening_events_combined e
+          WHERE e.user_id = $1 ${periodWhere}
+          GROUP BY lower(COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')), COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')
+        ),
+        global_artists AS (
+          SELECT
+            lower(COALESCE(NULLIF(artist_name, ''), 'Unknown Artist')) AS artist_key,
+            COUNT(DISTINCT user_id)::int AS listener_count,
+            COUNT(*)::int AS global_plays
+          FROM app_listening_events_combined
+          GROUP BY lower(COALESCE(NULLIF(artist_name, ''), 'Unknown Artist'))
+        )
+        SELECT
+          ua.artist_key AS key,
+          ua.artist_name AS label,
+          ga.listener_count::text || ' listener(s) in WaveStack' AS subtitle,
          ROW_NUMBER() OVER (ORDER BY ga.listener_count ASC, ua.user_plays DESC, ua.artist_name ASC)::int AS rank,
          0 AS previous_rank,
          0 AS rank_change,
@@ -995,22 +995,22 @@ export class HabitsService {
            COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist') AS artist_name,
            COUNT(*)::int AS user_plays,
            COALESCE(SUM(e.duration_seconds), 0)::float8 AS total_duration_seconds
-         FROM app_listening_events e
-         WHERE e.user_id = $1 ${periodWhere}
-         GROUP BY lower(COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')), COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')
-       ),
-       global_artists AS (
-         SELECT
-           lower(COALESCE(NULLIF(artist_name, ''), 'Unknown Artist')) AS artist_key,
-           COUNT(DISTINCT user_id)::int AS listener_count,
-           COUNT(*)::int AS global_plays
-         FROM app_listening_events
-         GROUP BY lower(COALESCE(NULLIF(artist_name, ''), 'Unknown Artist'))
-       )
-       SELECT
-         ua.artist_key AS key,
-         ua.artist_name AS label,
-         ga.listener_count::text || ' listener(s) in WaveStack' AS subtitle,
+          FROM app_listening_events_combined e
+          WHERE e.user_id = $1 ${periodWhere}
+          GROUP BY lower(COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')), COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')
+        ),
+        global_artists AS (
+          SELECT
+            lower(COALESCE(NULLIF(artist_name, ''), 'Unknown Artist')) AS artist_key,
+            COUNT(DISTINCT user_id)::int AS listener_count,
+            COUNT(*)::int AS global_plays
+          FROM app_listening_events_combined
+          GROUP BY lower(COALESCE(NULLIF(artist_name, ''), 'Unknown Artist'))
+        )
+        SELECT
+          ua.artist_key AS key,
+          ua.artist_name AS label,
+          ga.listener_count::text || ' listener(s) in WaveStack' AS subtitle,
          ROW_NUMBER() OVER (ORDER BY ga.listener_count DESC, ua.user_plays DESC, ua.artist_name ASC)::int AS rank,
          0 AS previous_rank,
          0 AS rank_change,
@@ -1038,29 +1038,29 @@ export class HabitsService {
           lower(COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')) AS artist_key,
           COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist') AS artist_name,
           COUNT(*)::int AS user_plays
-        FROM app_listening_events e
-        WHERE e.user_id = $1
-          ${periodWhere}
-        GROUP BY
-          lower(COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')),
-          COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')
-      ),
-      global_artists AS (
-        SELECT
-          lower(COALESCE(NULLIF(artist_name, ''), 'Unknown Artist')) AS artist_key,
-          COUNT(DISTINCT user_id)::int AS listener_count,
-          COUNT(*)::int AS global_plays
-        FROM app_listening_events
-        GROUP BY lower(COALESCE(NULLIF(artist_name, ''), 'Unknown Artist'))
-      )
-      SELECT
-        ua.artist_key,
-        ua.artist_name,
-        ua.user_plays,
-        ga.listener_count,
-        ga.global_plays
-      FROM user_artists ua
-      INNER JOIN global_artists ga ON ga.artist_key = ua.artist_key
+         FROM app_listening_events_combined e
+         WHERE e.user_id = $1
+           ${periodWhere}
+         GROUP BY
+           lower(COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')),
+           COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')
+       ),
+       global_artists AS (
+         SELECT
+           lower(COALESCE(NULLIF(artist_name, ''), 'Unknown Artist')) AS artist_key,
+           COUNT(DISTINCT user_id)::int AS listener_count,
+           COUNT(*)::int AS global_plays
+         FROM app_listening_events_combined
+         GROUP BY lower(COALESCE(NULLIF(artist_name, ''), 'Unknown Artist'))
+       )
+       SELECT
+         ua.artist_key,
+         ua.artist_name,
+         ua.user_plays,
+         ga.listener_count,
+         ga.global_plays
+       FROM user_artists ua
+       INNER JOIN global_artists ga ON ga.artist_key = ua.artist_key
       `,
       [userId]
     );

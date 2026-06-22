@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { google, drive_v3 } from 'googleapis';
 import { GoogleAuth, OAuth2Client } from 'google-auth-library';
+import { DatabaseService } from "../database/database.service";
 
 export type ArchivedListeningEvent = {
   id?: string;
@@ -42,8 +43,21 @@ export type ListeningRollupFilePayload = {
 @Injectable()
 export class DrivePrivateExportService {
   private readonly logger = new Logger(DrivePrivateExportService.name);
+
+  constructor(
+    private readonly database: DatabaseService
+  ) {}
+
   private driveInstance: drive_v3.Drive | null = null;
   private rootFolderId: string | null = null;
+
+  static normalizeConfiguredFolderId(value: string | undefined): string | null {
+    if (!value) return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (trimmed === "TODO_FILL_LATER" || trimmed === "REPLACE_ME") return null;
+    return trimmed;
+  }
 
   private async getDrive(): Promise<drive_v3.Drive> {
     if (this.driveInstance) {
@@ -112,6 +126,147 @@ export class DrivePrivateExportService {
     const drive = await this.getDrive();
     this.rootFolderId = await this.getOrCreateFolder(drive, 'Listening_habits', null);
     return this.rootFolderId;
+  }
+
+  async ensureRootFolderAsUser(
+    userId: string,
+    refreshToken: string
+  ): Promise<{ id: string; webViewLink?: string }> {
+    const drive = await this.getUserDrive(refreshToken);
+    const existing = await this.database.query(
+      `SELECT root_folder_id, root_folder_web_view_link
+       FROM app_user_drive_archive_roots
+       WHERE user_id = $1`,
+      [userId]
+    );
+    const existingRow = existing.rows[0] as { root_folder_id: string; root_folder_web_view_link?: string } | undefined;
+    if (existingRow?.root_folder_id) {
+      try {
+        const verify = await drive.files.get({
+          fileId: existingRow.root_folder_id,
+          fields: "id,webViewLink",
+          supportsAllDrives: true
+        });
+        return { id: verify.data.id!, webViewLink: verify.data.webViewLink ?? undefined };
+      } catch {
+        this.logger.warn(`Root folder ${existingRow.root_folder_id} not accessible, creating new`);
+      }
+    }
+    const configured = process.env.LISTENING_HABITS_GOOGLE_DRIVE_FOLDER_ID;
+    const normalized = DrivePrivateExportService.normalizeConfiguredFolderId(configured);
+    if (normalized) {
+      try {
+        const verify = await drive.files.get({
+          fileId: normalized,
+          fields: "id,webViewLink",
+          supportsAllDrives: true
+        });
+        await this.database.query(
+          `INSERT INTO app_user_drive_archive_roots (user_id, root_folder_id, root_folder_web_view_link)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (user_id) DO UPDATE SET
+             root_folder_id = EXCLUDED.root_folder_id,
+             root_folder_web_view_link = EXCLUDED.root_folder_web_view_link,
+             updated_at = now()`,
+          [userId, normalized, verify.data.webViewLink ?? null]
+        );
+        return { id: normalized, webViewLink: verify.data.webViewLink ?? undefined };
+      } catch {
+        this.logger.warn(`Configured folder ${normalized} not accessible, creating new`);
+      }
+    }
+    const created = await drive.files.create({
+      requestBody: {
+        name: "Listening_habits",
+        mimeType: "application/vnd.google-apps.folder",
+        appProperties: {
+          wavestack: "true",
+          wavestackKind: "listening_habits_root"
+        }
+      },
+      fields: "id,webViewLink",
+      supportsAllDrives: true
+    });
+    await this.database.query(
+      `INSERT INTO app_user_drive_archive_roots (user_id, root_folder_id, root_folder_web_view_link)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id) DO UPDATE SET
+         root_folder_id = EXCLUDED.root_folder_id,
+         root_folder_web_view_link = EXCLUDED.root_folder_web_view_link,
+         updated_at = now()`,
+      [userId, created.data.id!, created.data.webViewLink ?? null]
+    );
+    return { id: created.data.id!, webViewLink: created.data.webViewLink ?? undefined };
+  }
+
+  async readListeningArchiveFileAsUser(
+    refreshToken: string,
+    fileId: string
+  ): Promise<ArchivedListeningEvent[]> {
+    const drive = await this.getUserDrive(refreshToken);
+    const response = await drive.files.get(
+      { fileId, alt: "media", supportsAllDrives: true },
+      { responseType: "text" }
+    );
+    const text = String(response.data ?? "");
+    return text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as ArchivedListeningEvent);
+  }
+
+  async listListeningArchiveFilesAsUser(
+    userId: string,
+    refreshToken: string,
+    fromDate: string,
+    toDate: string
+  ): Promise<Array<{ fileId: string; name: string; archiveDate: string; webViewLink?: string }>> {
+    const root = await this.ensureRootFolderAsUser(userId, refreshToken);
+    const drive = await this.getUserDrive(refreshToken);
+    const allFiles: Array<{ fileId: string; name: string; archiveDate: string; webViewLink?: string }> = [];
+    let pageToken: string | undefined;
+    do {
+      const res = await drive.files.list({
+        q: `mimeType='application/x-ndjson' and trashed=false and appProperties has { key='wavestackKind' and value='listening_events_archive' } and appProperties has { key='userId' and value='${userId}' }`,
+        fields: "nextPageToken, files(id, name, webViewLink, appProperties)",
+        pageSize: 100,
+        pageToken,
+        supportsAllDrives: true
+      });
+      for (const file of res.data.files ?? []) {
+        const name = file.name ?? "";
+        const match = name.match(/^listening-events-(\d{4}-\d{2}-\d{2})\.jsonl$/);
+        if (!match) continue;
+        const archiveDate = match[1];
+        if (archiveDate < fromDate || archiveDate > toDate) continue;
+        allFiles.push({
+          fileId: file.id!,
+          name,
+          archiveDate,
+          webViewLink: file.webViewLink ?? undefined
+        });
+      }
+      pageToken = res.data.nextPageToken ?? undefined;
+    } while (pageToken);
+    return allFiles;
+  }
+
+  private async ensureRootFolderDbRow(
+    userId: string,
+    rootFolderId: string,
+    webViewLink?: string
+  ): Promise<void> {
+    await this.database.query(
+      `INSERT INTO app_user_drive_archive_roots (user_id, root_folder_id, root_folder_name, root_folder_web_view_link)
+       VALUES ($1, $2, 'Listening_habits', $3)
+       ON CONFLICT (user_id) DO UPDATE SET
+         root_folder_id = EXCLUDED.root_folder_id,
+         root_folder_web_view_link = EXCLUDED.root_folder_web_view_link,
+         root_folder_name = EXCLUDED.root_folder_name,
+         updated_at = now()`,
+      [userId, rootFolderId, webViewLink ?? null]
+    );
   }
 
   async ensureUserFolder(userId: string): Promise<string> {
@@ -188,7 +343,8 @@ export class DrivePrivateExportService {
   }> {
     try {
       const drive = await this.getUserDrive(refreshToken);
-      const rootId = await this.ensureRootFolder();
+      const root = await this.ensureRootFolderAsUser(payload.userId, refreshToken);
+      const rootId = root.id;
       const usersFolderId = await this.ensureChildFolder(drive, rootId, "users");
       const userFolderId = await this.ensureChildFolder(drive, usersFolderId, payload.userId);
       const archiveFolderId = await this.ensureChildFolder(drive, userFolderId, "archive");
@@ -207,7 +363,13 @@ export class DrivePrivateExportService {
         requestBody: {
           name: fileName,
           parents: [monthFolderId],
-          mimeType: "application/x-ndjson"
+          mimeType: "application/x-ndjson",
+          appProperties: {
+            wavestack: "true",
+            wavestackKind: "listening_events_archive",
+            userId: payload.userId,
+            archiveDate: payload.archiveDate
+          }
         },
         media: {
           mimeType: "application/x-ndjson",
@@ -244,7 +406,8 @@ export class DrivePrivateExportService {
   }> {
     try {
       const drive = await this.getUserDrive(refreshToken);
-      const rootId = await this.ensureRootFolder();
+      const root = await this.ensureRootFolderAsUser(payload.userId, refreshToken);
+      const rootId = root.id;
       const usersFolderId = await this.ensureChildFolder(drive, rootId, "users");
       const userFolderId = await this.ensureChildFolder(drive, usersFolderId, payload.userId);
       const rollupsFolderId = await this.ensureChildFolder(drive, userFolderId, "rollups");
@@ -255,7 +418,13 @@ export class DrivePrivateExportService {
         requestBody: {
           name: fileName,
           parents: [rollupsFolderId],
-          mimeType: "application/json"
+          mimeType: "application/json",
+          appProperties: {
+            wavestack: "true",
+            wavestackKind: "listening_rollup",
+            userId: payload.userId,
+            monthStart: payload.monthStart
+          }
         },
         media: {
           mimeType: "application/json",

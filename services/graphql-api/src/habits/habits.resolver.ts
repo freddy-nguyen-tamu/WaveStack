@@ -4,6 +4,8 @@ import { HabitsService } from "./habits.service";
 import { GroqTasteService } from "./groq-taste.service";
 import { ListeningArchiveService } from "./listening-archive.service";
 import {
+  ArchiveReadThroughStatus,
+  ArchiveWarmResult,
   DriveExportResult,
   GroqDebugStatus,
   HabitSummaryEntry,
@@ -298,5 +300,34 @@ export class HabitsResolver {
       daysToKeep: daysToKeep ?? 180,
       dryRun: dryRun ?? true
     });
+  }
+
+  @Query(() => ArchiveReadThroughStatus)
+  async listeningArchiveReadThroughStatus(@Context() context: GqlContext): Promise<ArchiveReadThroughStatus> {
+    const userId = this.resolveUserId(context);
+    if (!userId) {
+      return {
+        readThroughEnabled: false,
+        deleteAfterExport: false,
+        archiveFileCount: 0,
+        cachedArchiveFileCount: 0,
+        cachedEventCount: 0,
+        message: "Not authenticated"
+      };
+    }
+    return this.listeningArchiveService.getReadThroughStatus(userId);
+  }
+
+  @Mutation(() => ArchiveWarmResult)
+  async warmListeningArchiveCache(
+    @Context() context: GqlContext,
+    @Args("period", { type: () => String, nullable: true }) period?: string,
+    @Args("force", { type: () => Boolean, nullable: true }) force?: boolean
+  ): Promise<ArchiveWarmResult> {
+    const userId = this.resolveUserId(context);
+    if (!userId) {
+      return { ok: false, message: "Not authenticated", filesScanned: 0, filesRead: 0, eventsCached: 0, skippedFiles: 0, errors: ["Not authenticated"] };
+    }
+    return this.listeningArchiveService.warmArchiveCacheForPeriod(userId, period ?? "ALL_TIME", Boolean(force));
   }
 }

@@ -227,11 +227,44 @@ export class ListeningArchiveService implements OnModuleInit, OnModuleDestroy {
 
           firstDriveFolderId = firstDriveFolderId ?? writeResult.folderId;
 
-          archivedEventIds.push(
-            ...group.events
-              .map((event) => event.id)
-              .filter((id): id is string => Boolean(id))
-          );
+          if (writeResult.fileId) {
+            const date = new Date(`${group.archiveDate}T00:00:00.000Z`);
+            const archiveYear = date.getUTCFullYear();
+            const archiveMonth = date.getUTCMonth() + 1;
+
+            await this.database.query(
+              `INSERT INTO app_listening_archive_files (
+                user_id, archive_date, archive_year, archive_month,
+                drive_file_id, drive_folder_id, file_name, event_count,
+                web_view_link, cache_status, exported_at, updated_at
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'not_cached', now(), now())
+              ON CONFLICT (user_id, archive_date) DO UPDATE SET
+                drive_file_id = EXCLUDED.drive_file_id,
+                drive_folder_id = EXCLUDED.drive_folder_id,
+                file_name = EXCLUDED.file_name,
+                event_count = EXCLUDED.event_count,
+                web_view_link = EXCLUDED.web_view_link,
+                cache_status = 'not_cached',
+                updated_at = now()`,
+              [
+                group.userId,
+                group.archiveDate,
+                archiveYear,
+                archiveMonth,
+                writeResult.fileId,
+                writeResult.folderId ?? null,
+                `listening-events-${group.archiveDate}.jsonl`,
+                group.events.length,
+                writeResult.webViewLink ?? null
+              ]
+            );
+
+            archivedEventIds.push(
+              ...group.events
+                .map((event) => event.id)
+                .filter((id): id is string => Boolean(id))
+            );
+          }
         }
 
         exportedEventCount += group.events.length;
@@ -241,19 +274,21 @@ export class ListeningArchiveService implements OnModuleInit, OnModuleDestroy {
       await this.writeMonthlyRollupFiles(candidates, dryRun, userTokens);
 
       let deletedEventCount = 0;
+      const deleteAfterExport = this.boolEnv("LISTENING_ARCHIVE_DELETE_AFTER_EXPORT", false);
 
-      if (!dryRun) {
-        const ids = archivedEventIds;
+      if (!dryRun && deleteAfterExport && archivedEventIds.length > 0) {
+        const deleteResult = await this.database.query(
+          `DELETE FROM app_listening_events
+           WHERE id = ANY($1::uuid[])`,
+          [archivedEventIds]
+        );
+        deletedEventCount = this.rowCount(deleteResult);
+      }
 
-        if (ids.length) {
-          const deleteResult = await this.database.query(
-            `DELETE FROM app_listening_events
-             WHERE id = ANY($1::uuid[])`,
-            [ids]
-          );
-
-          deletedEventCount = this.rowCount(deleteResult);
-        }
+      if (!dryRun && !deleteAfterExport && archivedEventIds.length > 0) {
+        this.logger.warn(
+          `Archive export succeeded for ${archivedEventIds.length} event(s), but LISTENING_ARCHIVE_DELETE_AFTER_EXPORT=false so hot rows were kept.`
+        );
       }
 
       await this.finishRun(runId, {
@@ -572,6 +607,304 @@ export class ListeningArchiveService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  async warmArchiveCacheForRange(options: {
+    userId: string;
+    from: Date;
+    to: Date;
+    force?: boolean;
+  }): Promise<{
+    ok: boolean;
+    message: string;
+    filesScanned: number;
+    filesRead: number;
+    eventsCached: number;
+    skippedFiles: number;
+    errors: string[];
+  }> {
+    const readThroughEnabled = this.boolEnv("LISTENING_ARCHIVE_READ_THROUGH_ENABLED", false);
+    if (!readThroughEnabled) {
+      return { ok: true, message: "Read-through disabled", filesScanned: 0, filesRead: 0, eventsCached: 0, skippedFiles: 0, errors: [] };
+    }
+
+    const restoreCacheEnabled = this.boolEnv("LISTENING_ARCHIVE_RESTORE_CACHE_ENABLED", true);
+    if (!restoreCacheEnabled) {
+      return { ok: true, message: "Restore cache disabled", filesScanned: 0, filesRead: 0, eventsCached: 0, skippedFiles: 0, errors: [] };
+    }
+
+    const errors: string[] = [];
+    let filesScanned = 0;
+    let filesRead = 0;
+    let eventsCached = 0;
+    let skippedFiles = 0;
+
+    try {
+      const userResult = await this.database.query(
+        `SELECT google_refresh_token FROM app_users WHERE id = $1`,
+        [options.userId]
+      );
+      const userRow = this.rows<{ google_refresh_token: string | null }>(userResult)[0];
+      if (!userRow?.google_refresh_token) {
+        return { ok: false, message: "No Google refresh token for user", filesScanned: 0, filesRead: 0, eventsCached: 0, skippedFiles: 0, errors: [] };
+      }
+
+      const refreshToken = userRow.google_refresh_token;
+      const fromStr = options.from.toISOString().slice(0, 10);
+      const toStr = options.to.toISOString().slice(0, 10);
+      const maxFiles = this.numberEnv("LISTENING_ARCHIVE_MAX_FILES_PER_READ", 36);
+
+      const driveFiles = await this.drivePrivateExport.listListeningArchiveFilesAsUser(
+        options.userId, refreshToken, fromStr, toStr
+      );
+
+      for (const driveFile of driveFiles) {
+        filesScanned++;
+        if (filesScanned > maxFiles) {
+          skippedFiles += driveFiles.length - filesScanned + 1;
+          break;
+        }
+
+        try {
+          const existingResult = await this.database.query(
+            `SELECT id, cache_status FROM app_listening_archive_files WHERE drive_file_id = $1`,
+            [driveFile.fileId]
+          );
+          const existingRow = this.rows<{ id: string; cache_status: string }>(existingResult)[0];
+
+          if (existingRow && existingRow.cache_status === "cached" && !options.force) {
+            skippedFiles++;
+            await this.database.query(
+              `UPDATE app_listening_archive_files SET last_read_at = now() WHERE id = $1`,
+              [existingRow.id]
+            );
+            continue;
+          }
+
+          const events = await this.drivePrivateExport.readListeningArchiveFileAsUser(refreshToken, driveFile.fileId);
+          const validEvents = events.filter((e) => e.userId === options.userId);
+
+          if (!validEvents.length) {
+            skippedFiles++;
+            continue;
+          }
+
+          let resolvedArchiveFileId: string | null = existingRow?.id ?? null;
+
+          if (!resolvedArchiveFileId) {
+            const insertResult = await this.database.query(
+              `INSERT INTO app_listening_archive_files (
+                user_id, archive_date, archive_year, archive_month,
+                drive_file_id, drive_folder_id, file_name, event_count,
+                cache_status, exported_at, updated_at
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'cached', now(), now())
+              ON CONFLICT (user_id, archive_date) DO UPDATE SET
+                drive_file_id = EXCLUDED.drive_file_id,
+                drive_folder_id = EXCLUDED.drive_folder_id,
+                file_name = EXCLUDED.file_name,
+                event_count = EXCLUDED.event_count,
+                cache_status = 'cached',
+                cached_at = now(),
+                last_read_at = now(),
+                updated_at = now()
+              RETURNING id`,
+              [
+                options.userId,
+                driveFile.archiveDate,
+                new Date(driveFile.archiveDate).getUTCFullYear(),
+                new Date(driveFile.archiveDate).getUTCMonth() + 1,
+                driveFile.fileId,
+                "",
+                driveFile.name,
+                validEvents.length
+              ]
+            );
+            const insertedArchiveFile = this.rows<{ id: string }>(insertResult)[0];
+            resolvedArchiveFileId = insertedArchiveFile?.id ?? null;
+          }
+
+          if (!resolvedArchiveFileId) {
+            skippedFiles++;
+            continue;
+          }
+
+          let insertedCount = 0;
+          for (const event of validEvents) {
+            try {
+              const originalEventId = event.id ?? null;
+
+              const insertSql = originalEventId
+                ? `INSERT INTO app_listening_archive_cached_events (
+                    archive_file_id, original_event_id, user_id, song_id,
+                    artist_name, title, duration_seconds, completed_play_ratio, started_at, cached_at
+                  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+                  ON CONFLICT (user_id, original_event_id) WHERE original_event_id IS NOT NULL DO NOTHING`
+                : `INSERT INTO app_listening_archive_cached_events (
+                    archive_file_id, original_event_id, user_id, song_id,
+                    artist_name, title, duration_seconds, completed_play_ratio, started_at, cached_at
+                  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+                  ON CONFLICT (user_id, song_id, started_at) WHERE original_event_id IS NULL DO NOTHING`;
+
+              const insertResult = await this.database.query(insertSql, [
+                resolvedArchiveFileId,
+                originalEventId,
+                event.userId,
+                event.songId,
+                event.artistName ?? "Unknown Artist",
+                event.title ?? "Unknown Track",
+                event.durationSeconds ?? 0,
+                event.completedPlayRatio ?? 0,
+                event.startedAt
+              ]);
+
+              insertedCount += this.rowCount(insertResult);
+            } catch (insertErr) {
+              this.logger.warn(`Failed to cache event: ${insertErr instanceof Error ? insertErr.message : String(insertErr)}`);
+            }
+          }
+
+          eventsCached += insertedCount;
+          filesRead++;
+
+          await this.database.query(
+            `UPDATE app_listening_archive_files
+             SET cache_status = 'cached', cached_at = now(), last_read_at = now(), event_count = $2, updated_at = now()
+             WHERE id = $1`,
+            [resolvedArchiveFileId, validEvents.length]
+          );
+        } catch (fileErr) {
+          const msg = `File ${driveFile.fileId}: ${fileErr instanceof Error ? fileErr.message : String(fileErr)}`;
+          errors.push(msg);
+          this.logger.error(msg);
+        }
+      }
+
+      return {
+        ok: true,
+        message: `Warmed cache: ${filesRead} file(s) read, ${eventsCached} event(s) cached, ${skippedFiles} skipped`,
+        filesScanned,
+        filesRead,
+        eventsCached,
+        skippedFiles,
+        errors
+      };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      errors.push(msg);
+      return {
+        ok: false,
+        message: msg,
+        filesScanned,
+        filesRead,
+        eventsCached,
+        skippedFiles,
+        errors
+      };
+    }
+  }
+
+  async getReadThroughStatus(userId: string): Promise<{
+    readThroughEnabled: boolean;
+    deleteAfterExport: boolean;
+    rootFolderId?: string;
+    rootFolderWebViewLink?: string;
+    archiveFileCount: number;
+    cachedArchiveFileCount: number;
+    cachedEventCount: number;
+    latestCachedAt?: string;
+    latestReadAt?: string;
+    message?: string;
+  }> {
+    const readThroughEnabled = this.boolEnv("LISTENING_ARCHIVE_READ_THROUGH_ENABLED", false);
+    const deleteAfterExport = this.boolEnv("LISTENING_ARCHIVE_DELETE_AFTER_EXPORT", false);
+
+    try {
+      const rootResult = await this.database.query(
+        `SELECT root_folder_id, root_folder_web_view_link
+         FROM app_user_drive_archive_roots WHERE user_id = $1`,
+        [userId]
+      );
+      const rootRow = this.rows<{ root_folder_id: string; root_folder_web_view_link?: string }>(rootResult)[0];
+
+      const fileStatsResult = await this.database.query(
+        `SELECT
+          COUNT(*)::int AS archive_file_count,
+          COUNT(*) FILTER (WHERE cache_status = 'cached')::int AS cached_file_count,
+          MAX(cached_at) AS latest_cached_at,
+          MAX(last_read_at) AS latest_read_at
+         FROM app_listening_archive_files
+         WHERE user_id = $1`,
+        [userId]
+      );
+      const statsRow = this.rows<{
+        archive_file_count: string | number;
+        cached_file_count: string | number;
+        latest_cached_at?: Date | string;
+        latest_read_at?: Date | string;
+      }>(fileStatsResult)[0];
+
+      const cachedEventsResult = await this.database.query(
+        `SELECT COUNT(*)::int AS cached_event_count
+         FROM app_listening_archive_cached_events
+         WHERE user_id = $1`,
+        [userId]
+      );
+      const cachedEventsRow = this.rows<{ cached_event_count: string | number }>(cachedEventsResult)[0];
+
+      return {
+        readThroughEnabled,
+        deleteAfterExport,
+        rootFolderId: rootRow?.root_folder_id ?? undefined,
+        rootFolderWebViewLink: rootRow?.root_folder_web_view_link ?? undefined,
+        archiveFileCount: Number(statsRow?.archive_file_count ?? 0),
+        cachedArchiveFileCount: Number(statsRow?.cached_file_count ?? 0),
+        cachedEventCount: Number(cachedEventsRow?.cached_event_count ?? 0),
+        latestCachedAt: statsRow?.latest_cached_at ? this.isoOrUndefined(statsRow.latest_cached_at) : undefined,
+        latestReadAt: statsRow?.latest_read_at ? this.isoOrUndefined(statsRow.latest_read_at) : undefined
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        readThroughEnabled,
+        deleteAfterExport,
+        archiveFileCount: 0,
+        cachedArchiveFileCount: 0,
+        cachedEventCount: 0,
+        message
+      };
+    }
+  }
+
+  async warmArchiveCacheForPeriod(userId: string, period: string, force: boolean): Promise<{
+    ok: boolean;
+    message: string;
+    filesScanned: number;
+    filesRead: number;
+    eventsCached: number;
+    skippedFiles: number;
+    errors: string[];
+  }> {
+    const readThroughEnabled = this.boolEnv("LISTENING_ARCHIVE_READ_THROUGH_ENABLED", false);
+    if (!readThroughEnabled) {
+      return { ok: true, message: "Read-through disabled", filesScanned: 0, filesRead: 0, eventsCached: 0, skippedFiles: 0, errors: [] };
+    }
+
+    const now = new Date();
+    let from: Date;
+    switch (period) {
+      case "FOUR_WEEKS": from = new Date(now.getTime() - 28 * 24 * 60 * 60 * 1000); break;
+      case "SIX_MONTHS": from = new Date(now.getTime() - 182 * 24 * 60 * 60 * 1000); break;
+      case "TWELVE_MONTHS": from = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000); break;
+      case "ALL_TIME": from = new Date("2000-01-01"); break;
+      default: from = new Date(now.getTime() - 28 * 24 * 60 * 60 * 1000); break;
+    }
+
+    return this.warmArchiveCacheForRange({
+      userId,
+      from,
+      to: now,
+      force
+    });
+  }
+
   private rows<T>(result: QueryResultLike): T[] {
     const items = Array.isArray(result) ? result : result.rows;
     return items as T[];
@@ -583,6 +916,19 @@ export class ListeningArchiveService implements OnModuleInit, OnModuleDestroy {
     }
 
     return 0;
+  }
+
+  private boolEnv(name: string, fallback: boolean): boolean {
+    const val = this.config.get<string>(name);
+    if (val === undefined || val === null) return fallback;
+    return val.toLowerCase() !== "false";
+  }
+
+  private numberEnv(name: string, fallback: number): number {
+    const val = this.config.get<string>(name);
+    if (!val) return fallback;
+    const n = Number(val);
+    return Number.isFinite(n) ? n : fallback;
   }
 
   private isoOrUndefined(value: Date | string | null | undefined): string | undefined {

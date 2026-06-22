@@ -525,6 +525,37 @@ export const ARCHIVE_OLD_LISTENING_EVENTS_MUTATION = gql`
   }
 `;
 
+export const LISTENING_ARCHIVE_READ_THROUGH_STATUS_QUERY = gql`
+  query ListeningArchiveReadThroughStatus {
+    listeningArchiveReadThroughStatus {
+      readThroughEnabled
+      deleteAfterExport
+      rootFolderId
+      rootFolderWebViewLink
+      archiveFileCount
+      cachedArchiveFileCount
+      cachedEventCount
+      latestCachedAt
+      latestReadAt
+      message
+    }
+  }
+`;
+
+export const WARM_LISTENING_ARCHIVE_CACHE_MUTATION = gql`
+  mutation WarmListeningArchiveCache($period: String, $force: Boolean) {
+    warmListeningArchiveCache(period: $period, force: $force) {
+      ok
+      message
+      filesScanned
+      filesRead
+      eventsCached
+      skippedFiles
+      errors
+    }
+  }
+`;
+
 export const REPAIR_EMBEDDED_LYRICS_FOR_SONG_MUTATION = gql`
   mutation RepairEmbeddedLyricsForSong($songId: String!) {
     repairEmbeddedLyricsForSong(songId: $songId) {
