@@ -1023,8 +1023,11 @@ export function App() {
       return null;
     }
 
-    const nextSong = latestQueue[latestQueue.length - 1];
-    const remainingQueue = latestQueue.slice(0, -1);
+    const [nextSong, ...remainingQueue] = latestQueue;
+
+    if (!nextSong) {
+      return null;
+    }
 
     queueRef.current = remainingQueue;
     setQueue(remainingQueue);
@@ -1082,35 +1085,29 @@ export function App() {
     const currentIndex = contextSongs.findIndex((song) => song.id === currentSongId);
 
     if (currentIndex < 0) {
-      return getUnplayedSongs(contextSongs, currentSongId)[0] ?? contextSongs[0] ?? null;
+      return null;
     }
 
-    const afterCurrent = contextSongs.slice(currentIndex + 1).find((song) => !playedSinceManualPlayIdsRef.current.has(song.id));
-
-    if (afterCurrent) {
-      return afterCurrent;
-    }
-
-    return contextSongs.slice(0, currentIndex).find((song) => !playedSinceManualPlayIdsRef.current.has(song.id)) ?? null;
+    return contextSongs[currentIndex + 1] ?? null;
   }
 
   function findNextRepeatAllSong(contextSongs: Song[], currentSong: Song, shuffle: boolean): Song | null {
-    const freshCandidates = resetExhaustedRepeatSession(currentSong);
-
-    if (!freshCandidates.length) {
+    if (contextSongs.length <= 1) {
       return null;
     }
 
     if (shuffle) {
+      const freshCandidates = resetExhaustedRepeatSession(currentSong);
       return pickRandomSong(freshCandidates);
     }
 
     const currentIndex = contextSongs.findIndex((song) => song.id === currentSong.id);
-    return (
-      contextSongs.slice(Math.max(0, currentIndex + 1)).find((song) => song.id !== currentSong.id) ??
-      contextSongs.find((song) => song.id !== currentSong.id) ??
-      null
-    );
+
+    if (currentIndex < 0) {
+      return contextSongs[0] ?? null;
+    }
+
+    return contextSongs[(currentIndex + 1) % contextSongs.length] ?? null;
   }
 
   function resolveNextSongFromCurrentPolicy(reason: PlaybackAdvanceReason): Song | null {
@@ -1135,13 +1132,13 @@ export function App() {
       return null;
     }
 
-    playedSinceManualPlayIdsRef.current.add(latestCurrentSong.id);
-
     if (latestRepeatMode === "one" && reason === "ended") {
       return latestCurrentSong;
     }
 
     if (latestShuffleEnabled) {
+      playedSinceManualPlayIdsRef.current.add(latestCurrentSong.id);
+
       const shuffledPick = pickRandomSong(getUnplayedSongs(contextSongs, latestCurrentSong.id));
 
       if (shuffledPick) {
