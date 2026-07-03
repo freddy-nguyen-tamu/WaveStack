@@ -2,7 +2,7 @@ import { Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@apollo/client";
 import { SONG_PAGE_QUERY } from "../../api";
-import type { ClientPlaylist, Song } from "../../App";
+import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../../App";
 import { formatSongDisplayName } from "../../song-format";
 import { SongListRow } from "../../components/SongListRow";
 import { PaginationBar } from "../../components/PaginationBar";
@@ -35,10 +35,10 @@ type SearchPanelProps = {
   emptyMessage?: string;
   backendSearch?: boolean;
   onAddToPlaylist: (playlistId: string, song: Song) => void;
-  onPlay: (song: Song) => void;
+  onPlay: PlaySongHandler;
   onQueue: (song: Song) => void;
   onToggleFavorite: (song: Song) => void;
-  onOpenDetails: (song: Song) => void;
+  onOpenDetails: OpenSongDetailsHandler;
 };
 
 const PAGE_SIZE = 30;
@@ -164,6 +164,14 @@ export function SearchPanel({
   const currentPage = Math.min(page, pageCount);
   const pagedResults = results.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
   const displayedResults = backendSearch ? results : pagedResults;
+  const playbackSource: PlaybackContext["source"] =
+    title === "Favorites" ? "favorites" : title === "Recently Played" ? "recent" : "search";
+  const playbackContext = useMemo<PlaybackContext>(() => ({
+    id: `${pageKey}:${backendSearch ? "backend" : "local"}:${debouncedQuery || query.trim() || "all"}`,
+    label: debouncedQuery || query.trim() ? `${title}: ${debouncedQuery || query.trim()}` : title,
+    source: playbackSource,
+    songs: results
+  }), [backendSearch, debouncedQuery, pageKey, playbackSource, query, results, title]);
 
   useEffect(() => {
     setQuery("");
@@ -192,7 +200,7 @@ export function SearchPanel({
   }, [message]);
 
   function play(song: Song) {
-    onPlay(song);
+    onPlay(song, playbackContext);
     setMessage(`Playing: ${formatSongDisplayName(song)}`);
   }
 
@@ -243,6 +251,7 @@ export function SearchPanel({
                 index={backendSearch ? index : (currentPage - 1) * PAGE_SIZE + index}
                 playlists={playlists}
                 favoriteIds={favoriteIds}
+                playbackContext={playbackContext}
                 onPlay={play}
                 onQueue={queue}
                 onToggleFavorite={(item) => toggleFavorite(item, favoriteIds.includes(item.id))}

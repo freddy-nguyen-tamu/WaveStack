@@ -8,7 +8,7 @@ import {
 } from "react";
 import { useQuery } from "@apollo/client";
 import { SONG_PAGE_QUERY } from "../../api";
-import type { ClientPlaylist, Song } from "../../App";
+import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../../App";
 import { SongListRow } from "../../components/SongListRow";
 import { formatSongDisplayName } from "../../song-format";
 
@@ -37,11 +37,11 @@ type AllPageProps = {
   localTracks?: Song[];
   playlists: ClientPlaylist[];
   favoriteIds: string[];
-  onPlay: (song: Song) => void;
+  onPlay: PlaySongHandler;
   onQueue: (song: Song) => void;
   onToggleFavorite: (song: Song) => void;
   onAddToPlaylist: (playlistId: string, song: Song) => void;
-  onOpenDetails?: (song: Song) => void;
+  onOpenDetails?: OpenSongDetailsHandler;
 };
 
 type SortMode = "az" | "artist" | "newest" | "oldest";
@@ -189,6 +189,12 @@ export function AllPage({
 
   const visibleSongs = filteredSongs.slice(0, visibleCount);
   const hasMore = visibleSongs.length < filteredSongs.length;
+  const playbackContext = useMemo<PlaybackContext>(() => ({
+    id: `all:${backendSort}:${debouncedQuery || "all"}`,
+    label: debouncedQuery ? `All Songs: ${debouncedQuery}` : `All Songs (${sortMode})`,
+    source: "all",
+    songs: filteredSongs
+  }), [backendSort, debouncedQuery, filteredSongs, sortMode]);
 
   const loadMoreBackendSongs = useCallback(async () => {
     if (!hasMoreBackendSongs || !backendEndCursor) {
@@ -419,6 +425,7 @@ export function AllPage({
               index={index}
               playlists={playlists}
               favoriteIds={favoriteIds}
+              playbackContext={playbackContext}
               onPlay={onPlay}
               onQueue={onQueue}
               onToggleFavorite={onToggleFavorite}

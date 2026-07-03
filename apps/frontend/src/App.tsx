@@ -71,6 +71,9 @@ export type PlaybackContext = {
   source: "all" | "dashboard" | "search" | "favorites" | "recent" | "playlist" | "profile" | "manual";
 };
 
+export type PlaySongHandler = (song: Song, context?: PlaybackContext) => void;
+export type OpenSongDetailsHandler = (song: Song, context?: PlaybackContext) => void;
+
 export type RecommendResult = {
   song: Song;
   reason: string;
@@ -359,6 +362,7 @@ export function App() {
 
   const [queueDrawerOpen, setQueueDrawerOpen] = useState(false);
   const [detailsSong, setDetailsSong] = useState<Song | null>(null);
+  const [detailsPlaybackContext, setDetailsPlaybackContext] = useState<PlaybackContext | null>(null);
   const pendingNavScrollRef = useRef(false);
 
   const [playbackContext, setPlaybackContext] = useState<PlaybackContext>(() => ({
@@ -739,6 +743,7 @@ export function App() {
   useEffect(() => {
     if (!detailsSong) {
       document.body.classList.remove("modal-open");
+      setDetailsPlaybackContext(null);
       return;
     }
 
@@ -747,6 +752,7 @@ export function App() {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setDetailsSong(null);
+        setDetailsPlaybackContext(null);
       }
     }
 
@@ -1027,7 +1033,7 @@ export function App() {
   }
 
   function getPolicySongs(context: PlaybackContext): Song[] {
-    if (context.source === "all" || context.source === "dashboard") {
+    if (context.source === "dashboard") {
       const fullLibrary = allKnownSongsRef.current.filter(Boolean);
 
       if (fullLibrary.length > context.songs.length) {
@@ -1283,6 +1289,25 @@ export function App() {
       source: "manual",
       songs: allKnownSongsRef.current.length ? allKnownSongsRef.current : [song]
     });
+  }
+
+  function openDetails(song: Song, context?: PlaybackContext) {
+    setDetailsSong(song);
+    setDetailsPlaybackContext(context ?? null);
+  }
+
+  function closeDetails() {
+    setDetailsSong(null);
+    setDetailsPlaybackContext(null);
+  }
+
+  function playDetailsSong(song: Song) {
+    if (detailsPlaybackContext?.songs.some((item) => item.id === song.id)) {
+      playSongFromContext(song, detailsPlaybackContext);
+      return;
+    }
+
+    playSong(song);
   }
 
   function queueSong(song: Song) {
@@ -1999,7 +2024,7 @@ export function App() {
     title: string,
     pageSongs: Song[],
     emptyMessage: string,
-    contextPlay?: (song: Song) => void,
+    contextPlay?: PlaySongHandler,
     backendSearch = false
   ) {
     return (
@@ -2017,7 +2042,7 @@ export function App() {
           onPlay={contextPlay ?? playSong}
           onQueue={queueSong}
           onToggleFavorite={toggleFavorite}
-          onOpenDetails={setDetailsSong}
+          onOpenDetails={openDetails}
         />
       </section>
     );
@@ -2120,7 +2145,7 @@ export function App() {
             onCycleRepeatMode={cycleRepeatMode}
             onQueueChange={setQueue}
             onActiveSongChange={(song) => startSong(song)}
-            onOpenDetails={setDetailsSong}
+            onOpenDetails={openDetails}
             onNext={() => playNextFromPolicy("manual")}
             onPrevious={playPreviousFromHistory}
             onEnded={() => playNextFromPolicy("ended")}
@@ -2139,9 +2164,9 @@ export function App() {
                 localTracks={localTracks}
                 playlists={playlists}
                 favoriteIds={favoriteIds}
-                onPlay={(song: Song) =>
-                  playSongFromContext(song, {
-                    id: `all:az`,
+                onPlay={(song: Song, context?: PlaybackContext) =>
+                  playSongFromContext(song, context ?? {
+                    id: "all:fallback",
                     label: "All Songs",
                     source: "all",
                     songs: allKnownSongs
@@ -2150,7 +2175,7 @@ export function App() {
                 onQueue={queueSong}
                 onToggleFavorite={toggleFavorite}
                 onAddToPlaylist={addToPlaylist}
-                onOpenDetails={setDetailsSong}
+                onOpenDetails={openDetails}
               />
             </section>
           }
@@ -2195,8 +2220,8 @@ export function App() {
             "Search",
             allKnownSongs,
             "No songs found.",
-            (song: Song) =>
-              playSongFromContext(song, {
+            (song: Song, context?: PlaybackContext) =>
+              playSongFromContext(song, context ?? {
                 id: "search",
                 label: "Search",
                 source: "search",
@@ -2218,8 +2243,8 @@ export function App() {
         />
         <Route
           path="/favorites"
-          element={renderSongsPage("Favorites", favoriteSongs, "No favorite songs yet. Click Favorite on a song first.", (song: Song) =>
-            playSongFromContext(song, {
+          element={renderSongsPage("Favorites", favoriteSongs, "No favorite songs yet. Click Favorite on a song first.", (song: Song, context?: PlaybackContext) =>
+            playSongFromContext(song, context ?? {
               id: "favorites",
               label: "Favorites",
               source: "favorites",
@@ -2229,8 +2254,8 @@ export function App() {
         />
         <Route
           path="/recent"
-          element={renderSongsPage("Recently Played", recentSongs, "No recently played songs yet. Click Play on a song first.", (song: Song) =>
-            playSongFromContext(song, {
+          element={renderSongsPage("Recently Played", recentSongs, "No recently played songs yet. Click Play on a song first.", (song: Song, context?: PlaybackContext) =>
+            playSongFromContext(song, context ?? {
               id: "recent",
               label: "Recent",
               source: "recent",
@@ -2252,8 +2277,8 @@ export function App() {
                 onDeletePlaylist={deletePlaylist}
                 onAddToPlaylist={addToPlaylist}
                 onRemoveFromPlaylist={removeFromPlaylist}
-                onPlay={(song: Song) =>
-                  playSongFromContext(song, {
+                onPlay={(song: Song, context?: PlaybackContext) =>
+                  playSongFromContext(song, context ?? {
                     id: `playlist:${selectedPlaylistId}`,
                     label: playlists.find((p) => p.id === selectedPlaylistId)?.name ?? "Playlist",
                     source: "playlist",
@@ -2262,7 +2287,7 @@ export function App() {
                 }
                 onQueue={queueSong}
                 onToggleFavorite={toggleFavorite}
-                onOpenDetails={setDetailsSong}
+                onOpenDetails={openDetails}
               />
             </section>
           }
@@ -2275,8 +2300,8 @@ export function App() {
                 songs={allKnownSongs}
                 playlists={playlists}
                 favoriteIds={favoriteIds}
-                onPlay={(song: Song) =>
-                  playSongFromContext(song, {
+                onPlay={(song: Song, context?: PlaybackContext) =>
+                  playSongFromContext(song, context ?? {
                     id: "stats",
                     label: "Stats",
                     source: "manual",
@@ -2302,8 +2327,8 @@ export function App() {
                 queueLength={queue.length}
                 habitSummaries={habitSummaries}
                 onLogout={logout}
-                onPlay={(song: Song) =>
-                  playSongFromContext(song, {
+                onPlay={(song: Song, context?: PlaybackContext) =>
+                  playSongFromContext(song, context ?? {
                     id: "profile",
                     label: "Profile",
                     source: "profile",
@@ -2313,7 +2338,7 @@ export function App() {
                 onQueue={queueSong}
                 onToggleFavorite={toggleFavorite}
                 onAddToPlaylist={addToPlaylist}
-                onOpenDetails={setDetailsSong}
+                onOpenDetails={openDetails}
               />
           }
         />
@@ -2328,13 +2353,13 @@ export function App() {
       {detailsSong ? (
         <SongMetadataModal
           song={detailsSong}
-          onPlay={() => playSong(detailsSong)}
+          onPlay={() => playDetailsSong(detailsSong)}
           onQueue={() => queueSong(detailsSong)}
           isFavorite={favoriteIds.includes(detailsSong.id)}
           playlists={playlists}
           onToggleFavorite={() => toggleFavorite(detailsSong)}
           onAddToPlaylist={(playlistId) => addToPlaylist(playlistId, detailsSong)}
-          onClose={() => setDetailsSong(null)}
+          onClose={closeDetails}
         />
       ) : null}
 
@@ -2345,14 +2370,19 @@ export function App() {
         playlists={playlists}
         favoriteIds={favoriteIds}
         onClose={() => setQueueDrawerOpen(false)}
-        onPlay={(song) => {
-          playSong(song);
+        onPlay={(song, context) => {
+          playSongFromContext(song, context ?? {
+            id: "queue",
+            label: "Queue",
+            source: "manual",
+            songs: queue.length ? queue : [song]
+          });
         }}
         onQueue={queueSong}
         onToggleFavorite={toggleFavorite}
         onAddToPlaylist={addToPlaylist}
         onRemove={removeFromQueue}
-        onOpenDetails={setDetailsSong}
+        onOpenDetails={openDetails}
         onClear={() => {
           queueRef.current = [];
           setQueue([]);

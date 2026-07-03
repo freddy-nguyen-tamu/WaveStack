@@ -1,6 +1,6 @@
 import { ListPlus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { ClientPlaylist, Song } from "../../App";
+import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../../App";
 import { formatSongDisplayName } from "../../song-format";
 import { SongListRow } from "../../components/SongListRow";
 import { PaginationBar } from "../../components/PaginationBar";
@@ -15,10 +15,10 @@ type PlaylistPanelProps = {
   onDeletePlaylist: (playlistId: string) => void;
   onAddToPlaylist: (playlistId: string, song: Song) => void;
   onRemoveFromPlaylist: (playlistId: string, songId: string) => void;
-  onPlay: (song: Song) => void;
+  onPlay: PlaySongHandler;
   onQueue: (song: Song) => void;
   onToggleFavorite: (song: Song) => void;
-  onOpenDetails: (song: Song) => void;
+  onOpenDetails: OpenSongDetailsHandler;
 };
 
 const PAGE_SIZE = 30;
@@ -73,6 +73,18 @@ export function PlaylistPanel({
   const pageCount = Math.max(1, Math.ceil(libraryResults.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
   const pagedSongs = libraryResults.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const selectedPlaylistContext = useMemo<PlaybackContext>(() => ({
+    id: selectedPlaylist ? `playlist:${selectedPlaylist.id}` : "playlist:none",
+    label: selectedPlaylist?.name ?? "Playlist",
+    source: "playlist",
+    songs: selectedPlaylistSongs
+  }), [selectedPlaylist, selectedPlaylistSongs]);
+  const libraryPlaybackContext = useMemo<PlaybackContext>(() => ({
+    id: `playlist-library:${query.trim() || "all"}`,
+    label: query.trim() ? `Playlist library: ${query.trim()}` : "Playlist library",
+    source: "all",
+    songs: libraryResults
+  }), [libraryResults, query]);
 
   useEffect(() => {
     setPage(1);
@@ -134,8 +146,8 @@ export function PlaylistPanel({
     setMessage(`Removed ${formatSongDisplayName(song)} from ${selectedPlaylist.name}.`);
   }
 
-  function play(song: Song) {
-    onPlay(song);
+  function play(song: Song, context?: PlaybackContext) {
+    onPlay(song, context);
     setMessage(`Playing: ${formatSongDisplayName(song)}`);
   }
 
@@ -198,6 +210,7 @@ export function PlaylistPanel({
                   index={index}
                   playlists={playlists}
                   favoriteIds={favoriteIds}
+                  playbackContext={selectedPlaylistContext}
                   onPlay={play}
                   onQueue={queue}
                   onToggleFavorite={(item) => toggleFavorite(item, favoriteIds.includes(item.id))}
@@ -237,6 +250,7 @@ export function PlaylistPanel({
               index={(currentPage - 1) * PAGE_SIZE + index}
               playlists={playlists}
               favoriteIds={favoriteIds}
+              playbackContext={libraryPlaybackContext}
               onPlay={play}
               onQueue={queue}
               onToggleFavorite={(item) => toggleFavorite(item, favoriteIds.includes(item.id))}

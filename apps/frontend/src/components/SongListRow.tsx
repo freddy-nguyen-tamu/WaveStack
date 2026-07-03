@@ -1,4 +1,4 @@
-import type { ClientPlaylist, Song } from "../App";
+import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../App";
 import { formatSeconds, formatSongDisplayName } from "../song-format";
 import { SongActions } from "./SongActions";
 import { SongArtwork } from "./SongArtwork";
@@ -10,11 +10,12 @@ type SongListRowProps = {
   index?: number;
   meta?: string;
   extraActions?: React.ReactNode;
-  onPlay: (song: Song) => void;
+  playbackContext?: PlaybackContext;
+  onPlay: PlaySongHandler;
   onQueue: (song: Song) => void;
   onToggleFavorite: (song: Song) => void;
   onAddToPlaylist: (playlistId: string, song: Song) => void;
-  onOpenDetails?: (song: Song) => void;
+  onOpenDetails?: OpenSongDetailsHandler;
 };
 
 export function SongListRow({
@@ -23,6 +24,7 @@ export function SongListRow({
   favoriteIds,
   index,
   meta,
+  playbackContext,
   onPlay,
   onQueue,
   onToggleFavorite,
@@ -38,7 +40,7 @@ export function SongListRow({
       <button
         type="button"
         className="song-list-row__identity"
-        onClick={() => onOpenDetails?.(song)}
+        onClick={() => onOpenDetails?.(song, playbackContext)}
         aria-label={`Open details for ${displayName}`}
       >
         <SongArtwork
@@ -67,6 +69,7 @@ export function SongListRow({
           song={song}
           playlists={playlists}
           isFavorite={favoriteIds.includes(song.id)}
+          playbackContext={playbackContext}
           onPlay={onPlay}
           onQueue={onQueue}
           onToggleFavorite={onToggleFavorite}

@@ -1,6 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { X, Trash2 } from "lucide-react";
-import type { ClientPlaylist, Song } from "../../App";
+import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../../App";
 import { formatSongDisplayName } from "../../song-format";
 import { SongActions } from "../../components/SongActions";
 import { SongIdentityButton } from "../../components/SongIdentityButton";
@@ -12,13 +12,13 @@ type QueueDrawerProps = {
   playlists: ClientPlaylist[];
   favoriteIds: string[];
   onClose: () => void;
-  onPlay: (song: Song) => void;
+  onPlay: PlaySongHandler;
   onQueue: (song: Song) => void;
   onToggleFavorite: (song: Song) => void;
   onAddToPlaylist: (playlistId: string, song: Song) => void;
   onRemove: (songId: string) => void;
   onClear: () => void;
-  onOpenDetails: (song: Song) => void;
+  onOpenDetails: OpenSongDetailsHandler;
 };
 
 export function QueueDrawer({
@@ -36,6 +36,13 @@ export function QueueDrawer({
   onClear,
   onOpenDetails
 }: QueueDrawerProps) {
+  const queuePlaybackContext = useMemo<PlaybackContext>(() => ({
+    id: "queue",
+    label: "Queue",
+    source: "manual",
+    songs: queue
+  }), [queue]);
+
   useEffect(() => {
     if (!open) return;
 
@@ -109,6 +116,7 @@ export function QueueDrawer({
                         artClassName="song-list-row__art queue-drawer__art"
                         fallbackClassName="song-list-row__art-fallback"
                         imageClassName="song-list-row__art-image"
+                        playbackContext={queuePlaybackContext}
                         onOpenDetails={onOpenDetails}
                       />
                       <div className="queue-drawer__body">
@@ -117,6 +125,7 @@ export function QueueDrawer({
                           song={song}
                           playlists={playlists}
                           isFavorite={favoriteIds.includes(song.id)}
+                          playbackContext={queuePlaybackContext}
                           onPlay={onPlay}
                           onQueue={onQueue}
                           onToggleFavorite={onToggleFavorite}

@@ -1,4 +1,4 @@
-import type { Song } from "../App";
+import type { OpenSongDetailsHandler, PlaybackContext, Song } from "../App";
 import { formatSongDisplayName } from "../song-format";
 import { SongArtwork } from "./SongArtwork";
 
@@ -11,7 +11,8 @@ type SongIdentityButtonProps = {
   fallbackClassName?: string;
   imageClassName?: string;
   bodyClassName?: string;
-  onOpenDetails: (song: Song) => void;
+  playbackContext?: PlaybackContext;
+  onOpenDetails: OpenSongDetailsHandler;
 };
 
 export function SongIdentityButton({
@@ -23,13 +24,14 @@ export function SongIdentityButton({
   fallbackClassName = "song-list-row__art-fallback",
   imageClassName = "song-list-row__art-image",
   bodyClassName = "song-identity-button__body",
+  playbackContext,
   onOpenDetails
 }: SongIdentityButtonProps) {
   return (
     <button
       type="button"
       className={className}
-      onClick={() => onOpenDetails(song)}
+      onClick={() => onOpenDetails(song, playbackContext)}
       aria-label={`Open details for ${formatSongDisplayName(song)}`}
     >
       <SongArtwork

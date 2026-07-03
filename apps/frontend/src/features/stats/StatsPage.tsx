@@ -18,7 +18,7 @@ import {
   TOP_GENRES_QUERY,
   TOP_TRACKS_QUERY
 } from "../../api";
-import type { ClientPlaylist, Song } from "../../App";
+import type { ClientPlaylist, PlaybackContext, PlaySongHandler, Song } from "../../App";
 import { SongActions } from "../../components/SongActions";
 import { StatsPieChart } from "./components/StatsPieChart";
 import { StatsReceipt } from "./components/StatsReceipt";
@@ -77,7 +77,7 @@ type StatsPageProps = {
   songs: Song[];
   playlists: ClientPlaylist[];
   favoriteIds: string[];
-  onPlay: (song: Song) => void;
+  onPlay: PlaySongHandler;
   onQueue: (song: Song) => void;
   onToggleFavorite: (song: Song) => void;
   onAddToPlaylist: (playlistId: string, song: Song) => void;
@@ -140,6 +140,27 @@ export function StatsPage({
   const genreEntries: StatsEntry[] = useMemo(() => genresData?.topGenres ?? [], [genresData]);
   const recentEntries: RecentlyPlayedEntry[] = useMemo(() => recentData?.recentlyPlayedDetailed ?? [], [recentData]);
   const songById = useMemo(() => new Map(songs.map((song) => [song.id, song])), [songs]);
+  const recentSongsForPlayback = useMemo(() => {
+    const seen = new Set<string>();
+    const orderedSongs: Song[] = [];
+
+    for (const entry of recentEntries) {
+      const song = songById.get(entry.songId);
+
+      if (song && !seen.has(song.id)) {
+        seen.add(song.id);
+        orderedSongs.push(song);
+      }
+    }
+
+    return orderedSongs;
+  }, [recentEntries, songById]);
+  const recentPlaybackContext = useMemo<PlaybackContext>(() => ({
+    id: `stats:recent:${period}`,
+    label: `Stats recently played (${PERIOD_LABEL_MAP[period] ?? period})`,
+    source: "recent",
+    songs: recentSongsForPlayback
+  }), [period, recentSongsForPlayback]);
 
   useEffect(() => {
     if (period) {
@@ -238,6 +259,7 @@ export function StatsPage({
                   song={song}
                   playlists={playlists}
                   isFavorite={favoriteIds.includes(song.id)}
+                  playbackContext={recentPlaybackContext}
                   onPlay={onPlay}
                   onQueue={onQueue}
                   onToggleFavorite={onToggleFavorite}

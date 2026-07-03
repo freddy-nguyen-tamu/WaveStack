@@ -1,13 +1,14 @@
 import { Heart, ListMusic, ListPlus, Play } from "lucide-react";
 import { useId, useState } from "react";
-import type { ClientPlaylist, Song } from "../App";
+import type { ClientPlaylist, PlaybackContext, PlaySongHandler, Song } from "../App";
 import { formatSongDisplayName } from "../song-format";
 
 type SongActionsProps = {
   song: Song;
   playlists: ClientPlaylist[];
   isFavorite: boolean;
-  onPlay: (song: Song) => void;
+  playbackContext?: PlaybackContext;
+  onPlay: PlaySongHandler;
   onQueue: (song: Song) => void;
   onToggleFavorite: (song: Song) => void;
   onAddToPlaylist: (playlistId: string, song: Song) => void | Promise<void>;
@@ -18,6 +19,7 @@ export function SongActions({
   song,
   playlists,
   isFavorite,
+  playbackContext,
   onPlay,
   onQueue,
   onToggleFavorite,
@@ -36,7 +38,7 @@ export function SongActions({
   return (
     <div className={className ? `song-actions ${className}` : "song-actions"}>
       <div className="song-actions__buttons">
-        <button type="button" onClick={() => onPlay(song)}>
+        <button type="button" onClick={() => onPlay(song, playbackContext)}>
           <Play aria-hidden="true" /> Play now
         </button>
 

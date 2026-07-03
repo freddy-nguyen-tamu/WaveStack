@@ -1,6 +1,7 @@
 import { CalendarDays, Clock, DownloadCloud, Heart, ListMusic, UserCircle } from "lucide-react";
+import { useMemo } from "react";
 import { useMutation } from "@apollo/client";
-import type { AuthUser, ClientPlaylist, HabitSummaryEntry, Song } from "../../App";
+import type { AuthUser, ClientPlaylist, HabitSummaryEntry, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../../App";
 import { EXPORT_LISTENING_HABITS_MUTATION, TEST_PRIVATE_DRIVE_WRITE_MUTATION } from "../../api";
 import { formatSeconds, formatSongDisplayName } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
@@ -26,11 +27,11 @@ type ProfilePageProps = {
   queueLength: number;
   habitSummaries: Record<string, HabitSummaryEntry[]>;
   onLogout: () => void;
-  onPlay: (song: Song) => void;
+  onPlay: PlaySongHandler;
   onQueue: (song: Song) => void;
   onToggleFavorite: (song: Song) => void;
   onAddToPlaylist: (playlistId: string, song: Song) => void;
-  onOpenDetails: (song: Song) => void;
+  onOpenDetails: OpenSongDetailsHandler;
 };
 
 const periodLabels: Record<string, string> = {
@@ -67,6 +68,12 @@ export function ProfilePage({
     exportResult.data?.exportListeningHabits ??
     testResult.data?.testPrivateDriveWrite ??
     null;
+  const recentPlaybackContext = useMemo<PlaybackContext>(() => ({
+    id: "profile:recent",
+    label: "Profile recently played",
+    source: "profile",
+    songs: recentlyPlayed
+  }), [recentlyPlayed]);
 
   if (!user) {
     return (
@@ -180,12 +187,14 @@ export function ProfilePage({
                   className="song-identity-button profile-song-list__identity"
                   artClassName="profile-song-list__art"
                   fallbackClassName="profile-song-list__fallback"
+                  playbackContext={recentPlaybackContext}
                   onOpenDetails={onOpenDetails}
                 />
                 <SongActions
                   song={song}
                   playlists={playlists}
                   isFavorite={favoriteIds.includes(song.id)}
+                  playbackContext={recentPlaybackContext}
                   onPlay={onPlay}
                   onQueue={onQueue}
                   onToggleFavorite={onToggleFavorite}
