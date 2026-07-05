@@ -1,9 +1,9 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { DriveSyncResult } from "./music.models";
+import { DriveSyncResult, Song, TitleArtistRepairResult } from "./music.models";
 import { GoogleDriveService } from "./google-drive.service";
 import { DriveTrackRepository } from "./drive-track.repository";
 import { ThumbnailCacheService } from "./thumbnail-cache.service";
-import { TitleArtistRepairService } from "./title-artist-repair.service";
+import { DriveTitleArtistService } from "./drive-title-artist.service";
 
 @Injectable()
 export class DriveLibrarySyncService {
@@ -14,7 +14,7 @@ export class DriveLibrarySyncService {
     private readonly googleDriveService: GoogleDriveService,
     private readonly driveTrackRepository: DriveTrackRepository,
     private readonly thumbnailCacheService: ThumbnailCacheService,
-    private readonly titleArtistRepairService: TitleArtistRepairService
+    private readonly driveTitleArtistService: DriveTitleArtistService
   ) {}
 
   async syncDriveLibrary(): Promise<DriveSyncResult> {
@@ -34,6 +34,8 @@ export class DriveLibrarySyncService {
     let scannedCount = 0;
     let upsertedCount = 0;
     let thumbnailCount = 0;
+    let repairedCount = 0;
+    let failedCount = 0;
 
     try {
       const songs = await this.googleDriveService.listSongs();
@@ -50,6 +52,12 @@ export class DriveLibrarySyncService {
         }
       }
 
+      // Fix title/artist from embedded ID3 tags for every song just synced.
+      // This runs BEFORE finishSyncRun so any error is caught and reported.
+      const sweepResult = await this.sweepSongs(songs);
+      repairedCount = sweepResult.repairedCount;
+      failedCount = sweepResult.failedCount;
+
       await this.driveTrackRepository.finishSyncRun(runId, {
         status: "success",
         scannedCount,
@@ -57,14 +65,18 @@ export class DriveLibrarySyncService {
         thumbnailCount
       });
 
-      // Block until all new tracks have had their title/artist fixed
-      // from embedded ID3 tags. This guarantees that after one sync
-      // returns, every track's title and artist is correct.
-      await this.sweepNewTracks();
+      const parts: string[] = [];
+      parts.push(`Synced ${upsertedCount} track(s) and generated ${thumbnailCount} thumbnail(s).`);
+      if (repairedCount > 0) {
+        parts.push(`Fixed title/artist from ID3 tags for ${repairedCount} track(s).`);
+      }
+      if (failedCount > 0) {
+        parts.push(`${failedCount} track(s) had no embedded tags.`);
+      }
 
       return {
         ok: true,
-        message: `Synced ${upsertedCount} track(s) and generated ${thumbnailCount} thumbnail(s).`,
+        message: parts.join(" "),
         scannedCount,
         upsertedCount,
         thumbnailCount
@@ -91,25 +103,43 @@ export class DriveLibrarySyncService {
     }
   }
 
-  private async sweepNewTracks(): Promise<void> {
-    this.logger.log("Starting automatic post-sync title/artist sweep for new tracks...");
+  private async sweepSongs(songs: Song[]): Promise<TitleArtistRepairResult> {
+    let repairedCount = 0;
+    let failedCount = 0;
 
-    try {
-      const result = await this.titleArtistRepairService.repairMissingEmbeddedTitleArtist(25);
-      this.logger.log(
-        `Post-sync sweep: attempted ${result.attemptedCount}, repaired ${result.repairedCount}, failed ${result.failedCount}.`
-      );
+    for (const song of songs) {
+      const rawFileId = song.id.replace(/^drive-/, "");
 
-      // Keep sweeping in batches until every unfixed track has been
-      // either repaired or marked as tagless. Each batch picks up
-      // tracks where title_locked is still false.
-      if (result.attemptedCount > 0) {
-        void this.sweepNewTracks();
+      try {
+        const tags = await this.driveTitleArtistService.getEmbeddedTitleArtist(rawFileId);
+
+        if (!tags || (!tags.title && !tags.artist)) {
+          await this.driveTrackRepository.markTitleArtistChecked(song.id);
+          failedCount += 1;
+          continue;
+        }
+
+        const nextTitle = tags.title ?? song.title;
+        const nextArtist = tags.artist ?? song.artistName;
+
+        await this.driveTrackRepository.updateTitleArtist(song.id, nextTitle, nextArtist);
+        repairedCount += 1;
+      } catch (error) {
+        failedCount += 1;
+        this.logger.warn(
+          `Title/artist sweep failed for ${song.id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
       }
-    } catch (error) {
-      this.logger.error(
-        `Post-sync title/artist sweep error: ${error instanceof Error ? error.message : String(error)}`
-      );
     }
+
+    return {
+      ok: true,
+      message: `Swept ${songs.length} track(s), repaired ${repairedCount}, failed ${failedCount}.`,
+      attemptedCount: songs.length,
+      repairedCount,
+      failedCount
+    };
   }
 }
