@@ -5,7 +5,6 @@ import { useMutation, useQuery } from "@apollo/client";
 import type { ClientPlaylist, Song } from "../../App";
 import {
   REPAIR_EMBEDDED_LYRICS_FOR_SONG_MUTATION,
-  REPAIR_EMBEDDED_TITLE_ARTIST_FOR_SONG_MUTATION,
   SONG_DETAILS_QUERY
 } from "../../api";
 import { formatBytes, formatSeconds, formatSongDisplayName } from "../../song-format";
@@ -45,20 +44,6 @@ type LyricsRepairMutationVariables = {
   songId: string;
 };
 
-type TitleArtistRepairMutationData = {
-  repairEmbeddedTitleArtistForSong: {
-    ok: boolean;
-    message: string;
-    attemptedCount: number;
-    repairedCount: number;
-    failedCount: number;
-  };
-};
-
-type TitleArtistRepairMutationVariables = {
-  songId: string;
-};
-
 export function SongMetadataModal({
   song,
   onPlay,
@@ -71,7 +56,6 @@ export function SongMetadataModal({
 }: SongMetadataModalProps) {
   const attemptedAutoRepairRef = useRef("");
   const [lyricsRepairMessage, setLyricsRepairMessage] = useState("");
-  const [titleArtistRepairMessage, setTitleArtistRepairMessage] = useState("");
   const [showArtwork, setShowArtwork] = useState(true);
 
   const { data, loading, refetch } = useQuery<SongDetailsQueryData, SongDetailsQueryVariables>(
@@ -88,18 +72,12 @@ export function SongMetadataModal({
     LyricsRepairMutationVariables
   >(REPAIR_EMBEDDED_LYRICS_FOR_SONG_MUTATION);
 
-  const [repairTitleArtist, { loading: repairingTitleArtist }] = useMutation<
-    TitleArtistRepairMutationData,
-    TitleArtistRepairMutationVariables
-  >(REPAIR_EMBEDDED_TITLE_ARTIST_FOR_SONG_MUTATION);
-
   const details: Song = data?.songDetails ?? song;
   const genreNames: string[] = details.genreNames ?? [];
   const lyrics = details.lyrics?.trim();
 
   useEffect(() => {
     setShowArtwork(true);
-    setTitleArtistRepairMessage("");
   }, [details.id]);
 
   async function extractLyricsForThisSong(manual = false) {
@@ -129,38 +107,6 @@ export function SongMetadataModal({
         error instanceof Error
           ? `Could not extract lyrics: ${error.message}`
           : "Could not extract lyrics for this track."
-      );
-    }
-  }
-
-  async function fixTitleArtistForThisSong() {
-    if (repairingTitleArtist) {
-      return;
-    }
-
-    setTitleArtistRepairMessage("Checking this MP3's embedded title & artist tags...");
-
-    try {
-      const result = await repairTitleArtist({
-        variables: { songId: details.id }
-      });
-
-      const payload = result.data?.repairEmbeddedTitleArtistForSong;
-
-      if (payload?.repairedCount) {
-        setTitleArtistRepairMessage("Title and artist were updated. Refreshing metadata...");
-        await refetch();
-        return;
-      }
-
-      setTitleArtistRepairMessage(
-        payload?.message || "No embedded title/artist tags were found for this track."
-      );
-    } catch (error) {
-      setTitleArtistRepairMessage(
-        error instanceof Error
-          ? `Could not read embedded tags: ${error.message}`
-          : "Could not read embedded tags for this track."
       );
     }
   }
@@ -224,38 +170,6 @@ export function SongMetadataModal({
               />
             </button>
           ) : null}
-
-          <section className="song-modal__lyrics-panel" aria-label="Title and artist tags">
-            <div className="song-modal__section-heading">
-              <div>
-                <p className="eyebrow">Embedded MP3 metadata</p>
-                <h3>Title &amp; artist</h3>
-              </div>
-
-              {repairingTitleArtist ? <span>Checking tags...</span> : null}
-            </div>
-
-            <div className="song-modal__empty-state">
-              <p className="song-modal__empty">
-                {titleArtistRepairMessage ||
-                  "If the title or artist above looks wrong (e.g. built from the file name), you can re-read them from this file's embedded tags."}
-              </p>
-
-              <button
-                type="button"
-                className="song-modal__secondary-button"
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  void fixTitleArtistForThisSong();
-                }}
-                disabled={repairingTitleArtist}
-              >
-                <RefreshCw aria-hidden="true" />
-                {repairingTitleArtist ? "Checking..." : "Fix title & artist from tags"}
-              </button>
-            </div>
-          </section>
 
           <section className="song-modal__lyrics-panel" aria-label="Lyrics">
             <div className="song-modal__section-heading">

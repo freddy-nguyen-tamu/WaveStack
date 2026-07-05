@@ -57,11 +57,10 @@ export class DriveLibrarySyncService {
         thumbnailCount
       });
 
-      // Fire-and-forget: automatically sweep any new tracks whose
-      // title/artist is still filename-guessed (title_locked = false)
-      // and overwrite them with the real embedded ID3 tags. Runs in
-      // the background so the sync response isn't blocked.
-      void this.sweepNewTracks();
+      // Block until all new tracks have had their title/artist fixed
+      // from embedded ID3 tags. This guarantees that after one sync
+      // returns, every track's title and artist is correct.
+      await this.sweepNewTracks();
 
       return {
         ok: true,
