@@ -27,6 +27,7 @@ type DriveTrackRow = {
   source_root_folder_id: string | null;
   owner_user_id: string | null;
   source_type: string | null;
+  title_locked: boolean;
 };
 
 type CountRow = {
@@ -86,18 +87,22 @@ export class DriveTrackRepository {
           source_root_folder_id,
           normalized_search,
           synced_at,
-          deleted_at
+          deleted_at,
+          title_locked
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15,
-          $16, $17, $18, now(), $19, $20, $21, now(), NULL
+          $16, $17, $18, now(), $19, $20, $21, now(), NULL, false
         )
         ON CONFLICT (id)
         DO UPDATE SET
           drive_file_id = EXCLUDED.drive_file_id,
-          title = EXCLUDED.title,
-          artist_name = EXCLUDED.artist_name,
+          -- Once a track's title/artist has been repaired from its embedded
+          -- tags (title_locked = true), keep that value on every future
+          -- sync instead of overwriting it with a fresh filename guess.
+          title = CASE WHEN drive_tracks.title_locked THEN drive_tracks.title ELSE EXCLUDED.title END,
+          artist_name = CASE WHEN drive_tracks.title_locked THEN drive_tracks.artist_name ELSE EXCLUDED.artist_name END,
           album_title = EXCLUDED.album_title,
           duration_seconds = EXCLUDED.duration_seconds,
           stream_url = EXCLUDED.stream_url,
@@ -148,6 +153,66 @@ export class DriveTrackRepository {
     }
 
     return count;
+  }
+
+  async updateTitleArtist(trackId: string, title: string, artist: string): Promise<void> {
+    const search = await this.rebuildSearchAfterTitleArtistChange(trackId, title, artist);
+
+    await this.database.query(
+      `
+      UPDATE drive_tracks
+      SET title = $2,
+          artist_name = $3,
+          title_locked = true,
+          normalized_search = $4,
+          synced_at = now()
+      WHERE id = $1
+      `,
+      [trackId, title, artist, search]
+    );
+  }
+
+  async markTitleArtistChecked(trackId: string): Promise<void> {
+    await this.database.query(
+      `
+      UPDATE drive_tracks
+      SET title_locked = true
+      WHERE id = $1
+      `,
+      [trackId]
+    );
+  }
+
+  async listTracksNeedingTitleArtistRepair(limit: number): Promise<Song[]> {
+    const safeLimit = Math.max(1, Math.min(limit || 10, 25));
+
+    const rows = (
+      await this.database.query<DriveTrackRow>(
+        `
+        SELECT *
+        FROM drive_tracks
+        WHERE deleted_at IS NULL
+          AND title_locked = false
+        ORDER BY synced_at DESC, id ASC
+        LIMIT $1
+        `,
+        [safeLimit]
+      )
+    ).rows;
+
+    return rows.map((row) => this.rowToSong(row));
+  }
+
+  private async rebuildSearchAfterTitleArtistChange(
+    trackId: string,
+    title: string,
+    artist: string
+  ): Promise<string> {
+    const existing = await this.getSong(trackId);
+
+    return [title, artist, existing?.albumTitle ?? "", ...(existing?.genreNames ?? [])]
+      .join(" ")
+      .toLowerCase();
   }
 
   async updateLyrics(trackId: string, lyrics: string): Promise<void> {

@@ -568,6 +568,18 @@ export const REPAIR_EMBEDDED_LYRICS_FOR_SONG_MUTATION = gql`
   }
 `;
 
+export const REPAIR_EMBEDDED_TITLE_ARTIST_FOR_SONG_MUTATION = gql`
+  mutation RepairEmbeddedTitleArtistForSong($songId: String!) {
+    repairEmbeddedTitleArtistForSong(songId: $songId) {
+      ok
+      message
+      attemptedCount
+      repairedCount
+      failedCount
+    }
+  }
+`;
+
 export const CREATE_USER_SONGS_MUTATION = gql`
   ${SONG_CARD_FIELDS}
 

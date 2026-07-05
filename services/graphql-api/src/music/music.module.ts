@@ -16,6 +16,8 @@ import { ThumbnailRepairService } from "./thumbnail-repair.service";
 import { DriveDownloadService } from "./drive-download.service";
 import { DriveLyricsService } from "./drive-lyrics.service";
 import { LyricsRepairService } from "./lyrics-repair.service";
+import { DriveTitleArtistService } from "./drive-title-artist.service";
+import { TitleArtistRepairService } from "./title-artist-repair.service";
 import { UploadsController } from "./uploads.controller";
 
 @Module({
@@ -33,7 +35,9 @@ import { UploadsController } from "./uploads.controller";
     ThumbnailRepairService,
     DriveDownloadService,
     DriveLyricsService,
-    LyricsRepairService
+    LyricsRepairService,
+    DriveTitleArtistService,
+    TitleArtistRepairService
   ],
   exports: [MusicService, DriveTrackRepository, GoogleDriveService]
 })

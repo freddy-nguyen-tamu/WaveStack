@@ -9,6 +9,7 @@ import {
   Song,
   SongConnection,
   ThumbnailRepairResult,
+  TitleArtistRepairResult,
   UserSongAttributeInput,
   UserSongInput
 } from "./music.models";
@@ -17,6 +18,7 @@ import { DriveLibrarySyncService } from "./drive-library-sync.service";
 import { DriveTrackRepository } from "./drive-track.repository";
 import { ThumbnailRepairService } from "./thumbnail-repair.service";
 import { LyricsRepairService } from "./lyrics-repair.service";
+import { TitleArtistRepairService } from "./title-artist-repair.service";
 
 type GqlContext = {
   req?: {
@@ -39,6 +41,7 @@ export class MusicResolver {
     private readonly driveTrackRepository: DriveTrackRepository,
     private readonly thumbnailRepairService: ThumbnailRepairService,
     private readonly lyricsRepairService: LyricsRepairService,
+    private readonly titleArtistRepairService: TitleArtistRepairService,
     private readonly authService: AuthService
   ) {}
 
@@ -154,6 +157,20 @@ export class MusicResolver {
     @Args("songId") songId: string
   ): Promise<LyricsRepairResult> {
     return this.lyricsRepairService.repairEmbeddedLyricsForSong(songId);
+  }
+
+  @Mutation(() => TitleArtistRepairResult)
+  repairEmbeddedTitleArtist(
+    @Args("limit", { type: () => Int, nullable: true }) limit?: number
+  ): Promise<TitleArtistRepairResult> {
+    return this.titleArtistRepairService.repairMissingEmbeddedTitleArtist(limit ?? 10);
+  }
+
+  @Mutation(() => TitleArtistRepairResult)
+  repairEmbeddedTitleArtistForSong(
+    @Args("songId") songId: string
+  ): Promise<TitleArtistRepairResult> {
+    return this.titleArtistRepairService.repairEmbeddedTitleArtistForSong(songId);
   }
 
   @Mutation(() => Boolean)

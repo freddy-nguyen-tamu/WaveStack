@@ -175,6 +175,24 @@ export class LyricsRepairResult {
 }
 
 @ObjectType()
+export class TitleArtistRepairResult {
+  @Field()
+  ok!: boolean;
+
+  @Field()
+  message!: string;
+
+  @Field(() => Int)
+  attemptedCount!: number;
+
+  @Field(() => Int)
+  repairedCount!: number;
+
+  @Field(() => Int)
+  failedCount!: number;
+}
+
+@ObjectType()
 export class Artist {
   @Field(() => ID)
   id!: string;
