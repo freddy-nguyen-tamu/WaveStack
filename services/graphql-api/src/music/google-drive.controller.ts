@@ -57,7 +57,6 @@ export class GoogleDriveController {
     response.setHeader("Content-Type", contentType);
     response.setHeader("Access-Control-Allow-Origin", "*");
     response.setHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges");
-    response.setHeader("Cache-Control", "public, max-age=3600");
     response.setHeader("Accept-Ranges", "bytes");
 
     if (contentLength) {
@@ -66,6 +65,22 @@ export class GoogleDriveController {
 
     if (contentRange) {
       response.setHeader("Content-Range", contentRange);
+    }
+
+    // IMPORTANT: only cache successful audio responses. This used to be
+    // set unconditionally, which meant a transient upstream failure
+    // (401/403/5xx from Google Drive) got cached by the browser for a
+    // full hour as if it were a valid response. Once that happened, every
+    // subsequent play of that same track on that browser failed instantly
+    // from the browser's own disk cache -- "Format error" / "no supported
+    // source" -- with no new network request ever being sent, until the
+    // cache entry expired an hour later. That's why it looked like a
+    // memory leak that "went away after a while" and why it only affected
+    // whichever browser/device had actually made the failing request.
+    if (upstream.ok) {
+      response.setHeader("Cache-Control", "public, max-age=3600");
+    } else {
+      response.setHeader("Cache-Control", "no-store");
     }
 
     if (!upstream.ok) {
