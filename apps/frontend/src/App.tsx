@@ -7,6 +7,7 @@ import {
     ME_QUERY,
     MUSIC_HOME_QUERY,
     SONG_PAGE_QUERY,
+    RANDOM_SONG_QUERY,
     RECOMMENDED_SONGS_QUERY,
     RECORD_LISTEN_MUTATION,
     LIBRARY_STATE_QUERY,
@@ -69,6 +70,7 @@ export type PlaybackContext = {
   label: string;
   songs: Song[];
   source: "all" | "dashboard" | "search" | "favorites" | "recent" | "playlist" | "profile" | "manual";
+  queryFilter?: string | null;
 };
 
 export type PlaySongHandler = (song: Song, context?: PlaybackContext) => void;
@@ -506,6 +508,7 @@ export function App() {
   const hasToken = Boolean(authToken);
 
   const [shuffleEnabled, setShuffleEnabled] = useState(false);
+  const [isResolvingNextSong, setIsResolvingNextSong] = useState(false);
   const [repeatMode, setRepeatMode] = useState<RepeatMode>("none");
   const [playHistory, setPlayHistory] = useState<Song[]>([]);
   const [dismissedRecommendationIds, setDismissedRecommendationIds] = useState<string[]>([]);
@@ -1035,6 +1038,10 @@ export function App() {
     return nextSong;
   }
 
+  function usesBackendShufflePool(source: PlaybackContext["source"]): boolean {
+    return source === "all" || source === "search";
+  }
+
   function getPolicySongs(context: PlaybackContext): Song[] {
     if (context.source === "dashboard") {
       const fullLibrary = allKnownSongsRef.current.filter(Boolean);
@@ -1110,7 +1117,28 @@ export function App() {
     return contextSongs[(currentIndex + 1) % contextSongs.length] ?? null;
   }
 
-  function resolveNextSongFromCurrentPolicy(reason: PlaybackAdvanceReason): Song | null {
+  async function fetchBackendRandomSong(
+    context: PlaybackContext,
+    excludeIds: string[]
+  ): Promise<Song | null> {
+    try {
+      const response = await apolloClient.query<{ randomSong: Song | null }>({
+        query: RANDOM_SONG_QUERY,
+        variables: {
+          query: context.queryFilter ?? null,
+          excludeIds
+        },
+        fetchPolicy: "network-only"
+      });
+
+      return response.data?.randomSong ?? null;
+    } catch (error) {
+      console.error("Failed to fetch a random song for shuffle", error);
+      return null;
+    }
+  }
+
+  async function resolveNextSongFromCurrentPolicy(reason: PlaybackAdvanceReason): Promise<Song | null> {
     const queuedSong = popNextQueuedSong();
 
     if (queuedSong) {
@@ -1126,14 +1154,36 @@ export function App() {
       return null;
     }
 
+    if (latestRepeatMode === "one" && reason === "ended") {
+      return latestCurrentSong;
+    }
+
+    if (latestShuffleEnabled && usesBackendShufflePool(latestContext.source)) {
+      playedSinceManualPlayIdsRef.current.add(latestCurrentSong.id);
+
+      const excludeIds = Array.from(playedSinceManualPlayIdsRef.current).slice(-500);
+      const backendPick = await fetchBackendRandomSong(latestContext, excludeIds);
+
+      if (backendPick) {
+        return backendPick;
+      }
+
+      if (latestRepeatMode === "all") {
+        resetPlayedSession(latestCurrentSong);
+        return fetchBackendRandomSong(latestContext, [latestCurrentSong.id]);
+      }
+
+      if (latestRepeatMode === "one") {
+        return latestCurrentSong;
+      }
+
+      return null;
+    }
+
     const contextSongs = getPolicySongs(latestContext);
 
     if (!contextSongs.length) {
       return null;
-    }
-
-    if (latestRepeatMode === "one" && reason === "ended") {
-      return latestCurrentSong;
     }
 
     if (latestShuffleEnabled) {
@@ -1169,9 +1219,17 @@ export function App() {
     return null;
   }
 
-  function playNextFromPolicy(reason: PlaybackAdvanceReason = "manual") {
+  async function playNextFromPolicy(reason: PlaybackAdvanceReason = "manual") {
     const latestCurrentSong = currentSongRef.current;
-    const nextSong = resolveNextSongFromCurrentPolicy(reason);
+
+    setIsResolvingNextSong(true);
+    let nextSong: Song | null = null;
+
+    try {
+      nextSong = await resolveNextSongFromCurrentPolicy(reason);
+    } finally {
+      setIsResolvingNextSong(false);
+    }
 
     if (!nextSong) {
       showNotice("No next song available.");
@@ -1207,8 +1265,14 @@ export function App() {
       return;
     }
 
-    const latestCurrentSong = currentSongRef.current;
     const latestContext = playbackContextRef.current;
+
+    if (shuffleEnabledRef.current && latestContext && usesBackendShufflePool(latestContext.source)) {
+      showNotice("No previous song available.");
+      return;
+    }
+
+    const latestCurrentSong = currentSongRef.current;
     const contextSongs = latestContext?.songs?.filter(Boolean) ?? [];
 
     if (!latestCurrentSong || !contextSongs.length) {
@@ -2136,16 +2200,20 @@ export function App() {
             isFavorite={favoriteIds.includes(currentSong.id)}
             shuffleEnabled={shuffleEnabled}
             repeatMode={repeatMode}
-            canGoPrevious={playHistory.length > 0 || playbackContext.songs.length > 1}
+            canGoPrevious={
+              playHistory.length > 0 ||
+              (!(shuffleEnabled && usesBackendShufflePool(playbackContext.source)) && playbackContext.songs.length > 1)
+            }
             onToggleFavorite={() => toggleFavorite(currentSong)}
             onToggleShuffle={toggleShuffle}
             onCycleRepeatMode={cycleRepeatMode}
             onQueueChange={setQueue}
             onActiveSongChange={(song) => startSong(song)}
             onOpenDetails={openDetails}
-            onNext={() => playNextFromPolicy("manual")}
+            resolvingNext={isResolvingNextSong}
+            onNext={() => { void playNextFromPolicy("manual"); }}
             onPrevious={playPreviousFromHistory}
-            onEnded={() => playNextFromPolicy("ended")}
+            onEnded={() => { void playNextFromPolicy("ended"); }}
         />
       </section>
 

@@ -214,6 +214,16 @@ export const SONG_PAGE_QUERY = gql`
   }
 `;
 
+export const RANDOM_SONG_QUERY = gql`
+  ${SONG_CARD_FIELDS}
+
+  query RandomSong($query: String, $excludeIds: [String!]) {
+    randomSong(query: $query, excludeIds: $excludeIds) {
+      ...SongCardFields
+    }
+  }
+`;
+
 export const SONG_DETAILS_QUERY = gql`
   ${SONG_DETAIL_FIELDS}
 

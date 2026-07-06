@@ -340,6 +340,52 @@ export class DriveTrackRepository {
     };
   }
 
+  async getRandomSong(options: {
+    query?: string | null;
+    userId?: string | null;
+    excludeIds?: string[];
+  }): Promise<Song | null> {
+    const search = options.query?.trim().toLowerCase();
+    const params: unknown[] = [];
+    const conditions = [
+      "deleted_at IS NULL",
+      options.userId ? "(owner_user_id IS NULL OR owner_user_id = $1::uuid)" : "owner_user_id IS NULL"
+    ];
+
+    if (options.userId) {
+      params.push(options.userId);
+    }
+
+    if (search) {
+      params.push(`%${search}%`);
+      conditions.push(`normalized_search ILIKE $${params.length}`);
+    }
+
+    const excludeIds = (options.excludeIds ?? []).filter(Boolean);
+
+    if (excludeIds.length) {
+      params.push(excludeIds);
+      conditions.push(`NOT (id = ANY($${params.length}::text[]))`);
+    }
+
+    const where = `WHERE ${conditions.join(" AND ")}`;
+
+    const rows = (
+      await this.database.query<DriveTrackRow>(
+        `
+        SELECT *
+        FROM drive_tracks
+        ${where}
+        ORDER BY random()
+        LIMIT 1
+        `,
+        params
+      )
+    ).rows;
+
+    return rows[0] ? this.rowToSong(rows[0]) : null;
+  }
+
   async listDashboardSongs(limit: number): Promise<Song[]> {
     const safeLimit = Math.max(8, Math.min(limit || 40, 80));
 

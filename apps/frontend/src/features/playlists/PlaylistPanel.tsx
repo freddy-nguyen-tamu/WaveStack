@@ -83,6 +83,7 @@ export function PlaylistPanel({
     id: `playlist-library:${query.trim() || "all"}`,
     label: query.trim() ? `Playlist library: ${query.trim()}` : "Playlist library",
     source: "all",
+    queryFilter: query.trim() || null,
     songs: libraryResults
   }), [libraryResults, query]);
 

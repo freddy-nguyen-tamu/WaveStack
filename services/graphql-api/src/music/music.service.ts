@@ -35,6 +35,14 @@ export class MusicService {
     return this.driveTrackRepository.listSongs({ first, after, query, userId, sort });
   }
 
+  randomSong(
+    query?: string | null,
+    userId?: string | null,
+    excludeIds?: string[]
+  ): Promise<Song | null> {
+    return this.driveTrackRepository.getRandomSong({ query, userId, excludeIds });
+  }
+
   async dashboardSongs(limit: number, userId?: string | null): Promise<Song[]> {
     const count = await this.driveTrackRepository.countTracks();
 

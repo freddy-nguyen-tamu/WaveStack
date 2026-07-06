@@ -61,6 +61,15 @@ export class MusicResolver {
     return this.musicService.songPage(first ?? 50, after, query, this.resolveUserId(context), sort);
   }
 
+  @Query(() => Song, { nullable: true })
+  randomSong(
+    @Context() context: GqlContext,
+    @Args("query", { nullable: true }) query?: string,
+    @Args("excludeIds", { type: () => [String], nullable: true }) excludeIds?: string[]
+  ): Promise<Song | null> {
+    return this.musicService.randomSong(query, this.resolveUserId(context), excludeIds);
+  }
+
   @Query(() => [Song])
   dashboardSongs(
     @Context() context: GqlContext,

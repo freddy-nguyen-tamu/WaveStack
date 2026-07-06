@@ -1033,6 +1033,13 @@ article li small,
   color: var(--color-red) !important;
 }
 
+/* Shuffle "resolving next song" busy state (true-shuffle backend lookup) */
+.player-actions button[aria-busy="true"],
+.mini-player__controls button[aria-busy="true"] {
+  opacity: 0.5;
+  cursor: progress;
+}
+
 /* Dashboard and album wall */
 
 .dashboard-page {

@@ -170,6 +170,7 @@ export function SearchPanel({
     id: `${pageKey}:${backendSearch ? "backend" : "local"}:${debouncedQuery || query.trim() || "all"}`,
     label: debouncedQuery || query.trim() ? `${title}: ${debouncedQuery || query.trim()}` : title,
     source: playbackSource,
+    queryFilter: backendSearch ? (debouncedQuery.trim() || null) : null,
     songs: results
   }), [backendSearch, debouncedQuery, pageKey, playbackSource, query, results, title]);
 

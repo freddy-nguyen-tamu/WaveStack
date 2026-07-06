@@ -193,6 +193,7 @@ export function AllPage({
     id: `all:${backendSort}:${debouncedQuery || "all"}`,
     label: debouncedQuery ? `All Songs: ${debouncedQuery}` : `All Songs (${sortMode})`,
     source: "all",
+    queryFilter: debouncedQuery || null,
     songs: filteredSongs
   }), [backendSort, debouncedQuery, filteredSongs, sortMode]);
 

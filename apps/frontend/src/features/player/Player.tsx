@@ -24,6 +24,7 @@ type PlayerProps = {
   shuffleEnabled: boolean;
   repeatMode: RepeatMode;
   canGoPrevious: boolean;
+  resolvingNext?: boolean;
   onToggleFavorite: () => void;
   onToggleShuffle: () => void;
   onCycleRepeatMode: () => void;
@@ -43,6 +44,7 @@ export function Player({
   shuffleEnabled,
   repeatMode,
   canGoPrevious,
+  resolvingNext = false,
   onToggleFavorite,
   onToggleShuffle,
   onCycleRepeatMode,
@@ -484,7 +486,7 @@ export function Player({
             <SkipBack aria-hidden="true" /> Previous
           </button>
 
-          <button type="button" onClick={skip} aria-label="Next song">
+          <button type="button" onClick={skip} aria-label="Next song" aria-busy={resolvingNext} disabled={resolvingNext}>
             <SkipForward aria-hidden="true" /> Next
           </button>
 
@@ -608,7 +610,7 @@ export function Player({
                   {isPlaying ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
                 </button>
 
-                <button type="button" aria-label="Next song" onClick={skip}>
+                <button type="button" aria-label="Next song" onClick={skip} aria-busy={resolvingNext} disabled={resolvingNext}>
                   <SkipForward aria-hidden="true" />
                 </button>
 
