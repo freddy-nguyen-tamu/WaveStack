@@ -49,110 +49,115 @@ export class DriveTrackRepository {
   constructor(private readonly database: DatabaseService) {}
 
   async upsertTracks(songs: Song[]): Promise<number> {
+    const CONCURRENCY = 20;
     let count = 0;
 
-    for (const song of songs) {
-      const search = [
-        song.title,
-        song.artistName,
-        song.albumTitle,
-        ...(song.genreNames ?? [])
-      ]
-        .join(" ")
-        .toLowerCase();
-
-      await this.database.query(
-        `
-        INSERT INTO drive_tracks (
-          id,
-          drive_file_id,
-          title,
-          artist_name,
-          album_title,
-          duration_seconds,
-          stream_url,
-          genre_names,
-          score,
-          thumbnail_url,
-          local_thumbnail_url,
-          drive_thumbnail_url,
-          embedded_artwork_url,
-          lyrics,
-          web_view_link,
-          mime_type,
-          modified_time,
-          drive_created_time,
-          first_seen_at,
-          size_bytes,
-          source_root_folder_id,
-          normalized_search,
-          synced_at,
-          deleted_at,
-          title_locked
-        )
-        VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8,
-          $9, $10, $11, $12, $13, $14, $15,
-          $16, $17, $18, now(), $19, $20, $21, now(), NULL, false
-        )
-        ON CONFLICT (id)
-        DO UPDATE SET
-          drive_file_id = EXCLUDED.drive_file_id,
-          -- Once a track's title/artist has been repaired from its embedded
-          -- tags (title_locked = true), keep that value on every future
-          -- sync instead of overwriting it with a fresh filename guess.
-          title = CASE WHEN drive_tracks.title_locked THEN drive_tracks.title ELSE EXCLUDED.title END,
-          artist_name = CASE WHEN drive_tracks.title_locked THEN drive_tracks.artist_name ELSE EXCLUDED.artist_name END,
-          album_title = EXCLUDED.album_title,
-          duration_seconds = EXCLUDED.duration_seconds,
-          stream_url = EXCLUDED.stream_url,
-          genre_names = EXCLUDED.genre_names,
-          score = EXCLUDED.score,
-          thumbnail_url = COALESCE(EXCLUDED.thumbnail_url, drive_tracks.thumbnail_url),
-          local_thumbnail_url = COALESCE(EXCLUDED.local_thumbnail_url, drive_tracks.local_thumbnail_url),
-          drive_thumbnail_url = COALESCE(EXCLUDED.drive_thumbnail_url, drive_tracks.drive_thumbnail_url),
-          embedded_artwork_url = COALESCE(EXCLUDED.embedded_artwork_url, drive_tracks.embedded_artwork_url),
-          lyrics = COALESCE(EXCLUDED.lyrics, drive_tracks.lyrics),
-          web_view_link = EXCLUDED.web_view_link,
-          mime_type = EXCLUDED.mime_type,
-          modified_time = EXCLUDED.modified_time,
-          drive_created_time = COALESCE(EXCLUDED.drive_created_time, drive_tracks.drive_created_time),
-          first_seen_at = COALESCE(drive_tracks.first_seen_at, EXCLUDED.first_seen_at, now()),
-          size_bytes = EXCLUDED.size_bytes,
-          source_root_folder_id = EXCLUDED.source_root_folder_id,
-          normalized_search = EXCLUDED.normalized_search,
-          synced_at = now(),
-          deleted_at = NULL
-        `,
-        [
-          song.id,
-          song.id.replace(/^drive-/, ""),
-          song.title,
-          song.artistName,
-          song.albumTitle,
-          song.durationSeconds ?? 0,
-          song.streamUrl,
-          song.genreNames ?? [],
-          song.score ?? null,
-          song.localThumbnailUrl ?? song.thumbnailUrl ?? song.driveThumbnailUrl ?? null,
-          song.localThumbnailUrl ?? null,
-          song.driveThumbnailUrl ?? null,
-          song.embeddedArtworkUrl ?? null,
-          song.lyrics ?? null,
-          song.webViewLink ?? null,
-          song.mimeType ?? null,
-          song.modifiedTime ?? null,
-          song.createdTime ?? null,
-          song.sizeBytes ?? null,
-          song.sourceRootFolderId ?? null,
-          search
-        ]
-      );
-
-      count += 1;
+    for (let i = 0; i < songs.length; i += CONCURRENCY) {
+      const batch = songs.slice(i, i + CONCURRENCY);
+      await Promise.all(batch.map((song) => this.upsertTrack(song)));
+      count += batch.length;
     }
 
     return count;
+  }
+
+  private async upsertTrack(song: Song): Promise<void> {
+    const search = [
+      song.title,
+      song.artistName,
+      song.albumTitle,
+      ...(song.genreNames ?? [])
+    ]
+      .join(" ")
+      .toLowerCase();
+
+    await this.database.query(
+      `
+      INSERT INTO drive_tracks (
+        id,
+        drive_file_id,
+        title,
+        artist_name,
+        album_title,
+        duration_seconds,
+        stream_url,
+        genre_names,
+        score,
+        thumbnail_url,
+        local_thumbnail_url,
+        drive_thumbnail_url,
+        embedded_artwork_url,
+        lyrics,
+        web_view_link,
+        mime_type,
+        modified_time,
+        drive_created_time,
+        first_seen_at,
+        size_bytes,
+        source_root_folder_id,
+        normalized_search,
+        synced_at,
+        deleted_at,
+        title_locked
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8,
+        $9, $10, $11, $12, $13, $14, $15,
+        $16, $17, $18, now(), $19, $20, $21, now(), NULL, false
+      )
+      ON CONFLICT (id)
+      DO UPDATE SET
+        drive_file_id = EXCLUDED.drive_file_id,
+        -- Once a track's title/artist has been repaired from its embedded
+        -- tags (title_locked = true), keep that value on every future
+        -- sync instead of overwriting it with a fresh filename guess.
+        title = CASE WHEN drive_tracks.title_locked THEN drive_tracks.title ELSE EXCLUDED.title END,
+        artist_name = CASE WHEN drive_tracks.title_locked THEN drive_tracks.artist_name ELSE EXCLUDED.artist_name END,
+        album_title = EXCLUDED.album_title,
+        duration_seconds = EXCLUDED.duration_seconds,
+        stream_url = EXCLUDED.stream_url,
+        genre_names = EXCLUDED.genre_names,
+        score = EXCLUDED.score,
+        thumbnail_url = COALESCE(EXCLUDED.thumbnail_url, drive_tracks.thumbnail_url),
+        local_thumbnail_url = COALESCE(EXCLUDED.local_thumbnail_url, drive_tracks.local_thumbnail_url),
+        drive_thumbnail_url = COALESCE(EXCLUDED.drive_thumbnail_url, drive_tracks.drive_thumbnail_url),
+        embedded_artwork_url = COALESCE(EXCLUDED.embedded_artwork_url, drive_tracks.embedded_artwork_url),
+        lyrics = COALESCE(EXCLUDED.lyrics, drive_tracks.lyrics),
+        web_view_link = EXCLUDED.web_view_link,
+        mime_type = EXCLUDED.mime_type,
+        modified_time = EXCLUDED.modified_time,
+        drive_created_time = COALESCE(EXCLUDED.drive_created_time, drive_tracks.drive_created_time),
+        first_seen_at = COALESCE(drive_tracks.first_seen_at, EXCLUDED.first_seen_at, now()),
+        size_bytes = EXCLUDED.size_bytes,
+        source_root_folder_id = EXCLUDED.source_root_folder_id,
+        normalized_search = EXCLUDED.normalized_search,
+        synced_at = now(),
+        deleted_at = NULL
+      `,
+      [
+        song.id,
+        song.id.replace(/^drive-/, ""),
+        song.title,
+        song.artistName,
+        song.albumTitle,
+        song.durationSeconds ?? 0,
+        song.streamUrl,
+        song.genreNames ?? [],
+        song.score ?? null,
+        song.localThumbnailUrl ?? song.thumbnailUrl ?? song.driveThumbnailUrl ?? null,
+        song.localThumbnailUrl ?? null,
+        song.driveThumbnailUrl ?? null,
+        song.embeddedArtworkUrl ?? null,
+        song.lyrics ?? null,
+        song.webViewLink ?? null,
+        song.mimeType ?? null,
+        song.modifiedTime ?? null,
+        song.createdTime ?? null,
+        song.sizeBytes ?? null,
+        song.sourceRootFolderId ?? null,
+        search
+      ]
+    );
   }
 
   async updateTitleArtist(trackId: string, title: string, artist: string): Promise<void> {
@@ -181,6 +186,48 @@ export class DriveTrackRepository {
       `,
       [trackId]
     );
+  }
+
+  async filterIdsNeedingTitleArtistRepair(ids: string[]): Promise<Set<string>> {
+    if (!ids.length) {
+      return new Set();
+    }
+
+    const rows = (
+      await this.database.query<{ id: string }>(
+        `
+        SELECT id
+        FROM drive_tracks
+        WHERE id = ANY($1)
+          AND deleted_at IS NULL
+          AND title_locked = false
+        `,
+        [ids]
+      )
+    ).rows;
+
+    return new Set(rows.map((row) => row.id));
+  }
+
+  async filterIdsMissingLocalThumbnail(ids: string[]): Promise<Set<string>> {
+    if (!ids.length) {
+      return new Set();
+    }
+
+    const rows = (
+      await this.database.query<{ id: string }>(
+        `
+        SELECT id
+        FROM drive_tracks
+        WHERE id = ANY($1)
+          AND deleted_at IS NULL
+          AND local_thumbnail_url IS NULL
+        `,
+        [ids]
+      )
+    ).rows;
+
+    return new Set(rows.map((row) => row.id));
   }
 
   async listTracksNeedingTitleArtistRepair(limit: number): Promise<Song[]> {

@@ -43,7 +43,14 @@ export class DriveLibrarySyncService {
 
       upsertedCount = await this.driveTrackRepository.upsertTracks(songs);
 
-      for (const song of songs) {
+      const allIds = songs.map((song) => song.id);
+
+      // Only generate thumbnails for songs that don't already have one
+      // cached. Skips the O(total library) loop for unchanged songs.
+      const idsMissingThumbnail = await this.driveTrackRepository.filterIdsMissingLocalThumbnail(allIds);
+      const songsNeedingThumbnail = songs.filter((song) => idsMissingThumbnail.has(song.id));
+
+      for (const song of songsNeedingThumbnail) {
         const localThumbnailUrl = await this.thumbnailCacheService.generateForSong(song);
 
         if (localThumbnailUrl) {
@@ -52,9 +59,16 @@ export class DriveLibrarySyncService {
         }
       }
 
-      // Fix title/artist from embedded ID3 tags for every song just synced.
+      // Fix title/artist from embedded ID3 tags, but ONLY for songs that
+      // have never been successfully checked (title_locked = false).
+      // This is what previously re-downloaded the full audio file for
+      // every song in the library on every sync -- now it only does that
+      // for genuinely new or previously-failed songs.
       // This runs BEFORE finishSyncRun so any error is caught and reported.
-      const sweepResult = await this.sweepSongs(songs);
+      const idsNeedingRepair = await this.driveTrackRepository.filterIdsNeedingTitleArtistRepair(allIds);
+      const songsNeedingRepair = songs.filter((song) => idsNeedingRepair.has(song.id));
+
+      const sweepResult = await this.sweepSongs(songsNeedingRepair);
       repairedCount = sweepResult.repairedCount;
       failedCount = sweepResult.failedCount;
 
