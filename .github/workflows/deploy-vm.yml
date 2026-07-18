@@ -83,3 +83,119 @@ jobs:
           sudo docker compose up --build -d
           sudo docker compose ps
           REMOTE
+  deploy_oracle_standby:
+    name: Update Oracle Standby
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate Oracle deployment secrets
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_VM_HOST }}
+          ORACLE_USER: ${{ secrets.ORACLE_VM_USER }}
+          ORACLE_KEY_B64: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY_B64 }}
+        run: |
+          test -n "$ORACLE_HOST" || {
+            echo "Missing ORACLE_VM_HOST secret"
+            exit 1
+          }
+
+          test -n "$ORACLE_USER" || {
+            echo "Missing ORACLE_VM_USER secret"
+            exit 1
+          }
+
+          test -n "$ORACLE_KEY_B64" || {
+            echo "Missing ORACLE_VM_SSH_PRIVATE_KEY_B64 secret"
+            exit 1
+          }
+
+      - name: Write Oracle SSH key
+        env:
+          ORACLE_KEY_B64: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY_B64 }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s' "$ORACLE_KEY_B64" |
+            base64 -d > ~/.ssh/wavestack_oracle_actions
+
+          chmod 600 ~/.ssh/wavestack_oracle_actions
+
+          ssh-keygen -y \
+            -f ~/.ssh/wavestack_oracle_actions \
+            > /dev/null
+
+      - name: Add Oracle host key
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_VM_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+
+          ssh-keyscan \
+            -T 30 \
+            -H "$ORACLE_HOST" \
+            >> ~/.ssh/known_hosts
+
+      - name: Test Oracle SSH connection
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_VM_HOST }}
+          ORACLE_USER: ${{ secrets.ORACLE_VM_USER }}
+        run: |
+          ssh \
+            -i ~/.ssh/wavestack_oracle_actions \
+            "$ORACLE_USER@$ORACLE_HOST" \
+            "echo 'Oracle SSH works' && whoami && hostname"
+
+      - name: Upload source to Oracle
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_VM_HOST }}
+          ORACLE_USER: ${{ secrets.ORACLE_VM_USER }}
+        run: |
+          rsync -az --delete \
+            --exclude ".git" \
+            --exclude "node_modules" \
+            --exclude "dist" \
+            --exclude "build" \
+            --exclude "coverage" \
+            --exclude ".env" \
+            --exclude "secrets" \
+            --exclude "response.json" \
+            --exclude "services/graphql-api/.cache" \
+            -e "ssh -i ~/.ssh/wavestack_oracle_actions" \
+            ./ \
+            "$ORACLE_USER@$ORACLE_HOST:/home/$ORACLE_USER/WaveStack/"
+
+      - name: Build Oracle standby containers
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_VM_HOST }}
+          ORACLE_USER: ${{ secrets.ORACLE_VM_USER }}
+        run: |
+          ssh \
+            -i ~/.ssh/wavestack_oracle_actions \
+            "$ORACLE_USER@$ORACLE_HOST" <<'REMOTE'
+          set -euo pipefail
+
+          cd ~/WaveStack
+
+          test -f .env || {
+            echo "Missing ~/WaveStack/.env on Oracle"
+            exit 1
+          }
+
+          sudo docker compose config >/dev/null
+
+          # Build the latest version, but do not activate Oracle yet.
+          sudo docker compose build
+
+          printf '%s\n' "Standby code built successfully at $(date -Is)" \
+            > .oracle-standby-ready
+
+          sudo docker compose ps
+          REMOTE
+
+      - name: Remove deployment key
+        if: always()
+        run: |
+          rm -f ~/.ssh/wavestack_oracle_actions
