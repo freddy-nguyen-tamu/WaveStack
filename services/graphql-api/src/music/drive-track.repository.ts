@@ -41,6 +41,7 @@ type SyncStatusRow = {
   scanned_count: number;
   upserted_count: number;
   thumbnail_count: number;
+  deleted_count: number;
   error_message: string | null;
 };
 
@@ -59,6 +60,34 @@ export class DriveTrackRepository {
     }
 
     return count;
+  }
+
+  async softDeleteMissingDriveTracks(input: {
+    sourceRootFolderIds: string[];
+    currentSongIds: string[];
+  }): Promise<number> {
+    const sourceRootFolderIds = Array.from(new Set(input.sourceRootFolderIds.filter(Boolean)));
+
+    if (!sourceRootFolderIds.length) {
+      return 0;
+    }
+
+    const currentSongIds = Array.from(new Set(input.currentSongIds.filter(Boolean)));
+    const result = await this.database.query(
+      `
+      UPDATE drive_tracks
+      SET deleted_at = now(),
+          synced_at = now()
+      WHERE source_type = 'drive'
+        AND owner_user_id IS NULL
+        AND deleted_at IS NULL
+        AND source_root_folder_id = ANY($1::text[])
+        AND NOT (id = ANY($2::text[]))
+      `,
+      [sourceRootFolderIds, currentSongIds]
+    );
+
+    return result.rowCount ?? 0;
   }
 
   private async upsertTrack(song: Song): Promise<void> {
@@ -684,6 +713,7 @@ export class DriveTrackRepository {
     scannedCount: number;
     upsertedCount: number;
     thumbnailCount: number;
+    deletedCount: number;
     errorMessage?: string;
   }): Promise<void> {
     await this.database.query(
@@ -694,7 +724,8 @@ export class DriveTrackRepository {
           scanned_count = $3,
           upserted_count = $4,
           thumbnail_count = $5,
-          error_message = $6
+          deleted_count = $6,
+          error_message = $7
       WHERE id = $1
       `,
       [
@@ -703,6 +734,7 @@ export class DriveTrackRepository {
         input.scannedCount,
         input.upsertedCount,
         input.thumbnailCount,
+        input.deletedCount,
         input.errorMessage ?? null
       ]
     );
@@ -712,7 +744,7 @@ export class DriveTrackRepository {
     const rows = (
       await this.database.query<SyncStatusRow>(
         `
-        SELECT status, started_at, finished_at, scanned_count, upserted_count, thumbnail_count, error_message
+        SELECT status, started_at, finished_at, scanned_count, upserted_count, thumbnail_count, deleted_count, error_message
         FROM drive_track_sync_runs
         ORDER BY started_at DESC
         LIMIT 1
@@ -727,7 +759,8 @@ export class DriveTrackRepository {
         status: "never",
         scannedCount: 0,
         upsertedCount: 0,
-        thumbnailCount: 0
+        thumbnailCount: 0,
+        deletedCount: 0
       };
     }
 
@@ -738,6 +771,7 @@ export class DriveTrackRepository {
       scannedCount: row.scanned_count,
       upsertedCount: row.upserted_count,
       thumbnailCount: row.thumbnail_count,
+      deletedCount: row.deleted_count ?? 0,
       errorMessage: row.error_message ?? undefined
     };
   }

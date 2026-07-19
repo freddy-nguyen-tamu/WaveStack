@@ -192,6 +192,7 @@ export const MUSIC_HOME_QUERY = gql`
       scannedCount
       upsertedCount
       thumbnailCount
+      deletedCount
       errorMessage
     }
   }
@@ -242,6 +243,7 @@ export const SYNC_DRIVE_LIBRARY_MUTATION = gql`
       scannedCount
       upsertedCount
       thumbnailCount
+      deletedCount
     }
   }
 `;

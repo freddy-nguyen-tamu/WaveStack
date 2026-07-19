@@ -100,6 +100,9 @@ export class DriveSyncResult {
 
   @Field(() => Int)
   thumbnailCount!: number;
+
+  @Field(() => Int)
+  deletedCount!: number;
 }
 
 @ObjectType()
@@ -121,6 +124,9 @@ export class DriveSyncStatus {
 
   @Field(() => Int)
   thumbnailCount!: number;
+
+  @Field(() => Int)
+  deletedCount!: number;
 
   @Field({ nullable: true })
   errorMessage?: string;

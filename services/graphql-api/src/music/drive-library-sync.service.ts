@@ -34,16 +34,22 @@ export class DriveLibrarySyncService {
     let scannedCount = 0;
     let upsertedCount = 0;
     let thumbnailCount = 0;
+    let deletedCount = 0;
     let repairedCount = 0;
     let failedCount = 0;
 
     try {
-      const songs = await this.googleDriveService.listSongs();
+      const snapshot = await this.googleDriveService.listSongSnapshot();
+      const songs = snapshot.songs;
       scannedCount = songs.length;
 
       upsertedCount = await this.driveTrackRepository.upsertTracks(songs);
 
       const allIds = songs.map((song) => song.id);
+      deletedCount = await this.driveTrackRepository.softDeleteMissingDriveTracks({
+        sourceRootFolderIds: snapshot.successfulRootFolderIds,
+        currentSongIds: allIds
+      });
 
       // Only generate thumbnails for songs that don't already have one
       // cached. Skips the O(total library) loop for unchanged songs.
@@ -76,16 +82,23 @@ export class DriveLibrarySyncService {
         status: "success",
         scannedCount,
         upsertedCount,
-        thumbnailCount
+        thumbnailCount,
+        deletedCount
       });
 
       const parts: string[] = [];
       parts.push(`Synced ${upsertedCount} track(s) and generated ${thumbnailCount} thumbnail(s).`);
+      if (deletedCount > 0) {
+        parts.push(`Removed ${deletedCount} deleted Drive track(s) from the active library.`);
+      }
       if (repairedCount > 0) {
         parts.push(`Fixed title/artist from ID3 tags for ${repairedCount} track(s).`);
       }
       if (failedCount > 0) {
         parts.push(`${failedCount} track(s) had no embedded tags.`);
+      }
+      if (snapshot.failedRootFolderIds.length > 0) {
+        parts.push(`Skipped stale cleanup for ${snapshot.failedRootFolderIds.length} Drive root(s) that failed to scan.`);
       }
 
       return {
@@ -93,7 +106,8 @@ export class DriveLibrarySyncService {
         message: parts.join(" "),
         scannedCount,
         upsertedCount,
-        thumbnailCount
+        thumbnailCount,
+        deletedCount
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -104,6 +118,7 @@ export class DriveLibrarySyncService {
         scannedCount,
         upsertedCount,
         thumbnailCount,
+        deletedCount,
         errorMessage: message
       });
 
@@ -112,7 +127,8 @@ export class DriveLibrarySyncService {
         message,
         scannedCount,
         upsertedCount,
-        thumbnailCount
+        thumbnailCount,
+        deletedCount
       };
     }
   }

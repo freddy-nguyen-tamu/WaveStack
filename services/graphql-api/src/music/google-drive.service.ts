@@ -37,6 +37,18 @@ type DriveListResponse = {
   nextPageToken?: string;
 };
 
+type DriveMediaFileSnapshot = {
+  files: DriveFile[];
+  successfulRootFolderIds: string[];
+  failedRootFolderIds: string[];
+};
+
+export type DriveSongLibrarySnapshot = {
+  songs: Song[];
+  successfulRootFolderIds: string[];
+  failedRootFolderIds: string[];
+};
+
 type ParsedSongName = {
   artistName: string;
   title: string;
@@ -97,7 +109,21 @@ export class GoogleDriveService {
   }
 
   async listSongs(): Promise<Song[]> {
-    const files = await this.listAllDriveMediaFiles();
+    const snapshot = await this.listSongSnapshot();
+    return snapshot.songs;
+  }
+
+  async listSongSnapshot(): Promise<DriveSongLibrarySnapshot> {
+    const snapshot = await this.listAllDriveMediaFileSnapshot();
+
+    return {
+      songs: await this.buildSongsFromFiles(snapshot.files),
+      successfulRootFolderIds: snapshot.successfulRootFolderIds,
+      failedRootFolderIds: snapshot.failedRootFolderIds
+    };
+  }
+
+  private async buildSongsFromFiles(files: DriveFile[]): Promise<Song[]> {
     const audioFiles = files.filter((file) => this.isAudioFile(file));
     const imageFiles = files.filter((file) => this.isImageFile(file));
     const textFiles = files.filter((file) => this.isTextOrLyricFile(file));
@@ -159,12 +185,22 @@ export class GoogleDriveService {
   }
 
   async listAllDriveMediaFiles(): Promise<DriveFile[]> {
+    return (await this.listAllDriveMediaFileSnapshot()).files;
+  }
+
+  private async listAllDriveMediaFileSnapshot(): Promise<DriveMediaFileSnapshot> {
     if (!this.apiKey || !this.folderIds.length) {
       this.logger.warn("Google Drive is not configured. Returning no Drive songs.");
-      return [];
+      return {
+        files: [],
+        successfulRootFolderIds: [],
+        failedRootFolderIds: []
+      };
     }
 
     const allFiles: DriveFile[] = [];
+    const successfulRootFolderIds: string[] = [];
+    const failedRootFolderIds: string[] = [];
 
     for (const folderId of this.folderIds) {
       const visitedFolders = new Set<string>();
@@ -181,9 +217,11 @@ export class GoogleDriveService {
         );
 
         allFiles.push(...files);
+        successfulRootFolderIds.push(folderId);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.logger.error(`Google Drive root ${folderId}: failed: ${message}`);
+        failedRootFolderIds.push(folderId);
       }
     }
 
@@ -192,10 +230,14 @@ export class GoogleDriveService {
     ).sort((a, b) => a.name.localeCompare(b.name));
 
     this.logger.log(
-      `Google Drive total: ${unique.length} unique media file(s) from ${this.folderIds.length} root folder(s).`
+      `Google Drive total: ${unique.length} unique media file(s) from ${successfulRootFolderIds.length} successful root folder(s), ${failedRootFolderIds.length} failed.`
     );
 
-    return unique;
+    return {
+      files: unique,
+      successfulRootFolderIds,
+      failedRootFolderIds
+    };
   }
 
   // Keep this old method name in case controllers/debug code still call it.
