@@ -1145,3 +1145,1916 @@ git pull
 docker compose build frontend
 docker compose up -d frontend
 docker compose exec postgres psql -U wavestack -d wavestack
+
+# `development.log` — WaveStack Azure retirement and Oracle production cutover
+
+**Period covered:** 2026-07-18 through 2026-07-20
+**Last known state:** Oracle is serving the production website, but data recovery and deployment automation remain incomplete.
+**Security note:** No password, token, private key, service-account key, or database connection string should be copied into this log.
+
+---
+
+## 1. Original objective
+
+WaveStack was running on Azure, but the Azure subscription was expected to expire. The original goal was to keep Azure active temporarily, detect its eventual failure, switch permanently to another free platform, and preserve all application behavior and data.
+
+The first idea was an automatic Azure-to-Neon switch. This was rejected as a complete infrastructure solution because Neon only provides PostgreSQL. It cannot run the frontend, GraphQL API, audio service, analytics service, Neo4j, RabbitMQ, reverse proxy, uploaded files, DNS, or deployment automation. The replacement architecture therefore became Oracle Cloud for compute plus either Neon or local PostgreSQL for relational data. 
+
+The safe migration design was to move and synchronize data while Azure was still available, test the replacement privately, stop writes briefly, perform a final synchronization, switch DNS, and retain Azure temporarily for rollback. A runtime strategy that simply tries Azure and falls back to a second writable database was considered unsafe because the databases could diverge and produce split-brain writes. 
+
+---
+
+## 2. WaveStack application architecture
+
+WaveStack is a cloud-native music streaming platform composed of:
+
+* **Frontend:** React, Vite, and TypeScript. Provides playback, queue management, playlists, search, favorites, recent tracks, dashboard, and account workflows.
+* **GraphQL API:** NestJS. Coordinates users, authentication, songs, albums, playlists, history, recommendations, uploads, signed streaming URLs, Google Drive access, and background work.
+* **PostgreSQL:** System of record for users, library state, playlists, favorites, listening events, Drive tracks, stream-token auditing, and application metadata.
+* **Neo4j:** Graph data used for recommendation relationships.
+* **RabbitMQ:** Background messaging for audio processing, recommendation work, waveform processing, and notifications.
+* **Audio AI service:** Python/FastAPI service for audio metadata, duration, waveform, conversion hooks, tempo, mood, genre, and model-related processing.
+* **Analytics service:** C#/.NET service for play counts, trending data, reports, and internal metrics.
+* **Google Drive integration:** Supplies the main music library and artwork/streaming sources.
+* **Azurite:** Local Azure Storage emulator retained in the Compose stack.
+* **Caddy:** Public HTTPS reverse proxy. 
+
+The repository is a monorepo with frontend, API, Python, .NET, integration-test, and coverage-dashboard lanes. The root scripts include frontend/API tests, Python tests, .NET tests, integration tests, and per-runtime coverage generation.  
+
+### Original Docker Compose services and ports
+
+* Frontend: `5173`
+* GraphQL API: `3000`
+* Audio AI: `8000`
+* Analytics: `8080`
+* PostgreSQL 16: `5432`
+* Neo4j browser/Bolt: `7474`, `7687`
+* RabbitMQ/management: `5672`, `15672`
+* Azurite Blob: `10000`
+* Public Caddy entry points after migration: `80`, `443`
+
+The Compose configuration used a local `postgres:16` container and the `postgres-data` volume. This meant that the production database was probably the PostgreSQL Docker volume on the Azure VM rather than Azure Database for PostgreSQL.  
+
+### Important storage behavior
+
+The upload controller writes uploaded files to:
+
+```text
+/app/uploads
+```
+
+The original Compose configuration did not mount that directory to persistent host storage. Files could therefore have existed only inside the current GraphQL container and could be lost when that container was replaced. The thumbnail cache was stored under `/app/.cache`. Persistent mappings for uploads, thumbnails, RabbitMQ, and Neo4j were proposed but were not confirmed as fully committed to the repository. 
+
+---
+
+## 3. Security incident and required credential rotation
+
+The repository dump included plaintext credentials and private material, including API keys, OAuth credentials, a JWT secret, multiple Groq keys, and a Google service-account private key. Every exposed credential must be treated as compromised, even if the source file was later deleted. 
+
+Credentials requiring rotation include:
+
+* Google service-account key
+* Google OAuth client secret
+* Google Drive API key
+* Every Groq API key
+* `JWT_SECRET`
+* PostgreSQL passwords
+* Any Azure or Neon credentials
+* Any SSH private key that was exposed
+* The DuckDNS account token, which was later pasted into the conversation
+
+Repository history should be checked with:
+
+```bash
+git ls-files .env secrets/
+git log --all -- .env secrets/
+```
+
+Rotation remains mandatory if sensitive files were ever committed, even after deletion.
+
+The DuckDNS token was explicitly exposed during troubleshooting. It must be regenerated through DuckDNS, then replaced in any scripts or GitHub secrets. The old token must no longer be trusted. 
+
+No credential value from the repository dump should be retained in `development.log`.
+
+---
+
+## 4. Planned replacement architecture
+
+The recommended free architecture was:
+
+```text
+Oracle Cloud Always Free
+├── Caddy
+├── React frontend
+├── NestJS GraphQL API
+├── Python audio service
+├── .NET analytics service
+├── RabbitMQ
+└── Neo4j
+
+Neon
+└── PostgreSQL
+
+GitHub Actions
+└── Source upload/build/deployment
+
+DuckDNS
+└── Frontend and API DNS names
+```
+
+Azure components mapped to:
+
+* Azure VM/AKS → Oracle Ampere A1 VM
+* Azure PostgreSQL or Docker PostgreSQL → Neon
+* Azure Blob Storage → Oracle block/object storage
+* Azure Key Vault → Oracle Vault
+* Azure Container Registry → GitHub Container Registry or direct VM builds
+* Azure public networking → Oracle VCN and reserved public IP
+* Azure load balancer → Caddy directly
+* Azure monitoring → Oracle Monitoring
+* Azure deployment → GitHub Actions over SSH
+* DuckDNS and Caddy → retained
+* Neo4j and RabbitMQ → self-hosted on Oracle 
+
+### What was not ultimately implemented
+
+The conversation did **not** confirm completion of:
+
+* A PostgreSQL restore into Neon
+* Application conversion to `DATABASE_URL`
+* Removal of the local PostgreSQL container
+* GitHub Container Registry
+* Oracle Vault
+* Oracle Object Storage
+* A shared database between Azure and Oracle
+* Continuous Azure-to-Oracle replication
+* A production failover watchdog
+* A permanent failover lock
+
+The emergency Oracle deployment continued using local Docker PostgreSQL. Therefore, the final implementation was effectively **Azure VM → Oracle VM**, not a completed Azure-to-Neon migration.
+
+---
+
+## 5. Neon findings and uncompleted database plan
+
+A Neon project and `production` branch existed. Its dashboard showed approximately `0.03 GB` stored out of a `0.5 GB` project allowance at the time. The intended process was to collect separate direct and pooled connection strings:
+
+* Direct hostname: for `pg_dump`, `pg_restore`, DDL, and migrations
+* `-pooler` hostname: for normal pooled application traffic
+* SSL/TLS required
+
+The existing database code constructed its `pg.Pool` from separate `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` values. A patch was recommended to accept a full `DATABASE_URL`, initially using the direct Neon URL because the application executes DDL during startup. Compose would then pass `DATABASE_URL`, remove the API’s dependency on `postgres`, and eventually remove the local PostgreSQL service after migration verification.  
+
+There is no evidence that this patch or the Neon restore was completed. The currently active PostgreSQL instance is the Oracle-hosted Docker container.
+
+---
+
+## 6. Oracle Cloud VM provisioning
+
+### OCI account and region
+
+* Home region: **US West (Phoenix)**
+* Instance name: `wavestack-prod`
+* VCN: `wavestack-vcn`
+* Public subnet: `wavestack-public-subnet`
+* Primary private IPv4: `10.0.0.114`
+* Primary VNIC: `wavestack-prod-vnic`
+* Operating system: Ubuntu 24.04.4 LTS
+* Architecture: ARM64 / `aarch64`
+
+### Requested versus actual VM size
+
+The initial recommendation was 2 OCPUs and 12 GB RAM, but the instance that was successfully created had:
+
+```text
+1 OCPU
+Approximately 5.8 GiB usable RAM
+Approximately 45 GB root filesystem
+4 GB swap added later
+```
+
+One OCPU and 6 GB RAM are computing resources, not monthly storage or data-transfer limits. The VM used half of the conversation’s cited Always Free A1 allowance of 2 OCPUs and 12 GB RAM. The boot volume counted against the combined block-storage allowance, and outbound transfer was separate.  
+
+Because this is a single-CPU host, building multiple Docker images and performing metadata inspection across thousands of tracks is slow. A 4 GB swap file was added to reduce the risk of processes being killed during temporary memory pressure.
+
+### Software installed
+
+* Updated Ubuntu packages
+* Docker Engine
+* Docker Compose plugin
+* Git
+* `rsync`
+* `curl`
+* `jq`
+* PostgreSQL client tools
+* Caddy
+* `iptables-persistent`
+
+Docker was enabled through systemd. Caddy was later installed directly on the host and also enabled through systemd.
+
+### Persistent directories created
+
+The following host directories were created:
+
+```text
+/srv/wavestack/app
+/srv/wavestack/data/uploads
+/srv/wavestack/data/cache
+/srv/wavestack/data/postgres
+/srv/wavestack/data/neo4j
+/srv/wavestack/data/rabbitmq
+/srv/wavestack/backups
+/srv/wavestack/failover
+```
+
+Creation of these directories did not by itself prove that all Compose services had been updated to bind-mount them. That mapping still needs verification.
+
+---
+
+## 7. Oracle public IP history
+
+Oracle initially assigned the ephemeral address:
+
+```text
+129.146.54.105
+```
+
+A reserved public IP was then created and assigned to the primary private IP `10.0.0.114`:
+
+```text
+141.148.156.24
+```
+
+The reserved IP points to the same VM and survived replacement of the ephemeral address. GitHub’s `ORACLE_VM_HOST` secret was updated to the reserved IP. 
+
+One SSH failure was caused by this malformed command:
+
+```bash
+ssh -i ~/.ssh/wavestack_oracle \ ubuntu@141.148.156.24
+```
+
+The backslash escaped the following space, creating a username with a leading space. The corrected form was:
+
+```bash
+ssh -o IdentitiesOnly=yes \
+  -i ~/.ssh/wavestack_oracle \
+  ubuntu@141.148.156.24
+```
+
+The identical host fingerprint confirmed that the reserved IP referred to the same VM. 
+
+---
+
+## 8. SSH key model
+
+Two separate SSH keys were used:
+
+### Personal administrative key
+
+```text
+~/.ssh/wavestack_oracle
+```
+
+* Created locally in WSL
+* Passphrase-protected
+* Private key remains on the developer machine
+* Public key installed on Oracle
+
+### GitHub Actions deployment key
+
+```text
+~/.ssh/wavestack_oracle_actions
+```
+
+* Created locally in WSL without a passphrase
+* Public key appended to Oracle’s `~/.ssh/authorized_keys`
+* Private key base64-encoded into a GitHub Actions secret
+* Private key must not be copied onto Oracle
+
+An early mistake generated the CI key from the Oracle shell rather than WSL. It was removed and recreated locally. Commands referencing `/home/qacer/.ssh/...` must run from WSL, not from Oracle’s `/home/ubuntu` account.
+
+GitHub secrets used:
+
+```text
+ORACLE_VM_HOST
+ORACLE_VM_USER
+ORACLE_VM_SSH_PRIVATE_KEY_B64
+```
+
+`ORACLE_VM_USER` was `ubuntu`.
+
+---
+
+## 9. GitHub Actions standby deployment
+
+The existing workflow was named **Deploy to Azure VM** and deployed to Azure over SSH on pushes to `main` or `master`.
+
+A second independent job, `deploy_oracle_standby`, was added. It:
+
+1. Checked out the repository.
+2. Validated Oracle secrets.
+3. Decoded the temporary CI private key.
+4. Added the Oracle host key.
+5. Tested SSH.
+6. Used `rsync` to copy source to `~/WaveStack`.
+7. Excluded `.env`, `secrets/`, build output, caches, and other private/generated data.
+8. Ran `docker compose config`.
+9. Ran `docker compose build`.
+10. Wrote `.oracle-standby-ready`.
+11. Removed the temporary key.
+
+The Oracle and Azure jobs had no dependency on one another, so Oracle could still receive code when Azure was unavailable. The Oracle job succeeded and confirmed SSH, source upload, and ARM64 image builds.  
+
+### Critical limitation
+
+The standby job intentionally ran:
+
+```bash
+docker compose build
+```
+
+and not:
+
+```bash
+docker compose up -d
+```
+
+Therefore, Oracle received and built code but did not serve production traffic. GitHub Actions was not an outage detector, and no systemd failover service was implemented.
+
+### Required final workflow state
+
+Now that Azure is permanently unavailable, the Oracle job should deploy with:
+
+```bash
+sudo docker compose up --build -d
+sudo docker compose ps
+```
+
+The Azure deployment job should be disabled or removed.
+
+This workflow change was instructed but not confirmed as completed. Until it is verified, a GitHub push may build Oracle images without restarting the production containers.
+
+---
+
+## 10. Intended failover design versus actual implementation
+
+The intended design was active/passive:
+
+```text
+Azure
+├── Active application
+├── Primary PostgreSQL
+└── All production writes
+
+Oracle
+├── Standby application
+├── Replicated PostgreSQL
+├── Synchronized uploads
+└── Azure health monitor
+```
+
+The proposed one-way watchdog would:
+
+1. Check the Azure frontend and API repeatedly.
+2. Require several consecutive failures.
+3. Verify database replication lag.
+4. Fence or stop Azure if reachable.
+5. Promote Oracle PostgreSQL.
+6. Start Oracle containers.
+7. update DuckDNS.
+8. Create `/var/lib/wavestack/failover.lock`.
+9. Never automatically switch back.
+
+This design was never implemented. It also carried split-brain risk if Oracle could not reach Azure even though Azure remained available to users. Guaranteed zero-loss failover would have required synchronous replication or a shared database such as Neon. 
+
+The actual standby state was:
+
+```text
+GitHub push
+→ upload source to Oracle
+→ build images
+→ leave containers inactive
+```
+
+---
+
+## 11. Azure shutdown and outage
+
+Historical Azure VM details:
+
+```text
+VM: wavestack-dev-vm
+Resource group: RG-WAVESTACK-DEV
+Region: South Central US
+Size: Standard_B2ps_v2
+Public IP: 20.225.235.88
+```
+
+DuckDNS still pointed both domains at `20.225.235.88`. HTTPS and SSH timed out when the VM entered `Deallocating`.
+
+At first, possible causes included manual stop, auto-shutdown, CLI automation, or a service principal. A Docker or Caddy crash would not normally cause Azure’s control plane to report `Deallocating`. The user later confirmed that the Azure credit had expired and the VM was permanently stopped.  
+
+Oracle did not take over because:
+
+* It was build-only.
+* Its containers were inactive.
+* DNS still pointed to Azure.
+* No failover watchdog existed.
+* PostgreSQL, Neo4j, uploads, and Docker volumes had not been copied.
+* No database promotion procedure existed.
+
+The old Azure VM and managed disk should not be deleted. They may be the only remaining source for the complete production PostgreSQL volume, Neo4j state, uploaded files, queue state, and historical listening data.
+
+---
+
+## 12. Emergency Oracle activation
+
+Because Azure could no longer be started, Oracle was activated as a new production server with:
+
+```bash
+docker compose up --build -d
+```
+
+This created fresh PostgreSQL and Neo4j volumes. It did **not** restore Azure production state. As a result, existing accounts, favorites, history, playlists, recommendations, uploads, and metadata were initially absent from the Oracle database. 
+
+The initial Compose startup showed:
+
+* Frontend running
+* Audio service running
+* Analytics service running
+* RabbitMQ running
+* Neo4j running
+* Azurite running
+* PostgreSQL exited during initialization
+* GraphQL API exited because PostgreSQL was unavailable
+* No Compose `caddy` service existed
+* Nothing was initially listening publicly on ports 80 or 443 
+
+PostgreSQL was restarted first, followed by GraphQL. GraphQL later registered `/graphql` and the application started successfully.
+
+---
+
+## 13. Caddy deployment
+
+Caddy was installed directly on Ubuntu rather than as a Docker service.
+
+Configuration:
+
+```caddyfile
+wavestack.duckdns.org {
+    reverse_proxy 127.0.0.1:5173
+}
+
+api.wavestack.duckdns.org {
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+Configuration path:
+
+```text
+/etc/caddy/Caddyfile
+```
+
+Service:
+
+```text
+caddy.service
+```
+
+Caddy was enabled and running under systemd and eventually listened on:
+
+```text
+*:80
+*:443
+```
+
+This means Caddy configuration is currently server-local and is not necessarily represented or restored by the repository deployment workflow.
+
+---
+
+## 14. Oracle networking and firewall failure
+
+Two independent firewall layers had to permit traffic:
+
+1. OCI VCN security-list ingress rules
+2. Ubuntu’s host firewall/iptables rules
+
+Final OCI ingress rules included:
+
+```text
+0.0.0.0/0 → TCP destination port 80
+0.0.0.0/0 → TCP destination port 443
+```
+
+The port value had to be entered under **Destination Port Range**, not **Source Port Range**.
+
+Even after OCI rules were correct, external requests returned:
+
+```text
+No route to host
+```
+
+This was not a routing problem. Ubuntu’s iptables chain ended with:
+
+```text
+REJECT ... reject-with icmp-host-prohibited
+```
+
+There were no HTTP/HTTPS acceptance rules before that rejection.
+
+The exact host fix inserted:
+
+```text
+ACCEPT tcp dpt:443
+ACCEPT tcp dpt:80
+```
+
+at rules 1 and 2, ahead of the final reject rule, and saved the configuration through `iptables-persistent`. Caddy was already listening on both ports.  
+
+After this fix:
+
+* TCP port 80 succeeded.
+* TCP port 443 succeeded.
+* HTTP returned `308 Permanent Redirect`.
+* HTTPS completed successfully.
+* Let’s Encrypt issued valid certificates for both domains.
+
+Working network path:
+
+```text
+Browser
+→ DuckDNS
+→ Oracle reserved public IP
+→ OCI security list
+→ Ubuntu iptables
+→ Caddy
+→ frontend or GraphQL API
+```
+
+---
+
+## 15. DNS and TLS cutover
+
+DuckDNS changed from the dead Azure address:
+
+```text
+20.225.235.88
+```
+
+to Oracle:
+
+```text
+141.148.156.24
+```
+
+Domains:
+
+```text
+wavestack.duckdns.org
+api.wavestack.duckdns.org
+```
+
+Final observed behavior:
+
+* `http://wavestack.duckdns.org` → HTTPS redirect
+* `https://wavestack.duckdns.org` → HTTP `200`
+* Valid Let’s Encrypt certificate for the frontend domain
+* Valid Let’s Encrypt certificate for the API domain
+* `https://api.wavestack.duckdns.org/` → HTTP `404`, which is expected
+* Actual API endpoint: `https://api.wavestack.duckdns.org/graphql` 
+
+A GraphQL health query is:
+
+```bash
+curl -sS \
+  https://api.wavestack.duckdns.org/graphql \
+  -H 'Content-Type: application/json' \
+  --data '{"query":"{ __typename }"}'
+```
+
+Expected response:
+
+```json
+{"data":{"__typename":"Query"}}
+```
+
+---
+
+## 16. PostgreSQL initialization failure
+
+PostgreSQL’s first initialization stopped partway through because migration `010` attempted to reference:
+
+```text
+app_listening_events.created_at
+```
+
+The actual column was:
+
+```text
+started_at
+```
+
+The failure prevented creation of:
+
+```text
+app_listening_events_combined
+```
+
+Because PostgreSQL Docker initialization scripts run only when the data directory is new, restarting the partially initialized database did not automatically rerun every missing migration. Later migrations were skipped.
+
+The repository’s corrected migration maps:
+
+```sql
+started_at AS created_at
+```
+
+Manual application of:
+
+```text
+infra/postgres/migrations/010_listening_archive_readthrough.sql
+```
+
+created the missing combined listening-events view. 
+
+### Required permanent repository fix
+
+The corrected migration must remain committed and be tested against a completely empty PostgreSQL volume. Fresh-database CI should fail if any initialization script stops or if expected relations are absent.
+
+---
+
+## 17. Missing `title_locked` migration
+
+Because initialization stopped during migration `010`, migration `011` was skipped.
+
+The Drive synchronization code requires:
+
+```sql
+drive_tracks.title_locked boolean NOT NULL DEFAULT false
+```
+
+The sync failed with:
+
+```text
+column "title_locked" of relation "drive_tracks" does not exist
+```
+
+Manual application of:
+
+```text
+infra/postgres/migrations/011_drive_tracks_title_locked.sql
+```
+
+returned:
+
+```text
+ALTER TABLE
+```
+
+The column was then verified as a Boolean with default `false`, and GraphQL was restarted successfully.  
+
+---
+
+## 18. Authentication/user foreign-key mismatch
+
+After Oracle started with a fresh database, the browser still held a JWT issued while Azure was active.
+
+Because the same `JWT_SECRET` had been copied to Oracle:
+
+* Oracle could validate the old token.
+* The token referenced the old Azure user UUID.
+* That UUID did not exist in Oracle’s new `app_users` table.
+* Listening-event writes failed with `app_listening_events_user_id_fkey`.
+
+The fix was:
+
+1. Sign out.
+2. Do not clear favorites, recent tracks, or playlists from browser storage.
+3. Sign in with Google again.
+4. Allow Oracle to create/upsert the user.
+5. Retest playback and listening-event inserts. 
+
+Rotating the compromised `JWT_SECRET` remains appropriate and will invalidate old sessions.
+
+---
+
+## 19. Google Drive music-library synchronization
+
+The frontend masks backend synchronization failures and displays only:
+
+```text
+Could not refresh the music library.
+```
+
+The real error must be obtained from GraphQL or server logs.
+
+After applying migrations `010` and `011` and signing in again:
+
+* Both configured Drive folders were scanned.
+* Google Drive found **4,024 media files**.
+* PostgreSQL already contained **4,016 imported track rows** at the observed checkpoint.
+* Synchronization status was still `running`.
+* The active background process had historically been PID `26232`, but that PID should not be treated as current. 
+
+### Why the first sync is slow
+
+The first complete Oracle sync performs:
+
+1. Recursive Drive folder listing.
+2. Track upserts into PostgreSQL.
+3. Artwork lookup or thumbnail generation.
+4. Temporary audio downloads for tracks whose metadata is not locked.
+5. ID3/MP4/FLAC metadata inspection.
+6. Title and artist repair.
+7. Marking processed rows with `title_locked=true`.
+
+Artwork and metadata processing are largely sequential. The VM has one OCPU, and almost all rows in a fresh database initially require processing. The MP3 files are not being stored in PostgreSQL; they may be downloaded temporarily for metadata inspection. Future syncs should be much faster because locked metadata and cached thumbnails are skipped. 
+
+### Nonfatal thumbnail failures
+
+Messages such as:
+
+```text
+No embedded artwork found
+Thumbnail URL failed with 404
+```
+
+do not terminate the synchronization. They mean a track lacks usable artwork at the attempted source, and fallback artwork is used.
+
+### Background synchronization procedure
+
+The long GraphQL mutation was launched with `nohup`, writing:
+
+```text
+~/wavestack-drive-sync.log
+~/wavestack-drive-sync.pid
+```
+
+During an active sync:
+
+* Do not restart `graphql-api`.
+* Do not start a second sync.
+* Do not repeatedly press the website sync button.
+* Do not run `docker compose down`.
+* Do not delete volumes.
+
+The sync status query is:
+
+```graphql
+{
+  driveSyncStatus {
+    status
+    startedAt
+    finishedAt
+    scannedCount
+    upsertedCount
+    thumbnailCount
+    errorMessage
+  }
+}
+```
+
+The application records final counts only when the run finishes, so count fields can remain zero while status is `running`.
+
+### Last known sync state
+
+The last explicit evidence showed the sync still running. Completion with `"status": "success"` was not confirmed.
+
+---
+
+## 20. Browser-local library behavior
+
+The warning:
+
+```text
+Could not load saved account library yet; keeping local favorites/recent/playlists.
+```
+
+does not necessarily indicate that the API is offline.
+
+It is shown when:
+
+* The user is authenticated.
+* The server returns a valid but empty library.
+* The browser already has local favorites, recent tracks, or playlists.
+* The frontend protects the local state rather than replacing it with empty server state.
+
+Relevant browser storage keys:
+
+```text
+wavestack:favorites
+wavestack:recent
+wavestack:playlists
+wavestack:song-cache
+wavestack:apollo-cache
+apollo-cache-persist
+```
+
+The data survived the Azure-to-Oracle switch because the browser origin remained `wavestack.duckdns.org`. The browser’s local library therefore looked intact even though Oracle’s new PostgreSQL database was mostly empty. Another browser, incognito session, or cleared browser profile would not necessarily contain that data. 
+
+---
+
+## 21. Browser-library export and generated Oracle importer
+
+The browser library was exported before it could be overwritten.
+
+Exported account state contained:
+
+* **298 favorites**
+* **98 recent tracks**
+* **1 playlist:** `the men`
+* **28 songs in that playlist**
+
+A PostgreSQL importer was generated for the user’s Oracle account. The import was prepared, but the conversation did not confirm that it was executed. 
+
+### Importer behavior
+
+The importer:
+
+* Looks up the target Oracle user by email.
+* Refuses to continue if an imported playlist UUID belongs to another user.
+* Deletes only that user’s existing server-side favorites.
+* Deletes only that user’s existing listening events.
+* Deletes only that user’s existing playlists.
+* Recreates favorites in browser order.
+* Recreates the recent-track ordering.
+* Recreates playlists and playlist membership.
+* Prints a verification summary.
+* Does not replace the Drive music catalog.
+* Does not replace MP3 files.
+* Does not alter other users.
+
+The importer should be run only after:
+
+1. Drive synchronization reports success.
+2. A PostgreSQL backup is taken.
+3. The target user exists through a fresh Oracle Google login. 
+
+### Limitation of recent-track restoration
+
+The browser backup contains recent-track ordering but not original timestamps or full play counts. The importer therefore creates one synthetic listening event per recent track, spaced one minute apart. It preserves display order but cannot reconstruct complete historical listening statistics. 
+
+### Import status
+
+**Prepared, not confirmed applied.**
+
+---
+
+## 22. Current known production topology
+
+```text
+Users
+  |
+  v
+DuckDNS
+  |
+  v
+141.148.156.24
+Oracle Cloud VM: wavestack-prod
+  |
+  +-- Host Caddy :80/:443
+  |     +-- wavestack.duckdns.org → 127.0.0.1:5173
+  |     └-- api.wavestack.duckdns.org → 127.0.0.1:3000
+  |
+  +-- Docker Compose
+        +-- frontend
+        +-- graphql-api
+        +-- postgres:16
+        +-- neo4j:5
+        +-- rabbitmq
+        +-- audio-ai-service
+        +-- analytics-service
+        └-- azurite
+```
+
+### Confirmed working
+
+* Oracle SSH
+* Reserved public IP
+* OCI port 80 ingress
+* OCI port 443 ingress
+* Ubuntu iptables port 80 acceptance
+* Ubuntu iptables port 443 acceptance
+* Caddy systemd service
+* HTTP-to-HTTPS redirect
+* Valid HTTPS certificates
+* Frontend HTTP `200`
+* GraphQL API process
+* `/graphql` route
+* PostgreSQL container
+* Manually repaired migrations `010` and `011`
+* Google sign-in against Oracle
+* Google Drive scanning and track ingestion
+
+### Not confirmed complete
+
+* Drive sync final success
+* Browser-library SQL import
+* Full old Azure database recovery
+* Old Neo4j recovery
+* Old uploaded-file recovery
+* RabbitMQ state recovery
+* Complete historical listening data
+* GitHub workflow conversion from standby build to production deployment
+* Removal/disablement of Azure deployment job
+* Automatic container restart after VM reboot
+* Caddy configuration under source control
+* Neon migration
+* Off-server PostgreSQL backups
+* Credential rotation
+
+---
+
+## 23. Exact root-cause summary
+
+| Symptom                                          | Root cause                                                                                                | Fix                                                                                   | Status                                                         |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| Website went offline                             | Azure subscription credit expired; Azure VM stopped; DNS still pointed to Azure                           | Activate Oracle and move DuckDNS to `141.148.156.24`                                  | Fixed                                                          |
+| Oracle did not take over                         | Oracle job only built images; no failover monitor, data replication, container startup, or DNS automation | Manually start Oracle and change DNS                                                  | Manual cutover completed; automatic failover never implemented |
+| No public website on Oracle                      | Compose had no Caddy service                                                                              | Install Caddy directly on Ubuntu and configure reverse proxies                        | Fixed                                                          |
+| PostgreSQL exited                                | Migration `010` referenced nonexistent `created_at` column                                                | Restart Postgres; manually apply corrected migration using `started_at AS created_at` | Fixed manually                                                 |
+| GraphQL exited                                   | PostgreSQL hostname/service unavailable after DB failure                                                  | Restart PostgreSQL, then GraphQL                                                      | Fixed                                                          |
+| `app_listening_events_combined` missing          | Migration `010` stopped before creating the view                                                          | Apply corrected `010_listening_archive_readthrough.sql`                               | Fixed manually                                                 |
+| Drive sync failed on `title_locked`              | Migration `011` was skipped after the earlier initialization failure                                      | Apply `011_drive_tracks_title_locked.sql`                                             | Fixed manually                                                 |
+| Listening events violated user FK                | Browser used old Azure JWT/user UUID against fresh Oracle database                                        | Sign out and sign in again                                                            | Fixed                                                          |
+| External request said `No route to host`         | Ubuntu iptables final REJECT blocked 80/443                                                               | Insert ACCEPT rules for 443 and 80 before REJECT; persist rules                       | Fixed                                                          |
+| Caddy could not obtain certificates              | Public HTTP challenge could not reach port 80                                                             | Correct OCI rule and host firewall, then restart Caddy                                | Fixed                                                          |
+| API root returned `404`                          | API is mounted at `/graphql`, not `/`                                                                     | Test `/graphql`                                                                       | Expected behavior                                              |
+| Browser library appeared despite empty Oracle DB | Same browser origin retained localStorage/Apollo state                                                    | Export local state and prepare database importer                                      | Export completed; import unconfirmed                           |
+| First Drive sync was extremely slow              | Fresh catalog, 4,000+ files, artwork and metadata inspection, one CPU                                     | Run in background and monitor                                                         | Last known running                                             |
+| Thumbnail `404`s                                 | Some tracks lacked usable artwork                                                                         | Use fallback artwork and continue                                                     | Nonfatal                                                       |
+
+The full web recovery path and exact firewall/Caddy fixes are documented in the source conversation. 
+
+---
+
+## 24. Data that may still be missing
+
+Because Oracle started with fresh volumes, the following Azure-origin state was not confirmed as migrated:
+
+* Original PostgreSQL user records
+* Complete listening-event history
+* Original event timestamps and play counts
+* Favorites not present in the browser export
+* Playlists not present in the browser export
+* Other users’ account libraries
+* Neo4j recommendation graph
+* RabbitMQ queues
+* Locally uploaded files from `/app/uploads`
+* Thumbnail cache
+* Any Docker-volume-only metadata
+* Any local Azurite data
+
+Google Drive can reconstruct the shared music catalog, and the browser export can partially reconstruct one account, but neither replaces a full Azure PostgreSQL/Neo4j/uploads backup.
+
+The Azure managed disk should therefore be preserved for possible forensic recovery.
+
+---
+
+## 25. Remaining work, in priority order
+
+### P0 — Security
+
+* Regenerate the exposed DuckDNS token.
+* Rotate all keys and credentials found in the repository dump.
+* Rotate `JWT_SECRET` and require reauthentication.
+* Verify `.env` and `secrets/` were never committed.
+* Remove sensitive files from Git history if necessary.
+* Restrict OCI SSH port 22 to the developer’s current IP instead of `0.0.0.0/0`.
+* Verify internal Docker service ports are not publicly reachable.
+* Keep PostgreSQL, RabbitMQ, Neo4j, audio, analytics, and Azurite private.
+
+The final OCI screenshot still showed SSH allowed from `0.0.0.0/0`, so this should be hardened.
+
+### P0 — Data preservation
+
+* Confirm the Drive sync reached `"status": "success"`.
+* Save the final sync log.
+* Back up Oracle PostgreSQL immediately.
+* Run the generated browser-library importer only after the Drive catalog is ready.
+* Verify the expected counts: 298 favorites, 98 recent tracks, one playlist, 28 playlist entries.
+* Test from another browser or incognito session.
+* Preserve the Azure VM and disk.
+* Attempt to recover the old Azure PostgreSQL, Neo4j, and uploads volumes.
+* Compare recovered data with the reconstructed Oracle data before merging.
+
+### P0 — Deployment automation
+
+* Change the Oracle GitHub job from `docker compose build` to `docker compose up --build -d`.
+* Disable/remove the Azure job.
+* Verify a new push actually updates running Oracle containers.
+* Ensure `.env` and `secrets/` remain server-local and are not removed by `rsync --delete`.
+* Add post-deployment health checks for frontend and GraphQL.
+* Make a failed health check fail the workflow.
+
+### P1 — Restart resilience
+
+* Confirm Docker starts on boot.
+* Confirm Caddy starts on boot.
+* Add suitable Compose restart policies.
+* Reboot Oracle in a controlled maintenance window.
+* Verify every container returns.
+* Verify Caddy still reaches ports 5173 and 3000.
+* Verify DNS, TLS, GraphQL, login, playback, and Drive streaming afterward.
+* Consider a systemd unit for `docker compose up -d`.
+
+### P1 — Database migration reliability
+
+* Commit corrected migration `010`.
+* Keep migration `011` idempotent.
+* Add a migration-state table or migration tool instead of relying only on `/docker-entrypoint-initdb.d`.
+* Test initialization against a fresh empty PostgreSQL volume.
+* Assert that `app_listening_events_combined` exists.
+* Assert that `drive_tracks.title_locked` exists.
+* Ensure one failed migration prevents an apparently successful deployment.
+* Add an automated database backup before every deployment that changes migrations.
+
+### P1 — Persistent storage
+
+* Verify actual Compose mounts for:
+
+  * `/app/uploads`
+  * `/app/.cache`
+  * PostgreSQL
+  * Neo4j
+  * RabbitMQ
+* Ensure critical state is stored under persistent host paths or named volumes.
+* Create off-VM backups.
+* Do not depend solely on the Oracle boot disk.
+* Consider Oracle Object Storage, Cloudflare R2, Google Drive, or local encrypted backups.
+
+### P1 — Caddy management
+
+* Add the Caddyfile to a controlled deployment path.
+* Ensure secret-free Caddy configuration is under source control.
+* Deploy it through GitHub Actions or configuration management.
+* Validate before reload.
+* Keep Caddy certificate storage persistent.
+* Add a Caddy health check.
+
+### P2 — Decide the long-term PostgreSQL architecture
+
+Choose one explicit strategy:
+
+**Option A: Keep local Oracle PostgreSQL**
+
+* Simpler current state
+* Requires rigorous backups
+* Shares CPU, memory, and disk with all application services
+* Single-VM failure affects application and database
+
+**Option B: Complete Neon migration**
+
+* Add and test `DATABASE_URL`
+* Back up Oracle PostgreSQL
+* Restore into a fresh Neon branch
+* Run migrations using the direct URL
+* Test with Oracle application privately
+* Switch API to Neon
+* Validate all features
+* Remove the local Postgres service only after verification
+
+The conversation’s original Neon migration remains unfinished.
+
+### P2 — Observability
+
+* Add health endpoints for frontend, GraphQL, PostgreSQL, Neo4j, RabbitMQ, Drive access, and Caddy.
+* Add disk, RAM, swap, CPU, and container-restart monitoring.
+* Alert on certificate-renewal errors.
+* Alert on failed Drive sync.
+* Alert on PostgreSQL backup failures.
+* Record deployment versions and timestamps.
+* Record migration state.
+
+### P2 — Resource optimization
+
+The host has one CPU and approximately 6 GB RAM. Consider:
+
+* Limiting concurrent Docker builds.
+* Building images in GitHub Actions rather than on the VM.
+* Publishing ARM64 images to GHCR.
+* Applying memory limits.
+* Scheduling large Drive metadata passes during low traffic.
+* Avoiding simultaneous backup, build, and full-library sync.
+* Moving PostgreSQL to Neon if local resource contention becomes significant.
+
+---
+
+## 26. Operational validation checklist
+
+After every deployment:
+
+```text
+[ ] Oracle SSH works.
+[ ] Disk has sufficient free space.
+[ ] RAM and swap are healthy.
+[ ] All required Compose services are running.
+[ ] PostgreSQL accepts connections.
+[ ] app_listening_events_combined exists.
+[ ] drive_tracks.title_locked exists.
+[ ] GraphQL { __typename } succeeds.
+[ ] Frontend returns 200.
+[ ] HTTP redirects to HTTPS.
+[ ] TLS certificates validate.
+[ ] Google login works.
+[ ] User record exists in Oracle.
+[ ] Playback works.
+[ ] Listening events insert without FK errors.
+[ ] Favorites save and reload.
+[ ] Recent tracks save and reload.
+[ ] Playlists save and reload.
+[ ] Drive streaming works.
+[ ] Drive sync status is not failed.
+[ ] Another browser/incognito sees server-side library state.
+[ ] Caddy and containers survive a controlled reboot.
+[ ] A PostgreSQL backup exists off the VM.
+```
+
+---
+
+## 27. Final project status
+
+**Production traffic:** Oracle Cloud
+**Production IP:** `141.148.156.24`
+**Frontend:** `https://wavestack.duckdns.org`
+**GraphQL:** `https://api.wavestack.duckdns.org/graphql`
+**Reverse proxy:** Host-installed Caddy
+**Database:** Local Oracle-hosted PostgreSQL 16 container
+**Neon:** Provisioned but not confirmed in use
+**Azure:** Permanently stopped after credit expiration
+**Old Azure data:** Not migrated; potentially recoverable from the retained disk
+**Drive catalog:** 4,024 files discovered; 4,016 rows observed during a still-running first sync
+**Browser library:** Exported; SQL importer generated; execution not confirmed
+**HTTPS:** Working with valid Let’s Encrypt certificates
+**CI/CD:** Oracle standby job succeeded; production `up --build -d` conversion not confirmed
+**Automatic failover:** Never implemented
+**Credential rotation:** Still required
+**Overall state:** Website restored, infrastructure cutover completed manually, but migration remains partial and needs security hardening, data recovery, backup automation, and deployment finalization.
+ WAVESTACK ORACLE PRODUCTION COMMANDS
+====================================
+
+CURRENT PRODUCTION
+------------------
+Oracle IP: 141.148.156.24
+Oracle user: ubuntu
+Frontend: https://wavestack.duckdns.org
+GraphQL: https://api.wavestack.duckdns.org/graphql
+WSL SSH key: ~/.ssh/wavestack_oracle
+Oracle project directory: ~/WaveStack
+
+
+============================================================
+WSL TERMINAL
+============================================================
+
+# Enter the local repository.
+cd /home/projects/WaveStack
+
+
+# Test Oracle SSH and public web ports.
+nc -vz -w 5 141.148.156.24 22
+nc -vz -w 5 141.148.156.24 80
+nc -vz -w 5 141.148.156.24 443
+
+
+# Connect to Oracle.
+ssh -o ConnectTimeout=10 \
+  -o IdentitiesOnly=yes \
+  -i ~/.ssh/wavestack_oracle \
+  ubuntu@141.148.156.24
+
+
+# Check DNS.
+nslookup wavestack.duckdns.org 1.1.1.1
+nslookup api.wavestack.duckdns.org 1.1.1.1
+
+
+# Check frontend HTTP redirect and HTTPS.
+curl -I --connect-timeout 10 \
+  http://wavestack.duckdns.org
+
+curl -vI --connect-timeout 15 \
+  https://wavestack.duckdns.org
+
+
+# Check the GraphQL API.
+curl -sS \
+  https://api.wavestack.duckdns.org/graphql \
+  -H 'Content-Type: application/json' \
+  --data-binary '{"query":"{ __typename }"}' |
+jq .
+
+
+# Upload the repository manually while preserving server secrets and data.
+rsync -az --delete \
+  --exclude '.git' \
+  --exclude 'node_modules' \
+  --exclude 'dist' \
+  --exclude 'build' \
+  --exclude 'coverage' \
+  --exclude '.env' \
+  --exclude 'secrets' \
+  --exclude 'response.json' \
+  --exclude 'services/graphql-api/.cache' \
+  -e 'ssh -o IdentitiesOnly=yes -i ~/.ssh/wavestack_oracle' \
+  ./ \
+  ubuntu@141.148.156.24:~/WaveStack/
+
+
+# Upload the optional browser-library SQL importer.
+# Run only when the file exists locally.
+scp -o IdentitiesOnly=yes \
+  -i ~/.ssh/wavestack_oracle \
+  ./wavestack-library-import-oracle.sql \
+  ubuntu@141.148.156.24:~/
+
+
+# Create a GitHub Actions deployment key locally if needed.
+ssh-keygen -t ed25519 \
+  -C 'wavestack-github-actions' \
+  -f ~/.ssh/wavestack_oracle_actions \
+  -N ''
+
+
+# Install the GitHub Actions public key on Oracle.
+ssh-copy-id \
+  -i ~/.ssh/wavestack_oracle_actions.pub \
+  -o IdentitiesOnly=yes \
+  -o IdentityFile=~/.ssh/wavestack_oracle \
+  ubuntu@141.148.156.24
+
+
+# Print the private deployment key as one base64 line.
+# Save it as GitHub secret ORACLE_VM_SSH_PRIVATE_KEY_B64.
+base64 -w 0 ~/.ssh/wavestack_oracle_actions
+echo
+
+
+# Required GitHub repository secrets:
+# ORACLE_VM_HOST=141.148.156.24
+# ORACLE_VM_USER=ubuntu
+# ORACLE_VM_SSH_PRIVATE_KEY_B64=<base64 output above>
+
+
+============================================================
+ORACLE TERMINAL: ONE-TIME HOST SETUP
+============================================================
+
+# Connect from WSL first:
+# ssh -o IdentitiesOnly=yes -i ~/.ssh/wavestack_oracle ubuntu@141.148.156.24
+
+
+# Update the host and install required packages.
+sudo apt update
+sudo DEBIAN_FRONTEND=noninteractive apt install -y \
+  ca-certificates \
+  curl \
+  git \
+  jq \
+  rsync \
+  postgresql-client \
+  caddy \
+  iptables-persistent
+
+
+# Install Docker if it is not already installed.
+if ! command -v docker >/dev/null 2>&1; then
+  curl -fsSL https://get.docker.com | sudo sh
+fi
+
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
+
+
+# Create 4 GB swap if no swap exists.
+if [ "$(swapon --show --noheadings | wc -l)" -eq 0 ]; then
+  sudo fallocate -l 4G /swapfile
+  sudo chmod 600 /swapfile
+  sudo mkswap /swapfile
+  sudo swapon /swapfile
+
+  grep -q '^/swapfile ' /etc/fstab ||
+    echo '/swapfile none swap sw 0 0' |
+    sudo tee -a /etc/fstab
+fi
+
+free -h
+swapon --show
+
+
+# Create application and backup directories.
+sudo mkdir -p \
+  /srv/wavestack/app \
+  /srv/wavestack/data/uploads \
+  /srv/wavestack/data/cache \
+  /srv/wavestack/data/postgres \
+  /srv/wavestack/data/neo4j \
+  /srv/wavestack/data/rabbitmq \
+  /srv/wavestack/backups \
+  /srv/wavestack/failover
+
+sudo chown -R ubuntu:ubuntu /srv/wavestack
+
+
+============================================================
+ORACLE TERMINAL: FIREWALL
+============================================================
+
+# OCI Console must also contain stateful ingress rules:
+# 0.0.0.0/0 -> TCP destination port 80
+# 0.0.0.0/0 -> TCP destination port 443
+
+
+# Open port 80 before Ubuntu's final REJECT rule.
+sudo iptables -C INPUT \
+  -p tcp \
+  --dport 80 \
+  -m conntrack \
+  --ctstate NEW \
+  -j ACCEPT 2>/dev/null ||
+sudo iptables -I INPUT 1 \
+  -p tcp \
+  --dport 80 \
+  -m conntrack \
+  --ctstate NEW \
+  -j ACCEPT
+
+
+# Open port 443 before Ubuntu's final REJECT rule.
+sudo iptables -C INPUT \
+  -p tcp \
+  --dport 443 \
+  -m conntrack \
+  --ctstate NEW \
+  -j ACCEPT 2>/dev/null ||
+sudo iptables -I INPUT 1 \
+  -p tcp \
+  --dport 443 \
+  -m conntrack \
+  --ctstate NEW \
+  -j ACCEPT
+
+
+# Persist firewall rules.
+sudo netfilter-persistent save
+
+sudo iptables -L INPUT \
+  -n \
+  --line-numbers |
+head -40
+
+
+============================================================
+ORACLE TERMINAL: CADDY
+============================================================
+
+# Write the production reverse-proxy configuration.
+sudo tee /etc/caddy/Caddyfile >/dev/null <<'CADDY_EOF'
+wavestack.duckdns.org {
+    reverse_proxy 127.0.0.1:5173
+}
+
+api.wavestack.duckdns.org {
+    reverse_proxy 127.0.0.1:3000
+}
+CADDY_EOF
+
+
+# Format, validate and start Caddy.
+sudo caddy fmt \
+  --overwrite \
+  /etc/caddy/Caddyfile
+
+sudo caddy validate \
+  --config /etc/caddy/Caddyfile
+
+sudo systemctl enable --now caddy
+sudo systemctl restart caddy
+
+sudo systemctl status \
+  caddy \
+  --no-pager
+
+sudo ss -ltnp |
+grep -E ':(80|443)\b' || true
+
+
+# Test Caddy from inside Oracle.
+curl -I \
+  -H 'Host: wavestack.duckdns.org' \
+  http://127.0.0.1
+
+curl -I \
+  -H 'Host: api.wavestack.duckdns.org' \
+  http://127.0.0.1
+
+
+# Inspect certificate or proxy errors.
+sudo journalctl \
+  -u caddy \
+  -n 100 \
+  --no-pager
+
+
+============================================================
+ORACLE TERMINAL: PRODUCTION DEPLOYMENT
+============================================================
+
+cd ~/WaveStack
+
+# Confirm private deployment configuration exists.
+test -s .env ||
+{
+  echo 'ERROR: ~/WaveStack/.env is missing'
+  exit 1
+}
+
+test -d secrets ||
+{
+  echo 'ERROR: ~/WaveStack/secrets is missing'
+  exit 1
+}
+
+
+# Validate Docker Compose.
+sudo docker compose config >/dev/null
+
+
+# Start PostgreSQL first.
+sudo docker compose up -d postgres
+
+
+# Wait until PostgreSQL is ready.
+until sudo docker compose exec -T postgres \
+  pg_isready \
+  -U wavestack \
+  -d wavestack >/dev/null 2>&1
+do
+  echo 'Waiting for PostgreSQL...'
+  sleep 3
+done
+
+
+# Create a database backup before migrations or deployment.
+mkdir -p ~/backups
+
+sudo docker compose exec -T postgres \
+  pg_dump \
+  -U wavestack \
+  -d wavestack \
+  --clean \
+  --if-exists \
+  > ~/backups/wavestack-before-deploy-$(date +%Y%m%d-%H%M%S).sql
+
+
+# Apply the corrected listening-events migration.
+sudo docker compose exec -T postgres \
+  psql \
+  -v ON_ERROR_STOP=1 \
+  -U wavestack \
+  -d wavestack \
+  < infra/postgres/migrations/010_listening_archive_readthrough.sql
+
+
+# Apply the Drive title-lock migration.
+sudo docker compose exec -T postgres \
+  psql \
+  -v ON_ERROR_STOP=1 \
+  -U wavestack \
+  -d wavestack \
+  < infra/postgres/migrations/011_drive_tracks_title_locked.sql
+
+
+# Build and start all application containers.
+sudo docker compose up \
+  --build \
+  -d
+
+
+# Restart GraphQL after the migrations.
+sudo docker compose restart graphql-api
+
+sleep 10
+
+
+# Show all containers, including exited containers.
+sudo docker compose ps -a
+
+
+# Show recent startup logs.
+sudo docker compose logs \
+  --tail=100 \
+  postgres \
+  graphql-api \
+  frontend \
+  neo4j \
+  rabbitmq \
+  audio-ai-service \
+  analytics-service
+
+
+# Restart the host reverse proxy.
+sudo systemctl restart caddy
+
+
+============================================================
+ORACLE TERMINAL: DATABASE VERIFICATION
+============================================================
+
+cd ~/WaveStack
+
+
+# Verify the combined listening-events view.
+sudo docker compose exec -T postgres \
+  psql \
+  -U wavestack \
+  -d wavestack \
+  -c "
+    SELECT to_regclass(
+      'public.app_listening_events_combined'
+    );
+  "
+
+
+# Verify the title_locked column.
+sudo docker compose exec -T postgres \
+  psql \
+  -U wavestack \
+  -d wavestack \
+  -c "
+    SELECT
+      column_name,
+      data_type,
+      column_default
+    FROM information_schema.columns
+    WHERE table_name = 'drive_tracks'
+      AND column_name = 'title_locked';
+  "
+
+
+# List application users.
+sudo docker compose exec -T postgres \
+  psql \
+  -U wavestack \
+  -d wavestack \
+  -c "
+    SELECT
+      id,
+      email,
+      display_name,
+      created_at
+    FROM app_users
+    ORDER BY created_at;
+  "
+
+
+# Count imported Drive tracks and processing progress.
+sudo docker compose exec -T postgres \
+  psql \
+  -U wavestack \
+  -d wavestack \
+  -c "
+    SELECT
+      count(*) AS total_tracks,
+      count(*) FILTER (
+        WHERE title_locked = true
+      ) AS metadata_checked,
+      count(*) FILTER (
+        WHERE local_thumbnail_url IS NOT NULL
+      ) AS thumbnails_cached
+    FROM drive_tracks
+    WHERE deleted_at IS NULL;
+  "
+
+
+============================================================
+ORACLE TERMINAL: LOCAL HEALTH CHECKS
+============================================================
+
+cd ~/WaveStack
+
+
+# Container status.
+sudo docker compose ps -a
+
+
+# Listening ports.
+sudo ss -ltnp |
+grep -E ':(80|443|3000|5173)\b' || true
+
+
+# Frontend directly.
+curl -fsSI \
+  --max-time 15 \
+  http://127.0.0.1:5173
+
+
+# GraphQL directly.
+curl -fsS \
+  --max-time 15 \
+  http://127.0.0.1:3000/graphql \
+  -H 'Content-Type: application/json' \
+  --data-binary '{"query":"{ __typename }"}' |
+jq .
+
+
+# Public frontend.
+curl -fsSI \
+  --max-time 20 \
+  https://wavestack.duckdns.org
+
+
+# Public GraphQL endpoint.
+curl -fsS \
+  --max-time 20 \
+  https://api.wavestack.duckdns.org/graphql \
+  -H 'Content-Type: application/json' \
+  --data-binary '{"query":"{ __typename }"}' |
+jq .
+
+
+# Recent important API errors.
+sudo docker compose logs \
+  --since=15m \
+  graphql-api |
+grep -Ei \
+  'error|does not exist|foreign key|drive sync|forbidden|403' ||
+true
+
+
+# Caddy status and logs.
+sudo systemctl status \
+  caddy \
+  --no-pager
+
+sudo journalctl \
+  -u caddy \
+  -n 80 \
+  --no-pager
+
+
+============================================================
+ORACLE TERMINAL: START ONE DRIVE LIBRARY SYNC
+============================================================
+
+cd ~/WaveStack
+
+
+# Do not start a second synchronization when one is already running.
+if [ -s ~/wavestack-drive-sync.pid ] &&
+   kill -0 "$(cat ~/wavestack-drive-sync.pid)" 2>/dev/null
+then
+  echo "Drive sync is already running with PID $(cat ~/wavestack-drive-sync.pid)"
+else
+  nohup curl -sS \
+    https://api.wavestack.duckdns.org/graphql \
+    -H 'Content-Type: application/json' \
+    --data-binary '{
+      "query": "mutation { syncDriveLibrary { ok message scannedCount upsertedCount thumbnailCount } }"
+    }' \
+    > ~/wavestack-drive-sync.log \
+    2>&1 &
+
+  echo $! |
+  tee ~/wavestack-drive-sync.pid
+
+  echo 'Drive synchronization started.'
+fi
+
+
+# Do not restart graphql-api or run docker compose down during this sync.
+
+
+============================================================
+ORACLE TERMINAL: CHECK DRIVE SYNC
+============================================================
+
+# Check whether the background curl process is alive.
+if [ -s ~/wavestack-drive-sync.pid ]; then
+  ps -p "$(cat ~/wavestack-drive-sync.pid)" \
+    -o pid,etime,cmd ||
+  true
+else
+  echo 'No Drive sync PID file exists.'
+fi
+
+
+# Lightweight application status query.
+curl -sS \
+  https://api.wavestack.duckdns.org/graphql \
+  -H 'Content-Type: application/json' \
+  --data-binary '{
+    "query": "{ driveSyncStatus { status startedAt finishedAt scannedCount upsertedCount thumbnailCount errorMessage } }"
+  }' |
+jq .
+
+
+# Database progress.
+cd ~/WaveStack
+
+sudo docker compose exec -T postgres \
+  psql \
+  -U wavestack \
+  -d wavestack \
+  -c "
+    SELECT
+      count(*) AS total_tracks,
+      count(*) FILTER (
+        WHERE title_locked = true
+      ) AS metadata_checked,
+      count(*) FILTER (
+        WHERE local_thumbnail_url IS NOT NULL
+      ) AS thumbnails_cached
+    FROM drive_tracks
+    WHERE deleted_at IS NULL;
+  "
+
+
+# Recent synchronization logs.
+sudo docker compose logs \
+  --since=5m \
+  --tail=100 \
+  graphql-api
+
+
+# Final curl response after the process exits.
+cat ~/wavestack-drive-sync.log 2>/dev/null ||
+true
+
+
+============================================================
+ORACLE TERMINAL: DATABASE BACKUP
+============================================================
+
+cd ~/WaveStack
+mkdir -p ~/backups
+
+BACKUP_FILE="$HOME/backups/wavestack-$(date +%Y%m%d-%H%M%S).sql"
+
+sudo docker compose exec -T postgres \
+  pg_dump \
+  -U wavestack \
+  -d wavestack \
+  --clean \
+  --if-exists \
+  > "$BACKUP_FILE"
+
+gzip "$BACKUP_FILE"
+
+ls -lh "$BACKUP_FILE.gz"
+
+
+# Copy the backup to WSL from a WSL terminal with:
+#
+# scp -o IdentitiesOnly=yes \
+#   -i ~/.ssh/wavestack_oracle \
+#   ubuntu@141.148.156.24:~/backups/wavestack-YYYYMMDD-HHMMSS.sql.gz \
+#   ./
+
+
+============================================================
+ORACLE TERMINAL: RESTORE A POSTGRES BACKUP
+============================================================
+
+# WARNING: This replaces the current database.
+# Stop application writes before restoring.
+
+cd ~/WaveStack
+
+sudo docker compose stop \
+  frontend \
+  graphql-api \
+  audio-ai-service \
+  analytics-service
+
+gunzip -c ~/backups/SELECTED_BACKUP.sql.gz |
+sudo docker compose exec -T postgres \
+  psql \
+  -v ON_ERROR_STOP=1 \
+  -U wavestack \
+  -d wavestack
+
+sudo docker compose up -d
+sudo docker compose ps -a
+
+
+============================================================
+ORACLE TERMINAL: IMPORT BROWSER LIBRARY
+============================================================
+
+# Run only after:
+# 1. Drive sync status is success.
+# 2. The user has signed into Oracle at least once.
+# 3. A PostgreSQL backup has been created.
+# 4. ~/wavestack-library-import-oracle.sql exists.
+
+cd ~/WaveStack
+
+test -s ~/wavestack-library-import-oracle.sql ||
+{
+  echo 'Importer file is missing.'
+  exit 1
+}
+
+sudo docker compose exec -T postgres \
+  pg_dump \
+  -U wavestack \
+  -d wavestack \
+  > ~/backups/wavestack-before-library-import-$(date +%Y%m%d-%H%M%S).sql
+
+sudo docker compose exec -T postgres \
+  psql \
+  -v ON_ERROR_STOP=1 \
+  -U wavestack \
+  -d wavestack \
+  < ~/wavestack-library-import-oracle.sql
+
+
+============================================================
+ORACLE TERMINAL: REBOOT TEST
+============================================================
+
+# Confirm services are enabled before reboot.
+sudo systemctl enable docker
+sudo systemctl enable caddy
+
+sudo systemctl is-enabled docker
+sudo systemctl is-enabled caddy
+
+sudo reboot
+
+
+# After reconnecting:
+cd ~/WaveStack
+
+sudo systemctl status docker --no-pager
+sudo systemctl status caddy --no-pager
+
+sudo docker compose up -d
+sudo docker compose ps -a
+
+curl -fsSI \
+  https://wavestack.duckdns.org
+
+curl -fsS \
+  https://api.wavestack.duckdns.org/graphql \
+  -H 'Content-Type: application/json' \
+  --data-binary '{"query":"{ __typename }"}' |
+jq .
+
+
+============================================================
+EMERGENCY LOG COMMANDS
+============================================================
+
+cd ~/WaveStack
+
+
+# Every container and exit status.
+sudo docker compose ps -a
+
+
+# Last 200 lines from every service.
+sudo docker compose logs \
+  --tail=200
+
+
+# PostgreSQL only.
+sudo docker compose logs \
+  --tail=200 \
+  postgres
+
+
+# GraphQL only.
+sudo docker compose logs \
+  --tail=200 \
+  graphql-api
+
+
+# Follow GraphQL logs.
+sudo docker compose logs \
+  -f \
+  --tail=100 \
+  graphql-api
+
+
+# Caddy logs.
+sudo journalctl \
+  -u caddy \
+  -n 200 \
+  --no-pager
+
+
+# Disk, memory and swap.
+df -h
+free -h
+swapon --show
+
+
+# Docker disk usage.
+sudo docker system df
+
+
+# Do not run docker compose down -v.
+# Do not delete PostgreSQL or Neo4j volumes.
+# Do not expose .env, API keys, tokens or private SSH keys.
