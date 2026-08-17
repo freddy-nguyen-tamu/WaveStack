@@ -7,6 +7,15 @@ import sharp = require("sharp");
 import { Song } from "./music.models";
 import { DriveArtworkService } from "./drive-artwork.service";
 
+export const CURRENT_THUMBNAIL_CACHE_SUFFIX = "-cover-v2.webp";
+
+type RgbaColor = {
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+};
+
 @Injectable()
 export class ThumbnailCacheService {
   private readonly logger = new Logger(ThumbnailCacheService.name);
@@ -17,7 +26,7 @@ export class ThumbnailCacheService {
   ) {}
 
   async generateForSong(song: Song): Promise<string | null> {
-    const fileName = `${this.safeFileName(song.id)}.webp`;
+    const fileName = `${this.safeFileName(song.id)}${CURRENT_THUMBNAIL_CACHE_SUFFIX}`;
     const outputPath = join(this.thumbnailDir, fileName);
     const publicUrl = `${this.publicPath}/${fileName}`;
 
@@ -96,7 +105,7 @@ export class ThumbnailCacheService {
   }
 
   async writeEmbeddedArtwork(songId: string, buffer: Buffer): Promise<string | null> {
-    const fileName = `${this.safeFileName(songId)}.webp`;
+    const fileName = `${this.safeFileName(songId)}${CURRENT_THUMBNAIL_CACHE_SUFFIX}`;
     const outputPath = join(this.thumbnailDir, fileName);
     const publicUrl = `${this.publicPath}/${fileName}`;
 
@@ -107,8 +116,14 @@ export class ThumbnailCacheService {
   private async writeWebp(path: string, buffer: Buffer): Promise<void> {
     await mkdir(this.thumbnailDir, { recursive: true });
 
-    const output = await sharp(buffer)
-      .rotate()
+    const crop = await this.findArtworkContentCrop(buffer);
+    let pipeline = sharp(buffer).rotate();
+
+    if (crop) {
+      pipeline = pipeline.extract(crop);
+    }
+
+    const output = await pipeline
       .resize(512, 512, {
         fit: "cover",
         withoutEnlargement: false
@@ -120,6 +135,130 @@ export class ThumbnailCacheService {
       .toBuffer();
 
     await writeFile(path, output);
+  }
+
+  private async findArtworkContentCrop(buffer: Buffer): Promise<sharp.Region | null> {
+    try {
+      const { data, info } = await sharp(buffer)
+        .rotate()
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+
+      const width = info.width;
+      const height = info.height;
+      const channels = info.channels;
+
+      if (!width || !height || channels < 4) {
+        return null;
+      }
+
+      const background = this.averageCornerColor(data, width, height, channels);
+      const threshold = 36;
+      let minX = width;
+      let minY = height;
+      let maxX = -1;
+      let maxY = -1;
+
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          const offset = (y * width + x) * channels;
+          const alpha = data[offset + 3];
+
+          if (alpha <= 18) {
+            continue;
+          }
+
+          const colorDistance =
+            Math.abs(data[offset] - background.r) +
+            Math.abs(data[offset + 1] - background.g) +
+            Math.abs(data[offset + 2] - background.b);
+          const alphaDistance = Math.abs(alpha - background.a);
+
+          if (colorDistance <= threshold && alphaDistance <= threshold) {
+            continue;
+          }
+
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+        }
+      }
+
+      if (maxX < minX || maxY < minY) {
+        return null;
+      }
+
+      const trimWidth = maxX - minX + 1;
+      const trimHeight = maxY - minY + 1;
+      const minUsefulWidth = width * 0.18;
+      const minUsefulHeight = height * 0.18;
+
+      if (trimWidth < minUsefulWidth || trimHeight < minUsefulHeight) {
+        return null;
+      }
+
+      const meaningfulInset = Math.min(width, height) * 0.04;
+      const hasPaddedEdge =
+        minX > meaningfulInset ||
+        minY > meaningfulInset ||
+        width - maxX - 1 > meaningfulInset ||
+        height - maxY - 1 > meaningfulInset;
+
+      if (!hasPaddedEdge) {
+        return null;
+      }
+
+      const padding = Math.max(2, Math.round(Math.max(trimWidth, trimHeight) * 0.015));
+      const left = Math.max(0, minX - padding);
+      const top = Math.max(0, minY - padding);
+      const right = Math.min(width - 1, maxX + padding);
+      const bottom = Math.min(height - 1, maxY + padding);
+
+      return {
+        left,
+        top,
+        width: right - left + 1,
+        height: bottom - top + 1
+      };
+    } catch (error) {
+      this.logger.debug(
+        `Could not inspect thumbnail padding: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return null;
+    }
+  }
+
+  private averageCornerColor(data: Buffer, width: number, height: number, channels: number): RgbaColor {
+    const points = [
+      [0, 0],
+      [Math.max(0, width - 1), 0],
+      [0, Math.max(0, height - 1)],
+      [Math.max(0, width - 1), Math.max(0, height - 1)]
+    ];
+    const total = points.reduce(
+      (sum, [x, y]) => {
+        const offset = (y * width + x) * channels;
+
+        return {
+          r: sum.r + data[offset],
+          g: sum.g + data[offset + 1],
+          b: sum.b + data[offset + 2],
+          a: sum.a + data[offset + 3]
+        };
+      },
+      { r: 0, g: 0, b: 0, a: 0 }
+    );
+
+    return {
+      r: total.r / points.length,
+      g: total.g / points.length,
+      b: total.b / points.length,
+      a: total.a / points.length
+    };
   }
 
   private firstUsableUrl(urls: Array<string | null | undefined>): string | null {

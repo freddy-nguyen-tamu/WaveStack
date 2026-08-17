@@ -21,11 +21,6 @@ type QueryRows<T> = { rows: T[] } | T[];
 
 type StatsPeriod = "FOUR_WEEKS" | "SIX_MONTHS" | "TWELVE_MONTHS" | "ALL_TIME";
 
-type TasteWritingStyle = {
-  phrase?: string;
-  example?: string;
-};
-
 type StatsEntryRow = {
   key: string;
   label: string;
@@ -782,11 +777,9 @@ export class HabitsService {
     return map[period] ?? "";
   }
 
-  async judgeTaste(userId: string, period = "ALL_TIME", writingStyle: TasteWritingStyle = {}): Promise<TasteJudgeResult> {
+  async judgeTaste(userId: string, period = "ALL_TIME"): Promise<TasteJudgeResult> {
     await this.ensureArchiveCacheForPeriod(userId, period);
     const generatedAt = new Date().toISOString();
-    const stylePhrase = writingStyle.phrase?.trim().slice(0, 180);
-    const styleExample = writingStyle.example?.trim().slice(0, 900);
 
     const [topTracks, topArtists, topGenres, recent, comparison] = await Promise.all([
       this.topTracks(userId, period as StatsPeriod, 25),
@@ -846,8 +839,13 @@ export class HabitsService {
           {
             role: "system",
             content: [
-              "You are WaveStack's playful music taste judge.",
-              "Be funny, specific, and a little spicy, but not cruel.",
+              "You are WaveStack's music taste roast judge.",
+              "Your job is to roast the listener's music habits in a smart, specific, merciless way.",
+              "Focus only on what the listening data says: repeated tracks, artists, genres, recent songs, mainstream/obscurity, uniqueness, and chaos.",
+              "Do not write literary prose, character studies, tender reflections, poetry, therapy language, or vague vibe commentary.",
+              "Do not soften the roast with compliments unless the compliment is part of the insult.",
+              "Be sharp and funny, but roast music taste and listening behavior only.",
+              "Do not attack protected traits, identity, appearance, disability, class, trauma, or mental health.",
               "Do not mention Spotify.",
               "Do not mention Groq.",
               "Do not mention JSON, schema, API, parser, algorithm, or backend.",
@@ -857,18 +855,16 @@ export class HabitsService {
               "Return exactly one JSON object and nothing else.",
               "The JSON object must have these keys:",
               "verdictTitle, roast, summary, badges, tasteScore, obscurityScore, chaosScore.",
-              "verdictTitle must be short and catchy.",
-              "roast must be 1 to 2 fun sentences that describe the listener as a character shaped by their listening history.",
-              "summary must be 1 friendly sentence.",
-              "badges must be an array of 3 to 6 short fun labels.",
-              "scores must be integers from 0 to 100.",
-              stylePhrase ? `Write the roast and summary in this writing style: ${stylePhrase}.` : "",
-              styleExample ? `Use this sample only as tone guidance, not as content to copy: ${styleExample}` : ""
+              "verdictTitle must be short, punchy, and roast-focused.",
+              "roast must be 2 to 3 sentences, grounded in specific artists, tracks, genres, or scores from the input.",
+              "summary must be 1 short final jab, not friendly encouragement.",
+              "badges must be an array of 3 to 6 short roast labels.",
+              "scores must be integers from 0 to 100."
             ].join(" ")
           },
           {
             role: "user",
-            content: `Judge this WaveStack listening profile:\n${JSON.stringify(promptPayload, null, 2)}`
+            content: `Roast this WaveStack listening profile using the provided listening-history data and scores:\n${JSON.stringify(promptPayload, null, 2)}`
           }
         ],
         {

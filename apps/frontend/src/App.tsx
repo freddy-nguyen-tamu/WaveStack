@@ -34,6 +34,7 @@ import { uploadTrack } from "./api";
 import { refreshWaveStackLibraryCache } from "./library-refresh";
 import { formatSongDisplayName } from "./song-format";
 import { NowPlayingProvider, type NowPlayingState } from "./components/NowPlayingContext";
+import { ToastNotice } from "./components/ToastNotice";
 
 export type Song = {
   id: string;
@@ -913,10 +914,17 @@ export function App() {
     nowPlayingState.isPlaying
   ]);
 
-  function showNotice(message: string) {
+  function dismissNotice() {
     if (noticeTimerRef.current) {
       window.clearTimeout(noticeTimerRef.current);
+      noticeTimerRef.current = null;
     }
+
+    setNotice("");
+  }
+
+  function showNotice(message: string) {
+    dismissNotice();
 
     setNotice(message);
 
@@ -2204,9 +2212,9 @@ export function App() {
         <h1 className="sr-only">WaveStack music library</h1>
 
       {notice ? (
-        <p className="toast-notice toast-notice--status" role="status">
+        <ToastNotice onDismiss={dismissNotice}>
           {notice}
-        </p>
+        </ToastNotice>
       ) : null}
       {error ? (
         <p className="app-banner app-banner--error" role="alert">

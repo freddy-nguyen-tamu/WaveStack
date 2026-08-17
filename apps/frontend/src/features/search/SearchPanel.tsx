@@ -7,6 +7,7 @@ import { formatSongDisplayName } from "../../song-format";
 import { SongListRow } from "../../components/SongListRow";
 import { PaginationBar } from "../../components/PaginationBar";
 import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
+import { ToastNotice } from "../../components/ToastNotice";
 
 type SongPageQueryData = {
   songPage: {
@@ -228,9 +229,9 @@ export function SearchPanel({
         <input value={query} onChange={(event) => setQuery(event.target.value)} />
       </label>
       {message ? (
-        <p className="toast-notice toast-notice--status" role="status">
+        <ToastNotice onDismiss={() => setMessage("")}>
           {message}
-        </p>
+        </ToastNotice>
       ) : null}
       <p>
         {backendSearch ? (

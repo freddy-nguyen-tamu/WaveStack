@@ -4,6 +4,7 @@ import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongH
 import { formatSongDisplayName } from "../../song-format";
 import { SongListRow } from "../../components/SongListRow";
 import { PaginationBar } from "../../components/PaginationBar";
+import { ToastNotice } from "../../components/ToastNotice";
 
 type PlaylistPanelProps = {
   songs: Song[];
@@ -175,9 +176,9 @@ export function PlaylistPanel({
       </button>
 
       {message ? (
-        <p className="toast-notice toast-notice--status" role="status">
+        <ToastNotice onDismiss={() => setMessage("")}>
           {message}
-        </p>
+        </ToastNotice>
       ) : null}
 
       {playlists.length ? (

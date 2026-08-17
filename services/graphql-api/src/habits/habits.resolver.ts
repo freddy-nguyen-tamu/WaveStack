@@ -254,10 +254,7 @@ export class HabitsResolver {
       });
     }
 
-    return this.habitsService.judgeTaste(userId, period ?? "ALL_TIME", {
-      phrase: writingStylePhrase,
-      example: writingStyleExample
-    });
+    return this.habitsService.judgeTaste(userId, period ?? "ALL_TIME");
   }
 
   @Query(() => GroqDebugStatus)

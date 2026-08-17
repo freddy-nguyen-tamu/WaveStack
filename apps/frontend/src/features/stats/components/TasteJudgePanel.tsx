@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "@apollo/client";
 import { AlertTriangle, Brain, Sparkles } from "lucide-react";
 import { JUDGE_TASTE_MUTATION } from "../../../api";
-import fancyWritingStyles from "../../../../fancy_writing.json";
 
 type TasteJudgeResult = {
   ok: boolean;
@@ -20,23 +19,17 @@ type TasteJudgePanelProps = {
   period: string;
 };
 
-type FancyWritingStyle = {
-  phrase: string;
-  example?: string;
-};
-
 const loadingLines = [
   "Initializing neural net...",
   "Training on objectively good music...",
   "Checking if the aux cord should be revoked...",
   "Comparing vibes against WaveStack history...",
-  "Waiting for the judge to stop being dramatic..."
+  "Writing the roast..."
 ];
 
 export function TasteJudgePanel({ period }: TasteJudgePanelProps) {
   const [visibleLines, setVisibleLines] = useState<string[]>([]);
   const [uiError, setUiError] = useState("");
-  const [selectedWritingStyle, setSelectedWritingStyle] = useState<FancyWritingStyle | null>(null);
 
   const [judgeTaste, { data, loading, error }] = useMutation<{
     judgeTaste: TasteJudgeResult;
@@ -80,15 +73,10 @@ export function TasteJudgePanel({ period }: TasteJudgePanelProps) {
 
   async function runJudge() {
     setUiError("");
-    const styles = fancyWritingStyles as FancyWritingStyle[];
-    const nextStyle = styles[Math.floor(Math.random() * styles.length)] ?? null;
-    setSelectedWritingStyle(nextStyle);
 
     await judgeTaste({
       variables: {
-        period,
-        writingStylePhrase: nextStyle?.phrase,
-        writingStyleExample: nextStyle?.example
+        period
       }
     });
   }
@@ -98,11 +86,7 @@ export function TasteJudgePanel({ period }: TasteJudgePanelProps) {
       <div>
         <p className="eyebrow">AI taste judge</p>
         <h3>How questionable is your WaveStack taste?</h3>
-        <p>
-          Let WaveStack turn your listening history into a little character
-          study: theatrical, oddly tender, and just merciless enough to feel
-          true.
-        </p>
+        <p>Let WaveStack judge your listening habit.</p>
       </div>
 
       <button
@@ -145,12 +129,6 @@ export function TasteJudgePanel({ period }: TasteJudgePanelProps) {
           </div>
 
           <p className="taste-verdict__roast">
-            {selectedWritingStyle?.phrase ? (
-              <>
-                <span className="taste-verdict__style">{selectedWritingStyle.phrase}.</span>
-                <br />
-              </>
-            ) : null}
             {[result.roast, result.summary].filter(Boolean).join(" ")}
           </p>
 

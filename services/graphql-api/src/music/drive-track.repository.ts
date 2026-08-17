@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { randomUUID } from "crypto";
 import { DatabaseService } from "../database/database.service";
 import { DriveSyncStatus, Song, SongConnection, UserSongAttributeInput, UserSongInput } from "./music.models";
+import { CURRENT_THUMBNAIL_CACHE_SUFFIX } from "./thumbnail-cache.service";
 
 type DriveTrackRow = {
   id: string;
@@ -250,9 +251,12 @@ export class DriveTrackRepository {
         FROM drive_tracks
         WHERE id = ANY($1)
           AND deleted_at IS NULL
-          AND local_thumbnail_url IS NULL
+          AND (
+            local_thumbnail_url IS NULL
+            OR local_thumbnail_url NOT LIKE $2
+          )
         `,
-        [ids]
+        [ids, `%${CURRENT_THUMBNAIL_CACHE_SUFFIX}`]
       )
     ).rows;
 
@@ -683,11 +687,14 @@ export class DriveTrackRepository {
         SELECT *
         FROM drive_tracks
         WHERE deleted_at IS NULL
-          AND local_thumbnail_url IS NULL
+          AND (
+            local_thumbnail_url IS NULL
+            OR local_thumbnail_url NOT LIKE $2
+          )
         ORDER BY synced_at DESC, id ASC
         LIMIT $1
         `,
-        [safeLimit]
+        [safeLimit, `%${CURRENT_THUMBNAIL_CACHE_SUFFIX}`]
       )
     ).rows;
 

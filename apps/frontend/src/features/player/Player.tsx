@@ -263,15 +263,21 @@ export function Player({
     }
   }
 
+  function pauseCurrent(messageText: string) {
+    pauseDiscRotation();
+    audioRef.current?.pause();
+    setIsPlaying(false);
+    setMessage(messageText);
+    syncProgressFromAudio();
+  }
+
   async function togglePlay() {
     if (!audioRef.current) return;
 
     setHasPlaybackHistory(true);
 
     if (isPlaying) {
-      audioRef.current.pause();
-      setIsPlaying(false);
-      setMessage(`Paused: ${displayName}`);
+      pauseCurrent(`Paused: ${displayName}`);
       return;
     }
 
@@ -394,9 +400,7 @@ export function Player({
       event.preventDefault();
 
       if (isPlaying) {
-        audioRef.current?.pause();
-        setIsPlaying(false);
-        setMessage(`Paused: ${displayName}`);
+        pauseCurrent(`Paused: ${displayName}`);
         return;
       }
 

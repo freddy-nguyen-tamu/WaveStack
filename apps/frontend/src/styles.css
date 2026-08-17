@@ -75,7 +75,6 @@
   --theme-gray-95: #fcfefe;
   --theme-animate: 200ms;
   --now-playing-disc-angle: 0deg;
-  --now-playing-disc-delay: 0ms;
   --line: 1px solid var(--color-ink);
   --radius-card: 8px;
   --radius-pill: 999px;
@@ -670,17 +669,18 @@ article li small,
   position: relative;
   contain: paint;
   backface-visibility: hidden;
-  border-color: transparent !important;
+  border: 0 !important;
   border-radius: 50% !important;
   overflow: hidden;
   transform: rotate(var(--now-playing-disc-angle, 0deg));
   transform-origin: center;
+  background: transparent;
+  outline: 0;
   box-shadow: none;
 }
 
 .song-artwork--playing {
   animation: now-playing-disc-spin 18s linear infinite;
-  animation-delay: var(--now-playing-disc-delay, 0ms);
   will-change: transform;
 }
 
@@ -691,7 +691,18 @@ article li small,
 
 .song-artwork--now-playing img,
 .song-artwork--now-playing > span {
+  border: 0 !important;
   border-radius: 50% !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  filter: none !important;
+}
+
+.song-artwork--now-playing img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 @keyframes now-playing-disc-spin {
