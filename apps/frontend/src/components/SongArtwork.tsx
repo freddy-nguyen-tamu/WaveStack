@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import type { Song } from "../App";
-import { useNowPlayingForSong } from "./NowPlayingContext";
+import { NOW_PLAYING_DISC_ROTATION_MS, useNowPlayingForSong } from "./NowPlayingContext";
 
 type SongArtworkProps = {
   song: Pick<
@@ -87,11 +87,22 @@ export function SongArtwork({
     shouldApplyNowPlayingStyle && nowPlaying.isPlaying ? "song-artwork--playing" : "",
     shouldApplyNowPlayingStyle && !nowPlaying.isPlaying ? "song-artwork--paused" : ""
   ].filter(Boolean).join(" ");
+  const elapsedSinceDiscStartMs =
+    shouldApplyNowPlayingStyle && nowPlaying.isPlaying && nowPlaying.discStartedAtMs !== null
+      ? Math.max(0, performance.now() - nowPlaying.discStartedAtMs)
+      : 0;
+  const artworkStyle = shouldApplyNowPlayingStyle
+    ? ({
+        "--now-playing-disc-angle": `${nowPlaying.discBaseAngleDeg.toFixed(3)}deg`,
+        "--now-playing-disc-delay": `${-(elapsedSinceDiscStartMs % NOW_PLAYING_DISC_ROTATION_MS).toFixed(3)}ms`
+      } as CSSProperties)
+    : undefined;
 
   return (
     <span
       ref={rootRef}
       className={artworkClassName}
+      style={artworkStyle}
       data-artwork-loaded={Boolean(src)}
       data-now-playing={shouldApplyNowPlayingStyle ? "true" : undefined}
       data-playback-state={shouldApplyNowPlayingStyle ? (nowPlaying.isPlaying ? "playing" : "paused") : undefined}

@@ -305,9 +305,13 @@ export function App() {
   const [activeSong, setActiveSong] = useState<Song | null>(null);
   const [queue, setQueue] = useState<Song[]>([]);
   const [playSignal, setPlaySignal] = useState(0);
-  const [nowPlayingState, setNowPlayingState] = useState<Pick<NowPlayingState, "isPlaying" | "hasPlaybackHistory">>({
+  const [nowPlayingState, setNowPlayingState] = useState<
+    Pick<NowPlayingState, "isPlaying" | "hasPlaybackHistory" | "discBaseAngleDeg" | "discStartedAtMs">
+  >({
     isPlaying: false,
-    hasPlaybackHistory: false
+    hasPlaybackHistory: false,
+    discBaseAngleDeg: 0,
+    discStartedAtMs: null
   });
   const [favoriteIds, setFavoriteIds] = useState<string[]>(() => readStringArray("wavestack:favorites"));
   const [recentSongIds, setRecentSongIds] = useState<string[]>(() => readStringArray("wavestack:recent"));
@@ -898,8 +902,16 @@ export function App() {
   const nowPlaying = useMemo<NowPlayingState>(() => ({
     activeSongId: nowPlayingState.hasPlaybackHistory ? currentSong.id : null,
     isPlaying: nowPlayingState.isPlaying,
-    hasPlaybackHistory: nowPlayingState.hasPlaybackHistory
-  }), [currentSong.id, nowPlayingState.hasPlaybackHistory, nowPlayingState.isPlaying]);
+    hasPlaybackHistory: nowPlayingState.hasPlaybackHistory,
+    discBaseAngleDeg: nowPlayingState.discBaseAngleDeg,
+    discStartedAtMs: nowPlayingState.discStartedAtMs
+  }), [
+    currentSong.id,
+    nowPlayingState.discBaseAngleDeg,
+    nowPlayingState.discStartedAtMs,
+    nowPlayingState.hasPlaybackHistory,
+    nowPlayingState.isPlaying
+  ]);
 
   function showNotice(message: string) {
     if (noticeTimerRef.current) {

@@ -15,12 +15,12 @@ import {
 import type { RepeatMode, Song } from "../../App";
 import { formatSeconds, formatSongDisplayName } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
-import type { NowPlayingState } from "../../components/NowPlayingContext";
+import { NOW_PLAYING_DISC_DEGREES_PER_MS, type NowPlayingState } from "../../components/NowPlayingContext";
 
-type PlayerPlaybackState = Pick<NowPlayingState, "isPlaying" | "hasPlaybackHistory">;
-
-const DISC_ROTATION_DEGREES_PER_MS = 360 / 18000;
-const NOW_PLAYING_DISC_ANGLE_PROPERTY = "--now-playing-disc-angle";
+type PlayerPlaybackState = Pick<
+  NowPlayingState,
+  "isPlaying" | "hasPlaybackHistory" | "discBaseAngleDeg" | "discStartedAtMs"
+>;
 
 type PlayerProps = {
   activeSong: Song;
@@ -65,7 +65,6 @@ export function Player({
 }: PlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
-  const discAnimationFrameRef = useRef<number | null>(null);
   const discAngleRef = useRef(0);
   const discTimestampRef = useRef<number | null>(null);
   const playRequestRef = useRef(0);
@@ -79,6 +78,10 @@ export function Player({
   const [duration, setDuration] = useState(activeSong.durationSeconds || 0);
   const [playError, setPlayError] = useState("");
   const [message, setMessage] = useState("");
+  const [discSnapshot, setDiscSnapshot] = useState({
+    baseAngleDeg: 0,
+    startedAtMs: null as number | null
+  });
 
   const displayName = formatSongDisplayName(activeSong);
   const songTitle = activeSong.title?.trim() || "Untitled Track";
@@ -101,17 +104,13 @@ export function Player({
   }, [volume]);
 
   useEffect(() => {
-    onPlaybackStateChange({ isPlaying, hasPlaybackHistory });
-  }, [hasPlaybackHistory, isPlaying, onPlaybackStateChange]);
-
-  useEffect(() => {
-    setDocumentDiscAngle(discAngleRef.current);
-
-    return () => {
-      stopDiscRotationLoop();
-      document.documentElement.style.removeProperty(NOW_PLAYING_DISC_ANGLE_PROPERTY);
-    };
-  }, []);
+    onPlaybackStateChange({
+      isPlaying,
+      hasPlaybackHistory,
+      discBaseAngleDeg: discSnapshot.baseAngleDeg,
+      discStartedAtMs: discSnapshot.startedAtMs
+    });
+  }, [discSnapshot.baseAngleDeg, discSnapshot.startedAtMs, hasPlaybackHistory, isPlaying, onPlaybackStateChange]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -150,17 +149,6 @@ export function Player({
     return stopProgressLoop;
   }, [isPlaying]);
 
-  useEffect(() => {
-    if (!isPlaying) {
-      stopDiscRotationLoop();
-      return;
-    }
-
-    discAnimationFrameRef.current = window.requestAnimationFrame(updateDiscRotation);
-
-    return stopDiscRotationLoop;
-  }, [isPlaying]);
-
   function stopProgressLoop() {
     if (animationFrameRef.current !== null) {
       window.cancelAnimationFrame(animationFrameRef.current);
@@ -173,39 +161,45 @@ export function Player({
     return normalizedAngle < 0 ? normalizedAngle + 360 : normalizedAngle;
   }
 
-  function setDocumentDiscAngle(angle: number) {
-    document.documentElement.style.setProperty(
-      NOW_PLAYING_DISC_ANGLE_PROPERTY,
-      `${normalizeDiscAngle(angle).toFixed(3)}deg`
-    );
+  function getDiscNowMs() {
+    return performance.now();
   }
 
-  function stopDiscRotationLoop() {
-    if (discAnimationFrameRef.current !== null) {
-      window.cancelAnimationFrame(discAnimationFrameRef.current);
-      discAnimationFrameRef.current = null;
+  function startDiscRotation() {
+    if (discTimestampRef.current !== null) {
+      return;
     }
 
+    discTimestampRef.current = getDiscNowMs();
+    setDiscSnapshot({
+      baseAngleDeg: discAngleRef.current,
+      startedAtMs: discTimestampRef.current
+    });
+  }
+
+  function pauseDiscRotation() {
+    if (discTimestampRef.current === null) {
+      return;
+    }
+
+    const elapsedMs = getDiscNowMs() - discTimestampRef.current;
+    discAngleRef.current = normalizeDiscAngle(
+      discAngleRef.current + elapsedMs * NOW_PLAYING_DISC_DEGREES_PER_MS
+    );
     discTimestampRef.current = null;
+    setDiscSnapshot({
+      baseAngleDeg: discAngleRef.current,
+      startedAtMs: null
+    });
   }
 
   function resetDiscRotation() {
-    stopDiscRotationLoop();
     discAngleRef.current = 0;
-    setDocumentDiscAngle(discAngleRef.current);
-  }
-
-  function updateDiscRotation(timestamp: number) {
-    if (discTimestampRef.current !== null) {
-      const elapsedMs = timestamp - discTimestampRef.current;
-      discAngleRef.current = normalizeDiscAngle(
-        discAngleRef.current + elapsedMs * DISC_ROTATION_DEGREES_PER_MS
-      );
-      setDocumentDiscAngle(discAngleRef.current);
-    }
-
-    discTimestampRef.current = timestamp;
-    discAnimationFrameRef.current = window.requestAnimationFrame(updateDiscRotation);
+    discTimestampRef.current = null;
+    setDiscSnapshot({
+      baseAngleDeg: 0,
+      startedAtMs: null
+    });
   }
 
   function updateProgressLoop() {
@@ -536,14 +530,17 @@ export function Player({
           onTimeUpdate={syncProgressFromAudio}
           onDurationChange={syncProgressFromAudio}
           onPlay={() => {
+            startDiscRotation();
             setHasPlaybackHistory(true);
             setIsPlaying(true);
           }}
           onPause={() => {
+            pauseDiscRotation();
             setIsPlaying(false);
             syncProgressFromAudio();
           }}
           onEnded={() => {
+            pauseDiscRotation();
             setIsPlaying(false);
             onEnded();
           }}

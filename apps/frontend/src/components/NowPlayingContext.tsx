@@ -4,12 +4,19 @@ export type NowPlayingState = {
   activeSongId: string | null;
   isPlaying: boolean;
   hasPlaybackHistory: boolean;
+  discBaseAngleDeg: number;
+  discStartedAtMs: number | null;
 };
+
+export const NOW_PLAYING_DISC_ROTATION_MS = 18000;
+export const NOW_PLAYING_DISC_DEGREES_PER_MS = 360 / NOW_PLAYING_DISC_ROTATION_MS;
 
 const emptyNowPlayingState: NowPlayingState = {
   activeSongId: null,
   isPlaying: false,
-  hasPlaybackHistory: false
+  hasPlaybackHistory: false,
+  discBaseAngleDeg: 0,
+  discStartedAtMs: null
 };
 
 const NowPlayingContext = createContext<NowPlayingState>(emptyNowPlayingState);
@@ -37,6 +44,8 @@ export function useNowPlayingForSong(songId: string | null | undefined) {
 
   return {
     isNowPlaying,
-    isPlaying: isNowPlaying && state.isPlaying
+    isPlaying: isNowPlaying && state.isPlaying,
+    discBaseAngleDeg: state.discBaseAngleDeg,
+    discStartedAtMs: state.discStartedAtMs
   };
 }

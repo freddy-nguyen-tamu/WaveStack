@@ -75,6 +75,7 @@
   --theme-gray-95: #fcfefe;
   --theme-animate: 200ms;
   --now-playing-disc-angle: 0deg;
+  --now-playing-disc-delay: 0ms;
   --line: 1px solid var(--color-ink);
   --radius-card: 8px;
   --radius-pill: 999px;
@@ -667,22 +668,40 @@ article li small,
 
 .song-artwork--now-playing {
   position: relative;
+  contain: paint;
+  backface-visibility: hidden;
   border-color: transparent !important;
   border-radius: 50% !important;
   overflow: hidden;
   transform: rotate(var(--now-playing-disc-angle, 0deg));
   transform-origin: center;
-  will-change: transform;
   box-shadow: none;
 }
 
+.song-artwork--playing {
+  animation: now-playing-disc-spin 18s linear infinite;
+  animation-delay: var(--now-playing-disc-delay, 0ms);
+  will-change: transform;
+}
+
 .song-artwork--paused {
+  animation: none;
   will-change: auto;
 }
 
 .song-artwork--now-playing img,
 .song-artwork--now-playing > span {
   border-radius: 50% !important;
+}
+
+@keyframes now-playing-disc-spin {
+  from {
+    transform: rotate(var(--now-playing-disc-angle, 0deg));
+  }
+
+  to {
+    transform: rotate(calc(var(--now-playing-disc-angle, 0deg) + 360deg));
+  }
 }
 
 .player-card {
