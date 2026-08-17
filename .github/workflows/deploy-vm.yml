@@ -1,4 +1,4 @@
-name: Deploy to Azure VM
+name: Deploy to Oracle VM
 
 on:
   push:
@@ -8,8 +8,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  deploy:
-    name: Deploy WaveStack
+  legacy_azure_deploy:
+    name: Legacy Azure Deploy (skipped)
+    if: ${{ false }}
     runs-on: ubuntu-latest
 
     steps:
@@ -83,8 +84,9 @@ jobs:
           sudo docker compose up --build -d
           sudo docker compose ps
           REMOTE
-  deploy_oracle_standby:
-    name: Update Oracle Standby
+
+  deploy_oracle:
+    name: Deploy Oracle
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -167,7 +169,7 @@ jobs:
             ./ \
             "$ORACLE_USER@$ORACLE_HOST:/home/$ORACLE_USER/WaveStack/"
 
-      - name: Build Oracle standby containers
+      - name: Rebuild and restart Oracle containers
         env:
           ORACLE_HOST: ${{ secrets.ORACLE_VM_HOST }}
           ORACLE_USER: ${{ secrets.ORACLE_VM_USER }}
@@ -186,11 +188,10 @@ jobs:
 
           sudo docker compose config >/dev/null
 
-          # Build the latest version, but do not activate Oracle yet.
-          sudo docker compose build
+          sudo docker compose up --build -d
 
-          printf '%s\n' "Standby code built successfully at $(date -Is)" \
-            > .oracle-standby-ready
+          printf '%s\n' "Oracle deployment activated successfully at $(date -Is)" \
+            > .oracle-deploy-ready
 
           sudo docker compose ps
           REMOTE
