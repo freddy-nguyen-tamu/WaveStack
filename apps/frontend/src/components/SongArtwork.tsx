@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Song } from "../App";
+import { useNowPlayingForSong } from "./NowPlayingContext";
 
 type SongArtworkProps = {
   song: Pick<
@@ -11,6 +12,7 @@ type SongArtworkProps = {
   imageClassName?: string;
   loading?: "lazy" | "eager";
   eager?: boolean;
+  disableNowPlayingStyle?: boolean;
 };
 
 const imageStatus = new Map<string, "loaded" | "failed">();
@@ -21,11 +23,13 @@ export function SongArtwork({
   fallbackClassName,
   imageClassName,
   loading = "lazy",
-  eager = false
+  eager = false,
+  disableNowPlayingStyle = false
 }: SongArtworkProps) {
   const rootRef = useRef<HTMLSpanElement | null>(null);
   const [isNearViewport, setIsNearViewport] = useState(eager);
   const [sourceIndex, setSourceIndex] = useState(0);
+  const nowPlaying = useNowPlayingForSong(song.id);
 
   const sources = useMemo(
     () =>
@@ -76,9 +80,22 @@ export function SongArtwork({
   }, [song.id, eager]);
 
   const src = isNearViewport ? sources[sourceIndex] : undefined;
+  const shouldApplyNowPlayingStyle = !disableNowPlayingStyle && nowPlaying.isNowPlaying;
+  const artworkClassName = [
+    wrapClassName,
+    shouldApplyNowPlayingStyle ? "song-artwork--now-playing" : "",
+    shouldApplyNowPlayingStyle && nowPlaying.isPlaying ? "song-artwork--playing" : "",
+    shouldApplyNowPlayingStyle && !nowPlaying.isPlaying ? "song-artwork--paused" : ""
+  ].filter(Boolean).join(" ");
 
   return (
-    <span ref={rootRef} className={wrapClassName} data-artwork-loaded={Boolean(src)}>
+    <span
+      ref={rootRef}
+      className={artworkClassName}
+      data-artwork-loaded={Boolean(src)}
+      data-now-playing={shouldApplyNowPlayingStyle ? "true" : undefined}
+      data-playback-state={shouldApplyNowPlayingStyle ? (nowPlaying.isPlaying ? "playing" : "paused") : undefined}
+    >
       {src ? (
         <img
           key={`${song.id}:${src}`}

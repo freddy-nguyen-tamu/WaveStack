@@ -15,6 +15,12 @@ import {
 import type { RepeatMode, Song } from "../../App";
 import { formatSeconds, formatSongDisplayName } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
+import type { NowPlayingState } from "../../components/NowPlayingContext";
+
+type PlayerPlaybackState = Pick<NowPlayingState, "isPlaying" | "hasPlaybackHistory">;
+
+const DISC_ROTATION_DEGREES_PER_MS = 360 / 18000;
+const NOW_PLAYING_DISC_ANGLE_PROPERTY = "--now-playing-disc-angle";
 
 type PlayerProps = {
   activeSong: Song;
@@ -31,6 +37,7 @@ type PlayerProps = {
   onQueueChange: (songs: Song[]) => void;
   onActiveSongChange: (song: Song) => void;
   onOpenDetails: (song: Song) => void;
+  onPlaybackStateChange: (state: PlayerPlaybackState) => void;
   onNext: () => void;
   onPrevious: () => void;
   onEnded: () => void;
@@ -51,12 +58,16 @@ export function Player({
   onQueueChange,
   onActiveSongChange,
   onOpenDetails,
+  onPlaybackStateChange,
   onNext,
   onPrevious,
   onEnded
 }: PlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const discAnimationFrameRef = useRef<number | null>(null);
+  const discAngleRef = useRef(0);
+  const discTimestampRef = useRef<number | null>(null);
   const playRequestRef = useRef(0);
   const pressedKeysRef = useRef<Set<string>>(new Set());
   const comboLockRef = useRef<"next" | "previous" | null>(null);
@@ -90,6 +101,19 @@ export function Player({
   }, [volume]);
 
   useEffect(() => {
+    onPlaybackStateChange({ isPlaying, hasPlaybackHistory });
+  }, [hasPlaybackHistory, isPlaying, onPlaybackStateChange]);
+
+  useEffect(() => {
+    setDocumentDiscAngle(discAngleRef.current);
+
+    return () => {
+      stopDiscRotationLoop();
+      document.documentElement.style.removeProperty(NOW_PLAYING_DISC_ANGLE_PROPERTY);
+    };
+  }, []);
+
+  useEffect(() => {
     const audio = audioRef.current;
 
     if (!audio) return;
@@ -101,6 +125,7 @@ export function Player({
     setCurrentTime(0);
     setDuration(activeSong.durationSeconds || 0);
     setPlayError("");
+    resetDiscRotation();
 
     if (pendingAutoplay) {
       void playCurrent();
@@ -125,11 +150,62 @@ export function Player({
     return stopProgressLoop;
   }, [isPlaying]);
 
+  useEffect(() => {
+    if (!isPlaying) {
+      stopDiscRotationLoop();
+      return;
+    }
+
+    discAnimationFrameRef.current = window.requestAnimationFrame(updateDiscRotation);
+
+    return stopDiscRotationLoop;
+  }, [isPlaying]);
+
   function stopProgressLoop() {
     if (animationFrameRef.current !== null) {
       window.cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
     }
+  }
+
+  function normalizeDiscAngle(angle: number) {
+    const normalizedAngle = angle % 360;
+    return normalizedAngle < 0 ? normalizedAngle + 360 : normalizedAngle;
+  }
+
+  function setDocumentDiscAngle(angle: number) {
+    document.documentElement.style.setProperty(
+      NOW_PLAYING_DISC_ANGLE_PROPERTY,
+      `${normalizeDiscAngle(angle).toFixed(3)}deg`
+    );
+  }
+
+  function stopDiscRotationLoop() {
+    if (discAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(discAnimationFrameRef.current);
+      discAnimationFrameRef.current = null;
+    }
+
+    discTimestampRef.current = null;
+  }
+
+  function resetDiscRotation() {
+    stopDiscRotationLoop();
+    discAngleRef.current = 0;
+    setDocumentDiscAngle(discAngleRef.current);
+  }
+
+  function updateDiscRotation(timestamp: number) {
+    if (discTimestampRef.current !== null) {
+      const elapsedMs = timestamp - discTimestampRef.current;
+      discAngleRef.current = normalizeDiscAngle(
+        discAngleRef.current + elapsedMs * DISC_ROTATION_DEGREES_PER_MS
+      );
+      setDocumentDiscAngle(discAngleRef.current);
+    }
+
+    discTimestampRef.current = timestamp;
+    discAnimationFrameRef.current = window.requestAnimationFrame(updateDiscRotation);
   }
 
   function updateProgressLoop() {

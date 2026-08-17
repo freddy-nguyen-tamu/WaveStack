@@ -33,6 +33,7 @@ import { AddSongsPage } from "./features/add-songs/AddSongsPage";
 import { uploadTrack } from "./api";
 import { refreshWaveStackLibraryCache } from "./library-refresh";
 import { formatSongDisplayName } from "./song-format";
+import { NowPlayingProvider, type NowPlayingState } from "./components/NowPlayingContext";
 
 export type Song = {
   id: string;
@@ -304,6 +305,10 @@ export function App() {
   const [activeSong, setActiveSong] = useState<Song | null>(null);
   const [queue, setQueue] = useState<Song[]>([]);
   const [playSignal, setPlaySignal] = useState(0);
+  const [nowPlayingState, setNowPlayingState] = useState<Pick<NowPlayingState, "isPlaying" | "hasPlaybackHistory">>({
+    isPlaying: false,
+    hasPlaybackHistory: false
+  });
   const [favoriteIds, setFavoriteIds] = useState<string[]>(() => readStringArray("wavestack:favorites"));
   const [recentSongIds, setRecentSongIds] = useState<string[]>(() => readStringArray("wavestack:recent"));
   const [playlists, setPlaylists] = useState<ClientPlaylist[]>(readPlaylists);
@@ -890,6 +895,11 @@ export function App() {
   }, [authToken, libraryStateData]);
 
   const currentSong = activeSong ?? startupAllSongs[0] ?? songs[0] ?? fallbackSongs[0];
+  const nowPlaying = useMemo<NowPlayingState>(() => ({
+    activeSongId: nowPlayingState.hasPlaybackHistory ? currentSong.id : null,
+    isPlaying: nowPlayingState.isPlaying,
+    hasPlaybackHistory: nowPlayingState.hasPlaybackHistory
+  }), [currentSong.id, nowPlayingState.hasPlaybackHistory, nowPlayingState.isPlaying]);
 
   function showNotice(message: string) {
     if (noticeTimerRef.current) {
@@ -2192,6 +2202,7 @@ export function App() {
         </p>
       ) : null}
 
+      <NowPlayingProvider value={nowPlaying}>
       <section aria-label="Player">
           <Player
             activeSong={currentSong}
@@ -2210,6 +2221,7 @@ export function App() {
             onQueueChange={setQueue}
             onActiveSongChange={(song) => startSong(song)}
             onOpenDetails={openDetails}
+            onPlaybackStateChange={setNowPlayingState}
             resolvingNext={isResolvingNextSong}
             onNext={() => { void playNextFromPolicy("manual"); }}
             onPrevious={playPreviousFromHistory}
@@ -2454,6 +2466,8 @@ export function App() {
           showNotice("Queue cleared.");
         }}
       />
+
+      </NowPlayingProvider>
 
         <div className="bottom-player-spacer" aria-hidden="true" />
       </main>

@@ -19,6 +19,7 @@ import {
   TOP_TRACKS_QUERY
 } from "../../api";
 import type { ClientPlaylist, PlaybackContext, PlaySongHandler, Song } from "../../App";
+import { useNowPlayingForSong } from "../../components/NowPlayingContext";
 import { SongActions } from "../../components/SongActions";
 import { StatsPieChart } from "./components/StatsPieChart";
 import { StatsReceipt } from "./components/StatsReceipt";
@@ -83,6 +84,19 @@ type StatsPageProps = {
   onAddToPlaylist: (playlistId: string, song: Song) => void;
 };
 
+type RecentlyPlayedRowProps = {
+  entry: RecentlyPlayedEntry;
+  index: number;
+  song?: Song;
+  playlists: ClientPlaylist[];
+  favoriteIds: string[];
+  playbackContext: PlaybackContext;
+  onPlay: PlaySongHandler;
+  onQueue: (song: Song) => void;
+  onToggleFavorite: (song: Song) => void;
+  onAddToPlaylist: (playlistId: string, song: Song) => void;
+};
+
 function DriveExportPanel({ period }: DriveExportPanelProps) {
   const [exportData, { loading, data, error }] = useMutation(EXPORT_LISTENING_HABITS_MUTATION);
 
@@ -113,6 +127,57 @@ function DriveExportPanel({ period }: DriveExportPanelProps) {
       )}
       {error && <p className="drive-export-panel__error">{error.message}</p>}
     </div>
+  );
+}
+
+function RecentlyPlayedRow({
+  entry,
+  index,
+  song,
+  playlists,
+  favoriteIds,
+  playbackContext,
+  onPlay,
+  onQueue,
+  onToggleFavorite,
+  onAddToPlaylist
+}: RecentlyPlayedRowProps) {
+  const nowPlaying = useNowPlayingForSong(entry.songId);
+  const date = new Date(entry.startedAt);
+
+  return (
+    <li
+      key={`${entry.songId}-${index}`}
+      className={nowPlaying.isNowPlaying ? "recent-list__item recent-list__item--now-playing" : "recent-list__item"}
+      aria-current={nowPlaying.isNowPlaying ? "true" : undefined}
+    >
+      <span className="recent-list__time">
+        {date.toLocaleDateString()} {date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+      </span>
+
+      <div className="recent-list__info">
+        <strong>{entry.title}</strong>
+        <small>{entry.artistName}</small>
+      </div>
+
+      <span className="recent-list__ratio">
+        {Math.round(entry.completedPlayRatio * 100)}%
+      </span>
+
+      {song ? (
+        <SongActions
+          song={song}
+          playlists={playlists}
+          isFavorite={favoriteIds.includes(song.id)}
+          playbackContext={playbackContext}
+          onPlay={onPlay}
+          onQueue={onQueue}
+          onToggleFavorite={onToggleFavorite}
+          onAddToPlaylist={onAddToPlaylist}
+          className="song-actions--ranking"
+        />
+      ) : null}
+    </li>
   );
 }
 
@@ -235,41 +300,21 @@ export function StatsPage({
 
     return (
       <ul className="recent-list">
-        {recentEntries.map((entry, index) => {
-          const date = new Date(entry.startedAt);
-          const song = songById.get(entry.songId);
-
-          return (
-            <li key={`${entry.songId}-${index}`} className="recent-list__item">
-              <span className="recent-list__time">
-                {date.toLocaleDateString()} {date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-              </span>
-
-              <div className="recent-list__info">
-                <strong>{entry.title}</strong>
-                <small>{entry.artistName}</small>
-              </div>
-
-              <span className="recent-list__ratio">
-                {Math.round(entry.completedPlayRatio * 100)}%
-              </span>
-
-              {song ? (
-                <SongActions
-                  song={song}
-                  playlists={playlists}
-                  isFavorite={favoriteIds.includes(song.id)}
-                  playbackContext={recentPlaybackContext}
-                  onPlay={onPlay}
-                  onQueue={onQueue}
-                  onToggleFavorite={onToggleFavorite}
-                  onAddToPlaylist={onAddToPlaylist}
-                  className="song-actions--ranking"
-                />
-              ) : null}
-            </li>
-          );
-        })}
+        {recentEntries.map((entry, index) => (
+          <RecentlyPlayedRow
+            key={`${entry.songId}-${index}`}
+            entry={entry}
+            index={index}
+            song={songById.get(entry.songId)}
+            playlists={playlists}
+            favoriteIds={favoriteIds}
+            playbackContext={recentPlaybackContext}
+            onPlay={onPlay}
+            onQueue={onQueue}
+            onToggleFavorite={onToggleFavorite}
+            onAddToPlaylist={onAddToPlaylist}
+          />
+        ))}
       </ul>
     );
   }

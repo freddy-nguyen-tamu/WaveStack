@@ -1,5 +1,6 @@
 import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../App";
 import { formatSeconds, formatSongDisplayName } from "../song-format";
+import { useNowPlayingForSong } from "./NowPlayingContext";
 import { SongActions } from "./SongActions";
 import { SongArtwork } from "./SongArtwork";
 
@@ -34,9 +35,13 @@ export function SongListRow({
 }: SongListRowProps) {
   const displayName = formatSongDisplayName(song);
   const hasDuration = Number.isFinite(song.durationSeconds) && song.durationSeconds > 0;
+  const nowPlaying = useNowPlayingForSong(song.id);
 
   return (
-    <li className="song-list-row">
+    <li
+      className={nowPlaying.isNowPlaying ? "song-list-row song-list-row--now-playing" : "song-list-row"}
+      aria-current={nowPlaying.isNowPlaying ? "true" : undefined}
+    >
       <button
         type="button"
         className="song-list-row__identity"

@@ -167,6 +167,7 @@ export function SongMetadataModal({
                 fallbackClassName="song-modal__fallback"
                 loading="eager"
                 eager
+                disableNowPlayingStyle
               />
             </button>
           ) : null}
