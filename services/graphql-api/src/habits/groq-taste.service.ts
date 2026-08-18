@@ -10,6 +10,7 @@ type GroqChatOptions = {
   maxTokens?: number;
   temperature?: number;
   timeoutMs?: number;
+  hideReasoning?: boolean;
 };
 
 type GroqKey = {
@@ -123,7 +124,8 @@ export class GroqTasteService {
                 model,
                 messages,
                 temperature: options.temperature ?? 0.7,
-                max_completion_tokens: options.maxTokens ?? 900
+                max_completion_tokens: options.maxTokens ?? 900,
+                ...this.reasoningOptions(model, options.hideReasoning === true)
               })
             });
 
@@ -294,6 +296,39 @@ export class GroqTasteService {
     if (lower.includes("compound")) return 70;
 
     return 100;
+  }
+
+  private reasoningOptions(modelId: string, hideReasoning: boolean): Record<string, string> {
+    if (!hideReasoning || !this.isReasoningModel(modelId)) {
+      return {};
+    }
+
+    const lower = modelId.toLowerCase();
+
+    if (lower.includes("qwen")) {
+      return {
+        reasoning_format: "hidden",
+        reasoning_effort: "none"
+      };
+    }
+
+    if (lower.includes("gpt-oss")) {
+      return {
+        reasoning_format: "hidden",
+        reasoning_effort: "low"
+      };
+    }
+
+    return {
+      reasoning_format: "hidden"
+    };
+  }
+
+  private isReasoningModel(modelId: string): boolean {
+    const lower = modelId.toLowerCase();
+    return lower.includes("qwen")
+      || lower.includes("gpt-oss")
+      || lower.includes("minimax");
   }
 
   private uniqueModelIds(modelIds: Array<string | null | undefined>): string[] {

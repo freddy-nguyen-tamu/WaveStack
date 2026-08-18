@@ -876,7 +876,8 @@ export class HabitsService {
         {
           maxTokens: 360,
           temperature: 0.35,
-          timeoutMs: 45000
+          timeoutMs: 45000,
+          hideReasoning: true
         }
       );
 
@@ -1142,7 +1143,7 @@ export class HabitsService {
   }
 
   private extractJsonObject(raw: string): string | null {
-    const text = raw.trim();
+    const text = this.stripReasoningBlocks(raw).trim();
 
     const fencedMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
 
@@ -1167,7 +1168,7 @@ export class HabitsService {
   }
 
   private cleanJudgeText(value: string): string {
-    return value
+    return this.stripReasoningBlocks(value)
       .replace(/```json/gi, "")
       .replace(/```/g, "")
       .replace(/\bVerdict:\s*/gi, "")
@@ -1185,6 +1186,13 @@ export class HabitsService {
       .replace(/\boddly tender\b/gi, "")
       .replace(/\s+/g, " ")
       .trim();
+  }
+
+  private stripReasoningBlocks(value: string): string {
+    return value
+      .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, "")
+      .replace(/<think\b[^>]*>[\s\S]*$/gi, "")
+      .replace(/<\/think>/gi, "");
   }
 
   private normalizeJudgeText(value: string, maxLength: number): string {
