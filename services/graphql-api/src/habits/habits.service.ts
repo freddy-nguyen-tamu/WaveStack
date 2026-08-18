@@ -840,14 +840,18 @@ export class HabitsService {
             role: "system",
             content: [
               "You are WaveStack's music taste roast judge.",
-              "Your job is to roast the listener's music habits in a smart, specific, merciless way.",
-              "Focus only on what the listening data says: repeated tracks, artists, genres, recent songs, mainstream/obscurity, uniqueness, and chaos.",
-              "Do not write literary prose, character studies, tender reflections, poetry, therapy language, or vague vibe commentary.",
-              "Do not soften the roast with compliments unless the compliment is part of the insult.",
-              "Be sharp and funny, but roast music taste and listening behavior only.",
+              "Your only job is to roast the listener's music habits in a smart, specific, merciless way.",
+              "Base every joke on the supplied listening data: repeated tracks, artists, genres, recent songs, mainstream/obscurity, uniqueness, and chaos.",
+              "If a genre looks like a source label or bad metadata, such as google-drive, roast it as messy tagging instead of treating it like a real genre.",
+              "Write like a sharp internet roast, not literature.",
+              "Do not write character studies, tender reflections, poetry, therapy language, dramatic prose, or vague vibe commentary.",
+              "Do not use these phrases: taste has range, enough left turns, keep WaveStack awake, oddly tender, character study, main character energy, aux cord revoked.",
+              "Do not soften the roast with compliments.",
+              "Roast music taste and listening behavior only.",
               "Do not attack protected traits, identity, appearance, disability, class, trauma, or mental health.",
               "Do not mention Spotify.",
               "Do not mention Groq.",
+              "Do not mention WaveStack inside any returned value.",
               "Do not mention JSON, schema, API, parser, algorithm, or backend.",
               "Do not include markdown.",
               "Do not include code fences.",
@@ -855,10 +859,12 @@ export class HabitsService {
               "Return exactly one JSON object and nothing else.",
               "The JSON object must have these keys:",
               "verdictTitle, roast, summary, badges, tasteScore, obscurityScore, chaosScore.",
-              "verdictTitle must be short, punchy, and roast-focused.",
-              "roast must be 2 to 3 sentences, grounded in specific artists, tracks, genres, or scores from the input.",
-              "summary must be 1 short final jab, not friendly encouragement.",
-              "badges must be an array of 3 to 6 short roast labels.",
+              "verdictTitle must be 2 to 5 words, punchy, and roast-focused.",
+              "roast must be exactly 2 complete sentences and 35 to 80 words total.",
+              "The first roast sentence must call out at least one specific track, artist, or genre from the input.",
+              "The second roast sentence must connect the listening pattern to one of the supplied scores.",
+              "summary must be exactly 1 complete sentence, 6 to 16 words, and it must be a final jab, not encouragement.",
+              "badges must be an array of exactly 3 short roast labels.",
               "scores must be integers from 0 to 100."
             ].join(" ")
           },
@@ -868,8 +874,8 @@ export class HabitsService {
           }
         ],
         {
-          maxTokens: 450,
-          temperature: 0.55,
+          maxTokens: 360,
+          temperature: 0.35,
           timeoutMs: 45000
         }
       );
@@ -1095,10 +1101,10 @@ export class HabitsService {
     const cleanedText = this.cleanJudgeText(raw);
 
     const fallback = {
-      verdictTitle: "Chaotic but committed",
-      roast: this.toFriendlyRoast(cleanedText),
-      summary: "Your taste has range, drama, and enough left turns to keep WaveStack awake.",
-      badges: ["Deep cuts", "Vibe hopper", "Aux risk"],
+      verdictTitle: "Data-Backed Disaster",
+      roast: this.toFallbackRoast(cleanedText),
+      summary: "",
+      badges: ["Deep cuts", "Repeat offender", "Aux risk"],
       tasteScore: Math.max(0, Math.min(100, 100 - comparison.mainstreamScore + 30)),
       obscurityScore: comparison.obscurityScore,
       chaosScore: Math.max(0, Math.min(100, comparison.uniquenessScore + 20))
@@ -1122,9 +1128,9 @@ export class HabitsService {
       }>;
 
       return {
-        verdictTitle: this.cleanJudgeText(String(parsed.verdictTitle || fallback.verdictTitle)).slice(0, 90),
-        roast: this.cleanJudgeText(String(parsed.roast || fallback.roast)).slice(0, 420),
-        summary: this.cleanJudgeText(String(parsed.summary || fallback.summary)).slice(0, 260),
+        verdictTitle: this.normalizeJudgeText(String(parsed.verdictTitle || fallback.verdictTitle), 90),
+        roast: this.normalizeJudgeText(String(parsed.roast || fallback.roast), 420),
+        summary: this.normalizeJudgeText(String(parsed.summary || ""), 160),
         badges: this.normalizeJudgeBadges(parsed.badges, fallback.badges),
         tasteScore: this.clampScore(parsed.tasteScore, fallback.tasteScore),
         obscurityScore: this.clampScore(parsed.obscurityScore, comparison.obscurityScore),
@@ -1171,24 +1177,48 @@ export class HabitsService {
       .replace(/\bTaste Score:\s*\d+\s*(?:\(out of 100\))?/gi, "")
       .replace(/\bObscurity Score:\s*\d+\s*(?:\(out of 100\))?/gi, "")
       .replace(/\bChaos Score:\s*\d+\s*(?:\(out of 100\))?/gi, "")
+      .replace(/\bYour taste has range, drama, and enough left turns to keep WaveStack awake\.?/gi, "")
+      .replace(/\btaste has range\b/gi, "")
+      .replace(/\benough left turns\b/gi, "")
+      .replace(/\bkeep WaveStack awake\b/gi, "")
+      .replace(/\bcharacter study\b/gi, "")
+      .replace(/\boddly tender\b/gi, "")
       .replace(/\s+/g, " ")
       .trim();
   }
 
-  private toFriendlyRoast(raw: string): string {
+  private normalizeJudgeText(value: string, maxLength: number): string {
+    const cleaned = this.trimDanglingJudgeEnding(this.cleanJudgeText(value));
+
+    if (cleaned.length <= maxLength) {
+      return cleaned;
+    }
+
+    const clipped = cleaned.slice(0, maxLength).replace(/\s+\S*$/, "").trim();
+    return this.trimDanglingJudgeEnding(clipped);
+  }
+
+  private trimDanglingJudgeEnding(value: string): string {
+    return value
+      .replace(/\s+(?:you(?:'|’)re|your|with|and|but|because|so|to|for|of|by|as|like|into|that|which)\s*$/i, "")
+      .replace(/[,:;–-]\s*$/, "")
+      .trim();
+  }
+
+  private toFallbackRoast(raw: string): string {
     const cleaned = this.cleanJudgeText(raw);
 
     if (!cleaned) {
-      return "Your library is giving mysterious main character energy with a side of playlist goblin.";
+      return "The judge tried to roast your library and immediately needed cleaner evidence.";
     }
 
     const withoutJson = cleaned.replace(/\{[\s\S]*\}/g, "").trim();
 
     if (!withoutJson) {
-      return "Your library is giving mysterious main character energy with a side of playlist goblin.";
+      return "The judge tried to roast your library and immediately needed cleaner evidence.";
     }
 
-    return withoutJson.slice(0, 360);
+    return this.normalizeJudgeText(withoutJson, 360);
   }
 
   private normalizeJudgeBadges(value: unknown, fallback: string[]): string[] {
