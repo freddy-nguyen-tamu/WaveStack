@@ -5,6 +5,8 @@ import { formatSongDisplayName } from "../../song-format";
 import { SongListRow } from "../../components/SongListRow";
 import { PaginationBar } from "../../components/PaginationBar";
 import { ToastNotice } from "../../components/ToastNotice";
+import { LoadingStatus } from "../../components/LoadingStatus";
+import { useStableScrollRegion } from "../../hooks/useStableScrollRegion";
 
 type PlaylistPanelProps = {
   songs: Song[];
@@ -40,6 +42,12 @@ export function PlaylistPanel({
   onOpenDetails
 }: PlaylistPanelProps) {
   const [query, setQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const regionRef = useStableScrollRegion(query.trim() !== searchQuery);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearchQuery(query.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [query]);
   const [page, setPage] = useState(1);
   const [message, setMessage] = useState("");
 
@@ -57,19 +65,19 @@ export function PlaylistPanel({
   }, [selectedPlaylist, songById]);
 
   const libraryResults = useMemo(() => {
-    const needle = query.trim().toLowerCase();
+    const needle = searchQuery.toLowerCase();
 
     if (!needle) {
       return songs;
     }
 
     return songs.filter((song) =>
-      [song.title, song.artistName, song.albumTitle, formatSongDisplayName(song), ...song.genreNames]
+      [song.fileName, song.title, song.artistName, song.albumTitle, formatSongDisplayName(song), ...song.genreNames]
         .join(" ")
         .toLowerCase()
         .includes(needle)
     );
-  }, [query, songs]);
+  }, [searchQuery, songs]);
 
   const pageCount = Math.max(1, Math.ceil(libraryResults.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
@@ -81,16 +89,16 @@ export function PlaylistPanel({
     songs: selectedPlaylistSongs
   }), [selectedPlaylist, selectedPlaylistSongs]);
   const libraryPlaybackContext = useMemo<PlaybackContext>(() => ({
-    id: `playlist-library:${query.trim() || "all"}`,
-    label: query.trim() ? `Playlist library: ${query.trim()}` : "Playlist library",
+    id: `playlist-library:${searchQuery || "all"}`,
+    label: searchQuery ? `Playlist library: ${searchQuery}` : "Playlist library",
     source: "all",
-    queryFilter: query.trim() || null,
+    queryFilter: searchQuery || null,
     songs: libraryResults
-  }), [libraryResults, query]);
+  }), [libraryResults, searchQuery]);
 
   useEffect(() => {
     setPage(1);
-  }, [query, songs.length]);
+  }, [searchQuery]);
 
   useEffect(() => {
     if (!message) {
@@ -168,7 +176,7 @@ export function PlaylistPanel({
   }
 
   return (
-    <article>
+    <article ref={regionRef}>
       <h2>Playlists</h2>
 
       <button type="button" onClick={createPlaylistFromPrompt}>
@@ -239,6 +247,7 @@ export function PlaylistPanel({
           Search library
           <input value={query} onChange={(event) => setQuery(event.target.value)} />
         </label>
+        {query.trim() !== searchQuery ? <LoadingStatus label="Loading search results..." /> : null}
 
         <p>
           Showing {pagedSongs.length} of {libraryResults.length} song(s). Page {currentPage} of {pageCount}.

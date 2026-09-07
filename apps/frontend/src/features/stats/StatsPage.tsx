@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { LoadingStatus } from "../../components/LoadingStatus";
 import { useLazyQuery, useMutation, useQuery } from "@apollo/client";
 import {
   ArrowDown,
@@ -331,7 +332,7 @@ export function StatsPage({
         </div>
 
         {tracksData === undefined ? (
-          <p className="stats-page__loading">Loading...</p>
+          <LoadingStatus />
         ) : entries.length ? (
           <div className="listening-bar-chart" role="img" aria-label="Bar chart of your top song play counts">
             {entries.map((entry) => {
@@ -487,19 +488,19 @@ export function StatsPage({
 
         {tab === "ARTISTS" && (
           <>
-            {artistsLoading ? <p className="stats-page__loading">Loading...</p> : renderRankingList(artistEntries)}
+            {artistsLoading ? <LoadingStatus /> : renderRankingList(artistEntries)}
           </>
         )}
 
         {tab === "GENRES" && (
           <>
-            {genresLoading ? <p className="stats-page__loading">Loading...</p> : renderRankingList(genreEntries)}
+            {genresLoading ? <LoadingStatus /> : renderRankingList(genreEntries)}
           </>
         )}
 
         {tab === "RECENT" && (
           <>
-            {recentLoading ? <p className="stats-page__loading">Loading...</p> : renderRecentlyPlayed()}
+            {recentLoading ? <LoadingStatus /> : renderRecentlyPlayed()}
           </>
         )}
       </section>

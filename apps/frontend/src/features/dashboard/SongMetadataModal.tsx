@@ -1,4 +1,5 @@
 import { createPortal } from "react-dom";
+import { LoadingStatus } from "../../components/LoadingStatus";
 import { useEffect, useRef, useState } from "react";
 import { RefreshCw, X } from "lucide-react";
 import { useMutation, useQuery } from "@apollo/client";
@@ -180,7 +181,7 @@ export function SongMetadataModal({
               </div>
 
               {loading || repairingLyrics ? (
-                <span>{repairingLyrics ? "Extracting lyrics..." : "Refreshing metadata..."}</span>
+                <LoadingStatus label={repairingLyrics ? "Extracting lyrics..." : "Refreshing metadata..."} />
               ) : null}
             </div>
 

@@ -7,6 +7,7 @@ import { CURRENT_THUMBNAIL_CACHE_SUFFIX } from "./thumbnail-cache.service";
 type DriveTrackRow = {
   id: string;
   drive_file_id: string;
+  file_name: string | null;
   title: string;
   artist_name: string;
   album_title: string;
@@ -128,16 +129,18 @@ export class DriveTrackRepository {
         normalized_search,
         synced_at,
         deleted_at,
-        title_locked
+        title_locked,
+        file_name
       )
       VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8,
         $9, $10, $11, $12, $13, $14, $15,
-        $16, $17, $18, now(), $19, $20, $21, now(), NULL, false
+        $16, $17, $18, now(), $19, $20, $21, now(), NULL, false, $22
       )
       ON CONFLICT (id)
       DO UPDATE SET
         drive_file_id = EXCLUDED.drive_file_id,
+        file_name = COALESCE(EXCLUDED.file_name, drive_tracks.file_name),
         -- Once a track's title/artist has been repaired from its embedded
         -- tags (title_locked = true), keep that value on every future
         -- sync instead of overwriting it with a fresh filename guess.
@@ -185,7 +188,8 @@ export class DriveTrackRepository {
         song.createdTime ?? null,
         song.sizeBytes ?? null,
         song.sourceRootFolderId ?? null,
-        search
+        search,
+        song.fileName ?? null
       ]
     );
   }
@@ -572,6 +576,7 @@ export class DriveTrackRepository {
           source_root_folder_id,
           owner_user_id,
           source_type,
+          file_name,
           first_seen_at,
           normalized_search,
           synced_at,
@@ -579,7 +584,7 @@ export class DriveTrackRepository {
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
-          $9, $10, $11, $12, $13, 'user', now(), $14, now(), NULL
+          $9, $10, $11, $12, $13, 'user', $15, now(), $14, now(), NULL
         )
         `,
         [
@@ -596,7 +601,8 @@ export class DriveTrackRepository {
           song.lyrics ?? null,
           song.sourceRootFolderId ?? null,
           userId,
-          search
+          search,
+          song.fileName ?? null
         ]
       );
 
@@ -786,6 +792,7 @@ export class DriveTrackRepository {
   private rowToSong(row: DriveTrackRow): Song {
     return {
       id: row.id,
+      fileName: row.file_name ?? undefined,
       title: row.title,
       artistName: row.artist_name,
       albumTitle: row.album_title,
@@ -836,6 +843,7 @@ export class DriveTrackRepository {
 
     return {
       id,
+      fileName: input.fileName?.trim() || undefined,
       title,
       artistName,
       albumTitle,

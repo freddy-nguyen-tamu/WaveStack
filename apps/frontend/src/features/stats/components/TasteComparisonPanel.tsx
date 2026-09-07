@@ -1,4 +1,5 @@
 import { useQuery } from "@apollo/client";
+import { LoadingStatus } from "../../../components/LoadingStatus";
 import { TASTE_COMPARISON_QUERY } from "../../../api";
 
 type StatsEntry = {
@@ -36,7 +37,7 @@ export function TasteComparisonPanel({ period }: TasteComparisonPanelProps) {
   const comparison = data?.tasteComparison;
 
   if (loading && !comparison) {
-    return <p className="stats-loading">Loading taste comparison...</p>;
+    return <LoadingStatus label="Loading taste comparison..." />;
   }
 
   if (!comparison) {

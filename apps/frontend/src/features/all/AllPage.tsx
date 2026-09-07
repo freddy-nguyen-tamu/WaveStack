@@ -6,29 +6,12 @@ import {
   useRef,
   useState
 } from "react";
-import { useQuery } from "@apollo/client";
-import { SONG_PAGE_QUERY } from "../../api";
+import { useSongPages } from "../../hooks/useSongPages";
+import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
+import { LoadingStatus } from "../../components/LoadingStatus";
+import { useStableScrollRegion } from "../../hooks/useStableScrollRegion";
 import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../../App";
 import { SongListRow } from "../../components/SongListRow";
-import { formatSongDisplayName } from "../../song-format";
-
-type SongPageQueryData = {
-  songPage: {
-    nodes: Song[];
-    pageInfo: {
-      endCursor?: string | null;
-      hasNextPage: boolean;
-    };
-    totalCount: number;
-  };
-};
-
-type SongPageQueryVariables = {
-  first: number;
-  after?: string | null;
-  query?: string | null;
-  sort?: string | null;
-};
 
 const ALL_PAGE_SIZE = 60;
 
@@ -46,24 +29,7 @@ type AllPageProps = {
 
 type SortMode = "az" | "artist" | "newest" | "oldest";
 
-const INITIAL_VISIBLE_COUNT = 60;
-const LOAD_CHUNK_SIZE = 60;
 const FAST_SCROLL_THUMB_HEIGHT = 86;
-
-function getSongDateValue(song: Song): number {
-  if (song.addedAt) {
-    const addedAt = Date.parse(song.addedAt);
-    if (Number.isFinite(addedAt)) return addedAt;
-  }
-
-  const modifiedTime = song.modifiedTime ? Date.parse(song.modifiedTime) : Number.NaN;
-
-  if (Number.isFinite(modifiedTime)) {
-    return modifiedTime;
-  }
-
-  return 0;
-}
 
 function getBackendSort(sortMode: SortMode): string {
   switch (sortMode) {
@@ -79,7 +45,6 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 export function AllPage({
-  songs,
   localTracks = [],
   playlists,
   favoriteIds,
@@ -90,19 +55,16 @@ export function AllPage({
   onOpenDetails
 }: AllPageProps) {
   const listRef = useRef<HTMLUListElement | null>(null);
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
   const fastScrollTrackRef = useRef<HTMLDivElement | null>(null);
+  const fastScrollThumbRef = useRef<HTMLButtonElement | null>(null);
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("az");
-  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_COUNT);
-  const [thumbTop, setThumbTop] = useState(0);
   const [isDraggingFastScroll, setIsDraggingFastScroll] = useState(false);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setDebouncedQuery(query.trim());
-      setVisibleCount(INITIAL_VISIBLE_COUNT);
     }, 300);
 
     return () => window.clearTimeout(timer);
@@ -110,129 +72,49 @@ export function AllPage({
 
   const backendSort = useMemo(() => getBackendSort(sortMode), [sortMode]);
 
-  useEffect(() => {
-    setVisibleCount(INITIAL_VISIBLE_COUNT);
-  }, [sortMode]);
 
-  const { data, loading, fetchMore } = useQuery<SongPageQueryData, SongPageQueryVariables>(
-    SONG_PAGE_QUERY,
-    {
-      variables: {
-        first: ALL_PAGE_SIZE,
-        after: null,
-        query: debouncedQuery || null,
-        sort: backendSort
-      },
-      fetchPolicy: "network-only",
-      nextFetchPolicy: "cache-first",
-      notifyOnNetworkStatusChange: true
-    }
-  );
-
-  const backendSongs = data?.songPage?.nodes ?? [];
-  const backendTotalCount = data?.songPage?.totalCount ?? backendSongs.length;
-  const hasMoreBackendSongs = Boolean(data?.songPage?.pageInfo?.hasNextPage);
-  const backendEndCursor = data?.songPage?.pageInfo?.endCursor ?? null;
+  const { page: resultPage, loading, error, loadMore: loadMoreBackendSongs, retry } = useSongPages(debouncedQuery, backendSort, ALL_PAGE_SIZE);
+  const backendSongs = resultPage?.nodes ?? [];
+  const backendTotalCount = resultPage?.totalCount ?? backendSongs.length;
+  const hasMoreBackendSongs = Boolean(resultPage?.pageInfo.hasNextPage);
+  const regionRef = useStableScrollRegion(loading || query.trim() !== debouncedQuery);
 
   const allSongs = useMemo(() => {
     const seen = new Set<string>();
-    const base = backendSongs.length > 0 || loading ? backendSongs : songs;
-    return [...localTracks, ...base].filter((song) => {
+    const needle = debouncedQuery.toLowerCase();
+    const matchingLocalTracks = localTracks.filter(song => !needle || [song.fileName, song.title, song.artistName, song.albumTitle, ...song.genreNames].join(" ").toLowerCase().includes(needle));
+    return [...matchingLocalTracks, ...backendSongs].filter((song) => {
       if (seen.has(song.id)) {
         return false;
       }
       seen.add(song.id);
       return true;
     });
-  }, [localTracks, songs, backendSongs, loading]);
+  }, [localTracks, backendSongs, debouncedQuery]);
 
-  const filteredSongs = useMemo(() => {
-    if (sortMode === "artist") {
-      return [...allSongs].sort((left, right) => {
-        const artistCompare = String(left.artistName ?? "").localeCompare(
-          String(right.artistName ?? ""),
-          undefined,
-          { numeric: true, sensitivity: "base" }
-        );
-
-        if (artistCompare !== 0) return artistCompare;
-
-        return String(left.title ?? "").localeCompare(
-          String(right.title ?? ""),
-          undefined,
-          { numeric: true, sensitivity: "base" }
-        );
-      });
-    }
-
-    return [...allSongs].sort((left, right) => {
-      if (sortMode === "newest" || sortMode === "oldest") {
-        const diff = getSongDateValue(right) - getSongDateValue(left);
-        if (diff !== 0) return sortMode === "newest" ? diff : -diff;
-        return formatSongDisplayName(left).localeCompare(
-          formatSongDisplayName(right),
-          undefined,
-          { numeric: true, sensitivity: "base" }
-        );
-      }
-
-      return formatSongDisplayName(left).localeCompare(
-        formatSongDisplayName(right),
-        undefined,
-        {
-          numeric: true,
-          sensitivity: "base"
-        }
-      );
-    });
-  }, [allSongs, sortMode]);
-
-  const visibleSongs = filteredSongs.slice(0, visibleCount);
-  const hasMore = visibleSongs.length < filteredSongs.length;
+  // The server owns ordering. Re-sorting every appended page moves existing rows.
+  const visibleSongs = allSongs;
+  const hasMore = hasMoreBackendSongs;
   const playbackContext = useMemo<PlaybackContext>(() => ({
     id: `all:${backendSort}:${debouncedQuery || "all"}`,
     label: debouncedQuery ? `All Songs: ${debouncedQuery}` : `All Songs (${sortMode})`,
     source: "all",
     queryFilter: debouncedQuery || null,
-    songs: filteredSongs
-  }), [backendSort, debouncedQuery, filteredSongs, sortMode]);
+    songs: allSongs
+  }), [backendSort, debouncedQuery, allSongs, sortMode]);
 
-  const loadMoreBackendSongs = useCallback(async () => {
-    if (!hasMoreBackendSongs || !backendEndCursor) {
-      return;
-    }
-
-    await fetchMore({
-      variables: {
-        first: ALL_PAGE_SIZE,
-        after: backendEndCursor,
-        query: debouncedQuery || null,
-        sort: backendSort
-      },
-      updateQuery: (previous, { fetchMoreResult }) => {
-        if (!fetchMoreResult?.songPage) {
-          return previous;
-        }
-
-        return {
-          songPage: {
-            ...fetchMoreResult.songPage,
-            nodes: [
-              ...(previous.songPage?.nodes ?? []),
-              ...(fetchMoreResult.songPage.nodes ?? [])
-            ]
-          }
-        };
-      }
-    });
-  }, [backendEndCursor, backendSort, debouncedQuery, fetchMore, hasMoreBackendSongs]);
+  const sentinelRef = useInfiniteScroll({
+    enabled: !error && query.trim() === debouncedQuery,
+    loading,
+    hasMore,
+    onLoadMore: () => { void loadMoreBackendSongs(); }
+  });
 
   const updateThumbFromWindowScroll = useCallback(() => {
     const track = fastScrollTrackRef.current;
     const list = listRef.current;
 
     if (!track || !list) {
-      setThumbTop(0);
       return;
     }
 
@@ -244,7 +126,7 @@ export function AllPage({
     const scrolledInsideList = clamp(window.scrollY - listTop, 0, viewportTravel);
     const ratio = viewportTravel <= 0 ? 0 : scrolledInsideList / viewportTravel;
 
-    setThumbTop(ratio * maxThumbTop);
+    if (fastScrollThumbRef.current) fastScrollThumbRef.current.style.transform = `translateY(${ratio * maxThumbTop}px)`;
   }, []);
 
   const scrollToFastScrollRatio = useCallback((ratio: number) => {
@@ -262,7 +144,7 @@ export function AllPage({
     const listBottom = listTop + list.scrollHeight;
     const viewportTravel = Math.max(0, listBottom - window.innerHeight - listTop);
 
-    setThumbTop(nextThumbTop);
+    if (fastScrollThumbRef.current) fastScrollThumbRef.current.style.transform = `translateY(${nextThumbTop}px)`;
 
     window.scrollTo({
       top: listTop + viewportTravel * clamp(ratio, 0, 1),
@@ -323,44 +205,6 @@ export function AllPage({
   }
 
   useEffect(() => {
-    setVisibleCount(INITIAL_VISIBLE_COUNT);
-    window.requestAnimationFrame(updateThumbFromWindowScroll);
-  }, [query, sortMode, filteredSongs.length, updateThumbFromWindowScroll]);
-
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
-    const canLoadMoreBackendSongs = hasMoreBackendSongs && !loading && Boolean(backendEndCursor);
-
-    if (!sentinel || (!hasMore && !canLoadMoreBackendSongs)) {
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          if (hasMore) {
-            setVisibleCount((count) => Math.min(count + LOAD_CHUNK_SIZE, filteredSongs.length));
-            return;
-          }
-
-          if (canLoadMoreBackendSongs) {
-            void loadMoreBackendSongs();
-          }
-        }
-      },
-      {
-        root: null,
-        rootMargin: "900px 0px 1100px 0px",
-        threshold: 0.01
-      }
-    );
-
-    observer.observe(sentinel);
-
-    return () => observer.disconnect();
-  }, [backendEndCursor, filteredSongs.length, hasMore, hasMoreBackendSongs, loadMoreBackendSongs, loading]);
-
-  useEffect(() => {
     updateThumbFromWindowScroll();
 
     window.addEventListener("scroll", updateThumbFromWindowScroll, { passive: true });
@@ -372,18 +216,8 @@ export function AllPage({
     };
   }, [updateThumbFromWindowScroll, visibleSongs.length]);
 
-  if (!allSongs.length) {
-    return (
-      <article className="all-page">
-        <p className="eyebrow">Library</p>
-        <h2>All Songs</h2>
-        <p>No songs found. Upload your first track or sign in to load your library.</p>
-      </article>
-    );
-  }
-
   return (
-    <article className="all-page">
+    <article ref={regionRef} className="all-page">
       <div className="all-page__header-row">
         <div>
           <p className="eyebrow">Library</p>
@@ -413,8 +247,8 @@ export function AllPage({
       </section>
 
       <p className="all-page__summary">
-        Showing {visibleSongs.length} of {filteredSongs.length} song(s).
-        {hasMore ? " Scroll down or drag the red bar to lazy-load more." : " End of list."}
+        Showing {visibleSongs.length} of {backendTotalCount} song(s).
+        {!hasMore && !loading && !error ? " End of list." : ""}
       </p>
 
       {visibleSongs.length ? (
@@ -435,9 +269,9 @@ export function AllPage({
             />
           ))}
         </ul>
-      ) : (
+      ) : !loading && !error ? (
         <p>No matching songs.</p>
-      )}
+      ) : null}
 
       <div ref={sentinelRef} className="all-page__lazy-sentinel" aria-hidden="true" />
 
@@ -450,19 +284,20 @@ export function AllPage({
         <button
           type="button"
           className="all-page__fast-scroll-thumb"
+          ref={fastScrollThumbRef}
           data-dragging={isDraggingFastScroll ? "true" : "false"}
           onPointerDown={handleFastScrollPointerDown}
           onPointerMove={handleFastScrollPointerMove}
           onPointerUp={stopFastScrollDrag}
           onPointerCancel={stopFastScrollDrag}
-          style={{ transform: `translateY(${thumbTop}px)` }}
           tabIndex={-1}
           aria-label="Fast scroll all songs"
         />
       </div>
 
-      {hasMoreBackendSongs && loading ? (
-        <p className="infinite-scroll-status">Loading more songs...</p>
+      {error ? <p role="alert">{error} <button type="button" onClick={retry}>Retry</button></p> : null}
+      {loading || query.trim() !== debouncedQuery ? (
+        <LoadingStatus label="Loading songs..." />
       ) : null}
 
       <div className="bottom-player-spacer" aria-hidden="true" />

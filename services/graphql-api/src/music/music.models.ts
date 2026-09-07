@@ -8,6 +8,9 @@ export class Song {
   @Field()
   title!: string;
 
+  @Field({ nullable: true })
+  fileName?: string;
+
   @Field()
   artistName!: string;
 
@@ -209,6 +212,9 @@ export class Artist {
 
 @InputType()
 export class UserSongInput {
+  @Field({ nullable: true })
+  fileName?: string;
+
   @Field()
   title!: string;
 

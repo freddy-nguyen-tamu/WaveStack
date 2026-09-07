@@ -1,6 +1,7 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Pool, QueryResult, QueryResultRow } from "pg";
+import { SONG_SEARCH_SCHEMA } from "./song-search-schema";
 
 @Injectable()
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
@@ -18,6 +19,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     await this.ensureUserLibraryTables();
+    await this.pool.query(SONG_SEARCH_SCHEMA);
   }
 
   query<T extends QueryResultRow = QueryResultRow>(

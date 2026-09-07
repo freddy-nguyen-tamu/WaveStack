@@ -1,31 +1,14 @@
 import { Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@apollo/client";
-import { SONG_PAGE_QUERY } from "../../api";
+import { useSongPages } from "../../hooks/useSongPages";
+import { LoadingStatus } from "../../components/LoadingStatus";
+import { useStableScrollRegion } from "../../hooks/useStableScrollRegion";
 import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../../App";
 import { formatSongDisplayName } from "../../song-format";
 import { SongListRow } from "../../components/SongListRow";
 import { PaginationBar } from "../../components/PaginationBar";
 import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
 import { ToastNotice } from "../../components/ToastNotice";
-
-type SongPageQueryData = {
-  songPage: {
-    nodes: Song[];
-    pageInfo: {
-      endCursor?: string | null;
-      hasNextPage: boolean;
-    };
-    totalCount: number;
-  };
-};
-
-type SongPageQueryVariables = {
-  first: number;
-  after?: string | null;
-  query?: string | null;
-  sort?: string | null;
-};
 
 type SearchPanelProps = {
   pageKey: string;
@@ -61,79 +44,22 @@ export function SearchPanel({
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [message, setMessage] = useState("");
-  const [allResults, setAllResults] = useState<Song[]>([]);
-  const [hasMore, setHasMore] = useState(false);
-  const [cursor, setCursor] = useState<string | null>(null);
   const [page, setPage] = useState(1);
 
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedQuery(query.trim());
-      setAllResults([]);
-      setCursor(null);
-      setHasMore(false);
       setPage(1);
     }, 300);
     return () => clearTimeout(timer);
   }, [query]);
 
-  const { data, fetchMore, loading } = useQuery<SongPageQueryData, SongPageQueryVariables>(
-    SONG_PAGE_QUERY,
-    {
-      variables: {
-        first: 30,
-        after: null,
-        query: debouncedQuery.trim() || null,
-        sort: "TITLE_ASC"
-      },
-      fetchPolicy: "network-only",
-      nextFetchPolicy: "cache-first",
-      notifyOnNetworkStatusChange: true,
-      skip: !backendSearch
-    }
-  );
-
-  useEffect(() => {
-    if (!backendSearch || !data?.songPage) {
-      return;
-    }
-
-    setAllResults(data.songPage.nodes ?? []);
-    setCursor(data.songPage.pageInfo.endCursor ?? null);
-    setHasMore(data.songPage.pageInfo.hasNextPage);
-    setPage(1);
-  }, [backendSearch, data]);
-
-  async function loadMore() {
-    if (!backendSearch || !cursor || !hasMore || loading) {
-      return;
-    }
-
-    const result = await fetchMore({
-      variables: {
-        first: 30,
-        after: cursor,
-        query: debouncedQuery.trim() || null,
-        sort: "TITLE_ASC"
-      }
-    });
-
-    const page = result.data?.songPage;
-
-    if (page?.nodes) {
-      setAllResults((prev) => {
-        const seen = new Set(prev.map((s) => s.id));
-        const deduped = page.nodes.filter((n) => !seen.has(n.id));
-        return [...prev, ...deduped];
-      });
-
-      setCursor(page.pageInfo.endCursor ?? null);
-      setHasMore(page.pageInfo.hasNextPage);
-    }
-  }
+  const { page: resultPage, loading, error, loadMore, retry } = useSongPages(debouncedQuery, "TITLE_ASC", PAGE_SIZE, backendSearch);
+  const hasMore = Boolean(resultPage?.pageInfo.hasNextPage);
+  const regionRef = useStableScrollRegion(loading || query.trim() !== debouncedQuery);
 
   const searchSentinelRef = useInfiniteScroll({
-    enabled: backendSearch,
+    enabled: backendSearch && !error && query.trim() === debouncedQuery,
     loading,
     hasMore,
     onLoadMore: () => {
@@ -143,22 +69,22 @@ export function SearchPanel({
   });
 
   const fallbackResults = useMemo(() => {
-    const needle = query.trim().toLowerCase();
+    const needle = debouncedQuery.toLowerCase();
 
     if (!needle) {
       return songs;
     }
 
     return songs.filter((song) => {
-      const haystack = [song.title, song.artistName, song.albumTitle, formatSongDisplayName(song), ...song.genreNames].join(" ").toLowerCase();
+      const haystack = [song.fileName, song.title, song.artistName, song.albumTitle, formatSongDisplayName(song), ...song.genreNames].join(" ").toLowerCase();
       return haystack.includes(needle);
     });
-  }, [query, songs]);
+  }, [debouncedQuery, songs]);
 
-  const results = backendSearch ? allResults : fallbackResults;
+  const results = backendSearch ? resultPage?.nodes ?? [] : fallbackResults;
 
   const totalMatchingCount = backendSearch
-    ? data?.songPage?.totalCount ?? results.length
+    ? resultPage?.totalCount ?? results.length
     : results.length;
 
   const pageCount = Math.max(1, Math.ceil(results.length / PAGE_SIZE));
@@ -178,16 +104,13 @@ export function SearchPanel({
   useEffect(() => {
     setQuery("");
     setDebouncedQuery("");
-    setAllResults([]);
     setMessage("");
-    setCursor(null);
-    setHasMore(false);
     setPage(1);
   }, [pageKey]);
 
   useEffect(() => {
     setPage(1);
-  }, [query, results.length]);
+  }, [debouncedQuery]);
 
   useEffect(() => {
     if (!message) {
@@ -222,7 +145,7 @@ export function SearchPanel({
   }
 
   return (
-    <article>
+    <article ref={regionRef}>
       <h2>{title}</h2>
       <label>
         <Search aria-hidden="true" /> Song, artist, album, or genre
@@ -272,12 +195,13 @@ export function SearchPanel({
             />
           ) : null}
         </>
-      ) : <p>{emptyMessage}</p>}
+      ) : !loading && !error && query.trim() === debouncedQuery ? <p>{emptyMessage}</p> : null}
+      {error ? <p role="alert">{error} <button type="button" onClick={retry}>Retry</button></p> : null}
       {backendSearch ? (
         <div ref={searchSentinelRef} className="infinite-scroll-sentinel" aria-hidden="true" />
       ) : null}
-      {backendSearch && loading && displayedResults.length ? (
-        <p className="infinite-scroll-status">Loading more search results...</p>
+      {loading || query.trim() !== debouncedQuery ? (
+        <LoadingStatus label="Loading search results..." />
       ) : null}
     </article>
   );

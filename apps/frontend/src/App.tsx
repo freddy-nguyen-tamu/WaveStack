@@ -38,6 +38,7 @@ import { ToastNotice } from "./components/ToastNotice";
 
 export type Song = {
   id: string;
+  fileName?: string;
   title: string;
   artistName: string;
   albumTitle: string;

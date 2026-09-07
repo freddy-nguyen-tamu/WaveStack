@@ -23,15 +23,17 @@ export function useInfiniteScroll({
   useEffect(() => {
     const node = sentinelRef.current;
 
-    if (!node || !enabled || !hasMore) {
+    if (!node || !enabled || !hasMore || loading) {
       return;
     }
 
+    let requested = false;
     const observer = new IntersectionObserver(
       (entries) => {
         const entry = entries[0];
 
-        if (entry.isIntersecting && !loading && hasMore) {
+        if (entry.isIntersecting && !requested) {
+          requested = true;
           callbackRef.current();
         }
       },

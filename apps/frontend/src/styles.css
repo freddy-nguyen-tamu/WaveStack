@@ -665,6 +665,51 @@ article li small,
     transform 180ms ease;
 }
 
+.song-artwork {
+  position: relative;
+  background: #242629 url('/favicon.ico') center / 48% no-repeat;
+}
+
+.song-artwork__loading {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 16px;
+  height: 16px;
+  color: white;
+  animation: loading-status-spin 0.9s linear infinite;
+}
+
+.song-artwork[data-artwork-loaded="true"] {
+  background-image: none;
+}
+
+.song-artwork[data-artwork-loaded="false"] > span {
+  background: transparent;
+}
+
+.song-artwork[data-artwork-loaded="false"] {
+  background: #242629 url('/favicon.ico') center / 48% no-repeat !important;
+}
+
+.loading-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  font-size: 14px;
+  overflow-anchor: none;
+}
+
+.loading-status svg {
+  width: 20px;
+  height: 20px;
+  animation: loading-status-spin 0.9s linear infinite;
+}
+
+@keyframes loading-status-spin { to { transform: rotate(360deg); } }
+
 .song-artwork--now-playing {
   position: relative;
   contain: paint;
@@ -672,20 +717,12 @@ article li small,
   border: 0 !important;
   border-radius: 50% !important;
   overflow: hidden;
-  transform: rotate(var(--now-playing-disc-angle, 0deg));
   transform-origin: center;
-  background: transparent;
   outline: 0;
   box-shadow: none;
 }
 
-.song-artwork--playing {
-  animation: now-playing-disc-spin 18s linear infinite;
-  will-change: transform;
-}
-
 .song-artwork--paused {
-  animation: none;
   will-change: auto;
 }
 
@@ -703,16 +740,6 @@ article li small,
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-
-@keyframes now-playing-disc-spin {
-  from {
-    transform: rotate(var(--now-playing-disc-angle, 0deg));
-  }
-
-  to {
-    transform: rotate(calc(var(--now-playing-disc-angle, 0deg) + 360deg));
-  }
 }
 
 .player-card {

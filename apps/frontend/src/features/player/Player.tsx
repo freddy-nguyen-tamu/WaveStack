@@ -64,7 +64,6 @@ export function Player({
   onEnded
 }: PlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
   const discAngleRef = useRef(0);
   const discTimestampRef = useRef<number | null>(null);
   const playRequestRef = useRef(0);
@@ -138,31 +137,13 @@ export function Player({
     }
   }, [playSignal]);
 
-  useEffect(() => {
-    if (!isPlaying) {
-      stopProgressLoop();
-      return;
-    }
-
-    updateProgressLoop();
-
-    return stopProgressLoop;
-  }, [isPlaying]);
-
-  function stopProgressLoop() {
-    if (animationFrameRef.current !== null) {
-      window.cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-    }
-  }
-
   function normalizeDiscAngle(angle: number) {
     const normalizedAngle = angle % 360;
     return normalizedAngle < 0 ? normalizedAngle + 360 : normalizedAngle;
   }
 
   function getDiscNowMs() {
-    return performance.now();
+    return Number(document.timeline.currentTime ?? performance.now());
   }
 
   function startDiscRotation() {
@@ -200,20 +181,6 @@ export function Player({
       baseAngleDeg: 0,
       startedAtMs: null
     });
-  }
-
-  function updateProgressLoop() {
-    const audio = audioRef.current;
-
-    if (audio) {
-      setCurrentTime(audio.currentTime || 0);
-
-      if (Number.isFinite(audio.duration) && audio.duration > 0) {
-        setDuration(audio.duration);
-      }
-    }
-
-    animationFrameRef.current = window.requestAnimationFrame(updateProgressLoop);
   }
 
   function syncProgressFromAudio() {
@@ -437,7 +404,7 @@ export function Player({
       window.removeEventListener("keydown", handleKeyboardControls);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [isPlaying, currentTime, activeSong.id, displayName, onNext, onPrevious]);
+  }, [isPlaying, activeSong.id, displayName, onNext, onPrevious]);
 
   useEffect(() => {
     function blurActivatedControl(event: Event) {
@@ -495,6 +462,38 @@ export function Player({
     onToggleFavorite();
     setMessage(isFavorite ? `Removed favorite: ${displayName}` : `Added favorite: ${displayName}`);
   }
+
+  useEffect(() => {
+    if (!("mediaSession" in navigator) || !hasPlaybackHistory) return;
+    const session = navigator.mediaSession;
+    if (typeof MediaMetadata !== "undefined") {
+      session.metadata = new MediaMetadata({
+        title: songTitle,
+        artist: songArtist,
+        album: activeSong.albumTitle,
+        artwork: [{ src: activeSong.localThumbnailUrl || activeSong.thumbnailUrl || "/favicon.ico" }]
+      });
+    }
+    session.playbackState = isPlaying ? "playing" : "paused";
+    const handlers: Partial<Record<MediaSessionAction, MediaSessionActionHandler>> = {
+      play: () => { void playCurrent(); },
+      pause: () => pauseCurrent(`Paused: ${displayName}`),
+      nexttrack: () => { if (!resolvingNext) onNext(); },
+      previoustrack: previous
+    };
+    const registered: MediaSessionAction[] = [];
+    for (const [action, handler] of Object.entries(handlers)) {
+      try {
+        session.setActionHandler(action as MediaSessionAction, handler!);
+        registered.push(action as MediaSessionAction);
+      } catch { /* Some browsers support only a subset of media actions. */ }
+    }
+    return () => {
+      registered.forEach(action => session.setActionHandler(action, null));
+      session.playbackState = "none";
+      session.metadata = null;
+    };
+  }, [activeSong, hasPlaybackHistory, isPlaying, onNext, onPrevious, resolvingNext]);
 
   function handleSeek(value: string) {
     const nextTime = Number(value);

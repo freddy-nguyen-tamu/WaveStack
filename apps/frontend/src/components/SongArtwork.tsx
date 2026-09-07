@@ -1,6 +1,7 @@
-import { type CSSProperties, type SyntheticEvent, useEffect, useMemo, useRef, useState } from "react";
+import { memo, type SyntheticEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Song } from "../App";
-import { NOW_PLAYING_DISC_DEGREES_PER_MS, useNowPlayingForSong } from "./NowPlayingContext";
+import { LoaderCircle } from "lucide-react";
+import { NOW_PLAYING_DISC_DEGREES_PER_MS, NOW_PLAYING_DISC_ROTATION_MS, useNowPlayingForSong } from "./NowPlayingContext";
 
 type SongArtworkProps = {
   song: Pick<
@@ -19,6 +20,24 @@ const imageStatus = new Map<string, "loaded" | "failed">();
 const normalizedDiscArtwork = new Map<string, string | null>();
 const DISC_ANALYSIS_MAX_SIZE = 256;
 const DISC_OUTPUT_SIZE = 512;
+const artworkObservers = new Map<Element, (visible: boolean) => void>();
+let artworkObserver: IntersectionObserver | undefined;
+
+function observeArtwork(node: Element, callback: (visible: boolean) => void) {
+  artworkObserver ??= new IntersectionObserver(entries => {
+    entries.forEach(entry => artworkObservers.get(entry.target)?.(entry.isIntersecting));
+  }, { rootMargin: "450px 0px 650px 0px", threshold: 0.01 });
+  artworkObservers.set(node, callback);
+  artworkObserver.observe(node);
+  return () => {
+    artworkObserver?.unobserve(node);
+    artworkObservers.delete(node);
+    if (!artworkObservers.size) {
+      artworkObserver?.disconnect();
+      artworkObserver = undefined;
+    }
+  };
+}
 
 type PixelColor = {
   r: number;
@@ -35,12 +54,7 @@ type Bounds = {
 };
 
 function getTimelineNowMs() {
-  return typeof performance === "undefined" ? 0 : performance.now();
-}
-
-function normalizeDiscAngle(angle: number) {
-  const normalizedAngle = angle % 360;
-  return normalizedAngle < 0 ? normalizedAngle + 360 : normalizedAngle;
+  return Number(document.timeline.currentTime ?? performance.now());
 }
 
 function averageCanvasCornerColor(
@@ -218,7 +232,7 @@ function createNormalizedDiscArtwork(image: HTMLImageElement): string | null {
   }
 }
 
-export function SongArtwork({
+export const SongArtwork = memo(function SongArtwork({
   song,
   wrapClassName,
   fallbackClassName,
@@ -231,6 +245,8 @@ export function SongArtwork({
   const imageRef = useRef<HTMLImageElement | null>(null);
   const [isNearViewport, setIsNearViewport] = useState(eager);
   const [sourceIndex, setSourceIndex] = useState(0);
+  const [loadedSrc, setLoadedSrc] = useState<string>();
+  const [hasEnteredViewport, setHasEnteredViewport] = useState(eager);
   const [normalizedDiscImage, setNormalizedDiscImage] = useState<{
     source: string;
     src: string;
@@ -259,6 +275,7 @@ export function SongArtwork({
   useEffect(() => {
     if (eager) {
       setIsNearViewport(true);
+      setHasEnteredViewport(true);
       return;
     }
 
@@ -266,59 +283,51 @@ export function SongArtwork({
 
     if (!node || !("IntersectionObserver" in window)) {
       setIsNearViewport(true);
+      setHasEnteredViewport(true);
       return;
     }
 
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        setIsNearViewport(entry.isIntersecting);
-      },
-      {
-        root: null,
-        rootMargin: "450px 0px 650px 0px",
-        threshold: 0.01
-      }
-    );
-
-    observer.observe(node);
-
-    return () => observer.disconnect();
+    return observeArtwork(node, visible => {
+      setIsNearViewport(visible);
+      if (visible) setHasEnteredViewport(true);
+    });
   }, [song.id, eager]);
 
-  const src = isNearViewport ? sources[sourceIndex] : undefined;
+  const src = hasEnteredViewport ? sources[sourceIndex] : undefined;
   const shouldApplyNowPlayingStyle = !disableNowPlayingStyle && nowPlaying.isNowPlaying;
   const displaySrc =
     shouldApplyNowPlayingStyle && src && normalizedDiscImage?.source === src
       ? normalizedDiscImage.src
       : src;
   const artworkClassName = [
+    "song-artwork",
     wrapClassName,
     shouldApplyNowPlayingStyle ? "song-artwork--now-playing" : "",
     shouldApplyNowPlayingStyle && nowPlaying.isPlaying ? "song-artwork--playing" : "",
     shouldApplyNowPlayingStyle && !nowPlaying.isPlaying ? "song-artwork--paused" : ""
   ].filter(Boolean).join(" ");
-  const artworkStyle = useMemo(() => {
-    if (!shouldApplyNowPlayingStyle) {
-      return undefined;
+  useLayoutEffect(() => {
+    const node = rootRef.current;
+    if (!node || !shouldApplyNowPlayingStyle || !node.animate) return;
+    const elapsed = nowPlaying.discBaseAngleDeg / NOW_PLAYING_DISC_DEGREES_PER_MS +
+      (nowPlaying.isPlaying && nowPlaying.discStartedAtMs !== null ? Math.max(0, getTimelineNowMs() - nowPlaying.discStartedAtMs) : 0);
+    const animation = node.animate(
+      [{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }],
+      { duration: NOW_PLAYING_DISC_ROTATION_MS, iterations: Infinity, easing: "linear" }
+    );
+    animation.pause();
+    animation.currentTime = elapsed;
+    if (nowPlaying.isPlaying && isNearViewport) {
+      animation.play();
+      animation.startTime = getTimelineNowMs() - elapsed;
     }
-
-    const currentAngleDeg =
-      nowPlaying.isPlaying && nowPlaying.discStartedAtMs !== null
-        ? normalizeDiscAngle(
-            nowPlaying.discBaseAngleDeg +
-              Math.max(0, getTimelineNowMs() - nowPlaying.discStartedAtMs) *
-                NOW_PLAYING_DISC_DEGREES_PER_MS
-          )
-        : normalizeDiscAngle(nowPlaying.discBaseAngleDeg);
-
-    return {
-      "--now-playing-disc-angle": `${currentAngleDeg.toFixed(3)}deg`
-    } as CSSProperties;
+    return () => animation.cancel();
   }, [
     nowPlaying.discBaseAngleDeg,
     nowPlaying.discStartedAtMs,
     nowPlaying.isPlaying,
-    shouldApplyNowPlayingStyle
+    shouldApplyNowPlayingStyle,
+    isNearViewport
   ]);
 
   useEffect(() => {
@@ -344,7 +353,7 @@ export function SongArtwork({
   }, [shouldApplyNowPlayingStyle, src]);
 
   function normalizeLoadedDiscImage(image: HTMLImageElement) {
-    if (!shouldApplyNowPlayingStyle || !src || normalizedDiscArtwork.has(src)) {
+    if (!shouldApplyNowPlayingStyle || !src || normalizedDiscArtwork.has(src) || src.endsWith("-cover-v2.webp")) {
       return;
     }
 
@@ -357,6 +366,7 @@ export function SongArtwork({
   }
 
   function handleImageLoad(event: SyntheticEvent<HTMLImageElement>) {
+    setLoadedSrc(displaySrc);
     if (src) {
       imageStatus.set(src, "loaded");
     }
@@ -368,8 +378,7 @@ export function SongArtwork({
     <span
       ref={rootRef}
       className={artworkClassName}
-      style={artworkStyle}
-      data-artwork-loaded={Boolean(displaySrc)}
+      data-artwork-loaded={Boolean(displaySrc && loadedSrc === displaySrc)}
       data-now-playing={shouldApplyNowPlayingStyle ? "true" : undefined}
       data-playback-state={shouldApplyNowPlayingStyle ? (nowPlaying.isPlaying ? "playing" : "paused") : undefined}
     >
@@ -383,6 +392,7 @@ export function SongArtwork({
           loading={loading}
           decoding="async"
           fetchPriority={eager ? "high" : "low"}
+          style={{ opacity: loadedSrc === displaySrc ? 1 : 0 }}
           onLoad={handleImageLoad}
           onError={() => {
             if (src) {
@@ -394,9 +404,9 @@ export function SongArtwork({
         />
       ) : (
         <span className={fallbackClassName} aria-hidden="true">
-          {song.artistName?.trim()?.charAt(0)?.toUpperCase() || "♪"}
         </span>
       )}
+      {src && loadedSrc !== displaySrc && isNearViewport ? <LoaderCircle className="song-artwork__loading" aria-hidden="true" /> : null}
     </span>
   );
-}
+});

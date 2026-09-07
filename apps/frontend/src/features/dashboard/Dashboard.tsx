@@ -6,6 +6,7 @@ import { formatSeconds, getSongCardSize } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
 import { SongMetadataModal } from "./SongMetadataModal";
 import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
+import { LoadingStatus } from "../../components/LoadingStatus";
 import { SongActions } from "../../components/SongActions";
 
 type DashboardProps = {
@@ -135,7 +136,7 @@ export function Dashboard({
             </button>
           ) : null}
 
-          {loading ? <p>Loading music data...</p> : null}
+          {loading ? <LoadingStatus label="Loading music data..." /> : null}
         </div>
       </div>
 
@@ -230,7 +231,7 @@ export function Dashboard({
       />
 
       {loadingMoreRecommendations ? (
-        <p className="infinite-scroll-status">Loading more recommendations...</p>
+        <LoadingStatus label="Loading more recommendations..." />
       ) : null}
 
       {!loadingMoreRecommendations && !hasMoreRecommendations && suggestions.length > 0 ? (

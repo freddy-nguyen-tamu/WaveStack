@@ -28,15 +28,16 @@ export const apolloCache = new InMemoryCache({
       fields: {
         songPage: {
           keyArgs: ["query", "sort"],
-          merge(existing, incoming) {
-            if (!existing) return incoming;
+          merge(existing, incoming, { args, readField }) {
+            if (!existing || !args?.after) return incoming;
             const existingNodes = existing.nodes ?? [];
             const incomingNodes = incoming.nodes ?? [];
             const merged = [...existingNodes, ...incomingNodes];
             const seen = new Set<string>();
             const deduped = merged.filter((n) => {
-              if (seen.has(n.__ref)) return false;
-              seen.add(n.__ref);
+              const id = readField<string>("id", n);
+              if (!id || seen.has(id)) return false;
+              seen.add(id);
               return true;
             });
             return {
@@ -126,6 +127,7 @@ export function uploadTrack(
 const SONG_CARD_FIELDS = gql`
   fragment SongCardFields on Song {
     id
+    fileName
     title
     artistName
     albumTitle
@@ -146,6 +148,7 @@ const SONG_CARD_FIELDS = gql`
 const SONG_DETAIL_FIELDS = gql`
   fragment SongDetailFields on Song {
     id
+    fileName
     title
     artistName
     albumTitle

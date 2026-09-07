@@ -146,6 +146,7 @@ export class UploadsController {
     try {
       const song = await this.driveTrackRepository.createUserSongs(userId, [
         {
+          fileName: file.originalname,
           title,
           artistName,
           albumTitle,

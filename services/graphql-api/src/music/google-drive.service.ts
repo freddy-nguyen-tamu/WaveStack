@@ -156,6 +156,7 @@ export class GoogleDriveService {
 
       return {
         id: `drive-${file.id}`,
+        fileName: file.name,
         title: this.cleanOptional(properties.title) ?? parsed.title,
         artistName:
           this.cleanOptional(properties.artistName) ??
