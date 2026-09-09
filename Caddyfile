@@ -7,12 +7,10 @@ wavestack.duckdns.org {
     @crawlerFiles path /robots.txt /sitemap.xml
     header @crawlerFiles Cache-Control "public, max-age=3600"
 
-    @html path / /index.html
-    header @html Cache-Control "no-cache"
+    @html not path /assets/* /graphql /api/* /auth/* /drive/* /robots.txt /sitemap.xml *.ico *.png *.jpg *.jpeg *.gif *.svg *.webp *.avif *.woff *.woff2
+    header @html Cache-Control "no-store"
 
-    reverse_proxy frontend:5173 {
-        header_down -Cache-Control
-    }
+    reverse_proxy frontend:5173
 }
 
 api.wavestack.duckdns.org {

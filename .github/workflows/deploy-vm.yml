@@ -7,6 +7,10 @@ on:
       - master
   workflow_dispatch:
 
+concurrency:
+  group: wavestack-oracle-production
+  cancel-in-progress: false
+
 jobs:
   legacy_azure_deploy:
     name: Legacy Azure Deploy (skipped)
@@ -176,6 +180,8 @@ jobs:
         run: |
           ssh \
             -i ~/.ssh/wavestack_oracle_actions \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
             "$ORACLE_USER@$ORACLE_HOST" <<'REMOTE'
           set -euo pipefail
 
@@ -188,7 +194,39 @@ jobs:
 
           sudo docker compose config >/dev/null
 
-          sudo docker compose up --build -d
+          # Finish all builds before replacing any running service.
+          sudo docker compose build
+
+          # A failed recreation can leave containers in Created state; reconcile once.
+          if ! sudo docker compose up --no-build -d; then
+            sudo docker compose ps -a
+            sleep 5
+            sudo docker compose up --no-build -d
+          fi
+
+          ready=false
+          for attempt in $(seq 1 30); do
+            if sudo docker compose exec -T graphql-api node -e '
+              fetch("http://localhost:3000/graphql", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ query: "{ __typename }" }),
+                signal: AbortSignal.timeout(5000)
+              }).then(async response => {
+                const body = await response.json();
+                if (!response.ok || body.data?.__typename !== "Query") process.exit(1);
+              }).catch(() => process.exit(1));
+            ' && curl --fail --silent --max-time 5 http://localhost:5173/ >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" != true ]; then
+            sudo docker compose ps -a
+            sudo docker compose logs --tail=80 graphql-api frontend
+            exit 1
+          fi
 
           printf '%s\n' "Oracle deployment activated successfully at $(date -Is)" \
             > .oracle-deploy-ready

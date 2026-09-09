@@ -389,6 +389,7 @@ export const SongArtwork = memo(function SongArtwork({
           className={imageClassName}
           src={displaySrc}
           alt=""
+          draggable={false}
           loading={loading}
           decoding="async"
           fetchPriority={eager ? "high" : "low"}

@@ -7,6 +7,14 @@ import { apolloClient, restoreApolloCache } from "./api";
 import "./styles.css";
 
 async function bootstrap() {
+  // Discourage ordinary image copying without interfering with lyric selection.
+  for (const eventName of ["dragstart", "contextmenu", "selectstart"] as const) {
+    document.addEventListener(eventName, event => {
+      if (event.target instanceof Element && event.target.closest("img, .song-artwork")) {
+        event.preventDefault();
+      }
+    });
+  }
   await restoreApolloCache();
 
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
