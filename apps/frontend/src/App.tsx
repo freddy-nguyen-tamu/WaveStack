@@ -1659,7 +1659,7 @@ export function App() {
     }
 
     if (playlist.songIds.includes(song.id)) {
-      showNotice(`${formatSongDisplayName(song)} is already in ${playlist.name}.`);
+      await removeFromPlaylist(playlistId, song.id, song);
       return;
     }
 
@@ -1708,9 +1708,9 @@ export function App() {
     }
   }
 
-  async function removeFromPlaylist(playlistId: string, songId: string) {
+  async function removeFromPlaylist(playlistId: string, songId: string, knownSong?: Song) {
     const playlist = playlists.find((item) => item.id === playlistId);
-    const song = songById.get(songId);
+    const song = knownSong ?? songById.get(songId);
 
     if (!authToken) {
       setPlaylists((items) => {

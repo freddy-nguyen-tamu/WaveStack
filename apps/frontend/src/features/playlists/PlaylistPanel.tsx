@@ -142,8 +142,7 @@ export function PlaylistPanel({
   }
 
   function add(playlistId: string, song: Song) {
-    onAddToPlaylist(playlistId, song);
-    setMessage(`Playlist action sent for: ${formatSongDisplayName(song)}`);
+    return onAddToPlaylist(playlistId, song);
   }
 
   function remove(song: Song) {
@@ -189,27 +188,32 @@ export function PlaylistPanel({
         </ToastNotice>
       ) : null}
 
-      {playlists.length ? (
-        <ul>
-          {playlists.map((playlist) => (
-            <li key={playlist.id}>
-              <button type="button" onClick={() => selectPlaylist(playlist)} aria-pressed={playlist.id === selectedPlaylistId}>
-                {playlist.id === selectedPlaylistId ? "Selected: " : "Open: "}
-                {playlist.name} ({playlist.songIds.length})
-              </button>
-              <button type="button" onClick={() => deletePlaylist(playlist)}>
-                <Trash2 aria-hidden="true" /> Delete
-              </button>
-            </li>
+      <div className="playlist-selector">
+        <label className="sr-only" htmlFor="playlist-selector">Choose playlist</label>
+        <select
+          id="playlist-selector"
+          value={selectedPlaylist?.id ?? ""}
+          disabled={!playlists.length}
+          onChange={(event) => {
+            const playlist = playlists.find(item => item.id === event.target.value);
+            if (playlist) selectPlaylist(playlist);
+          }}
+        >
+          <option value="" disabled>{playlists.length ? "Choose playlist" : "No playlists yet"}</option>
+          {playlists.map(playlist => (
+            <option key={playlist.id} value={playlist.id}>
+              {playlist.name} ({playlist.songIds.length})
+            </option>
           ))}
-        </ul>
-      ) : (
-        <p>No playlists yet. Create one with the New playlist button.</p>
-      )}
+        </select>
+      </div>
 
       {selectedPlaylist ? (
         <section>
           <h3>{selectedPlaylist.name}</h3>
+          <button type="button" onClick={() => deletePlaylist(selectedPlaylist)}>
+            <Trash2 aria-hidden="true" /> Delete playlist
+          </button>
 
           {selectedPlaylistSongs.length ? (
             <ul className="song-list">

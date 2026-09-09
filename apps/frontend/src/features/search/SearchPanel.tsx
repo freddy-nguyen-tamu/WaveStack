@@ -140,8 +140,7 @@ export function SearchPanel({
   }
 
   function add(playlistId: string, song: Song) {
-    onAddToPlaylist(playlistId, song);
-    setMessage(`Playlist action sent for: ${formatSongDisplayName(song)}`);
+    return onAddToPlaylist(playlistId, song);
   }
 
   return (

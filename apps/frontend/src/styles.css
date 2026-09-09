@@ -2468,6 +2468,69 @@ html:not([data-theme="dark"]) .label-light {
   border-radius: var(--radius-pill);
 }
 
+.song-actions__playlist-picker--popover {
+  position: fixed;
+  z-index: 1100;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+.song-actions__playlist-picker--popover button {
+  flex-shrink: 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 2.45rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+  border-radius: var(--radius-card);
+}
+
+.song-actions__playlist-picker--popover button[aria-checked="true"] {
+  background: var(--color-box-hover-bg);
+  color: var(--color-box-hover-fg);
+  border-color: var(--color-red);
+  font-weight: 700;
+}
+
+.song-actions__membership-check {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  visibility: hidden;
+}
+
+[aria-checked="true"] > .song-actions__membership-check {
+  visibility: visible;
+}
+
+.song-list-row__actions > button {
+  align-self: flex-start;
+  height: auto;
+  flex-grow: 0;
+}
+
+.playlist-selector {
+  width: 100%;
+  min-width: 0;
+  margin-block: 1rem;
+}
+
+.playlist-selector select {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 2.75rem;
+  border: var(--line);
+  border-radius: var(--radius-card);
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  font: inherit;
+  text-overflow: ellipsis;
+}
+
 .song-actions--tile {
   margin-top: 1rem;
 }
