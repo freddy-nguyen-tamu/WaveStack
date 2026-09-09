@@ -378,6 +378,8 @@ export const SongArtwork = memo(function SongArtwork({
     <span
       ref={rootRef}
       className={artworkClassName}
+      onContextMenu={event => { event.preventDefault(); event.stopPropagation(); }}
+      onDragStart={event => event.preventDefault()}
       data-artwork-loaded={Boolean(displaySrc && loadedSrc === displaySrc)}
       data-now-playing={shouldApplyNowPlayingStyle ? "true" : undefined}
       data-playback-state={shouldApplyNowPlayingStyle ? (nowPlaying.isPlaying ? "playing" : "paused") : undefined}
