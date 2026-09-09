@@ -30,6 +30,7 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
     }));
   }, [lyrics, open, query]);
   const current = matches.length ? selected % matches.length : 0;
+  const searching = open && Boolean(query.trim());
 
   function openSearch() {
     setOpen(true);
@@ -39,7 +40,6 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
   function closeSearch() {
     restoreFocusRef.current = true;
     setOpen(false);
-    setQuery("");
     setSelected(0);
   }
 
@@ -108,7 +108,7 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
   highlightedLyrics.push(lyrics.slice(end));
 
   return (
-    <section ref={sectionRef} className={open ? "song-modal__lyrics-panel lyric-find--open" : "song-modal__lyrics-panel"} aria-label="Lyrics">
+    <section ref={sectionRef} className={searching ? "song-modal__lyrics-panel lyric-find--searching" : "song-modal__lyrics-panel"} aria-label="Lyrics">
       <div ref={toolbarRef} className="lyric-find__toolbar">
         <h3>Lyrics</h3>
         {open ? (

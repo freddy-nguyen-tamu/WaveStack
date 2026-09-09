@@ -2073,14 +2073,14 @@ html[data-theme="dark"] .song-list-row:focus-within {
   line-height: 1.2;
 }
 
-.lyric-find--open .lyric-find__toolbar {
+.lyric-find--searching .lyric-find__toolbar {
   position: sticky;
   top: 0;
   z-index: 5;
   border-bottom: var(--line);
 }
 
-.song-modal:has(.lyric-find--open) .song-actions--modal {
+.song-modal:has(.lyric-find--searching) .song-actions--modal {
   position: static;
 }
 
