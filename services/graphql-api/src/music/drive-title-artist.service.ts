@@ -1,10 +1,13 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { parseBuffer } from "music-metadata";
+import { parseBuffer, parseFile, type IAudioMetadata } from "music-metadata";
+import { join } from "path";
 import { DriveDownloadService } from "./drive-download.service";
+import { embeddedSearchText } from "./embedded-search-text";
 
 export type EmbeddedTitleArtist = {
   title: string | null;
   artist: string | null;
+  searchText: string;
 };
 
 const TEN_MINUTES_MS = 10 * 60 * 1000;
@@ -28,16 +31,20 @@ export class DriveTitleArtistService {
 
   constructor(private readonly driveDownloadService: DriveDownloadService) {}
 
-  async getEmbeddedTitleArtist(fileId: string): Promise<EmbeddedTitleArtist | null> {
-    const cached = this.cache.get(fileId);
+  async getEmbeddedTitleArtist(fileId: string, modifiedTime?: string, streamUrl?: string): Promise<EmbeddedTitleArtist | null> {
+    const cacheKey = `${fileId}:${modifiedTime ?? ""}`;
+    const cached = this.cache.get(cacheKey);
 
     if (cached && cached.expiresAt > Date.now()) {
       return cached.value;
     }
 
-    const value = await this.loadEmbeddedTitleArtist(fileId);
+    const uploadName = streamUrl?.match(/^\/api\/uploads\/([a-zA-Z0-9_.-]+)$/)?.[1];
+    const value = uploadName && uploadName !== "." && uploadName !== ".."
+      ? this.readTags(await parseFile(join("/app/uploads", uploadName), { duration: false, skipCovers: true }))
+      : await this.loadEmbeddedTitleArtist(fileId);
 
-    this.cache.set(fileId, {
+    this.cache.set(cacheKey, {
       value,
       expiresAt: Date.now() + TEN_MINUTES_MS
     });
@@ -52,7 +59,7 @@ export class DriveTitleArtistService {
       this.logger.warn(
         `Could not download Drive audio for title/artist tags. fileId=${fileId} status=${upstream.status}`
       );
-      return null;
+      throw new Error(`Could not read embedded metadata: HTTP ${upstream.status}`);
     }
 
     const contentType = upstream.headers.get("content-type") ?? "audio/mpeg";
@@ -66,24 +73,24 @@ export class DriveTitleArtistService {
         skipCovers: true
       });
 
-      const title = this.clean(metadata.common.title);
-      const artist = this.clean(metadata.common.artist);
-
-      if (!title && !artist) {
-        this.logger.debug(`No embedded title/artist tags found in Drive file ${fileId}.`);
-        return null;
-      }
-
-      return { title, artist };
+      return this.readTags(metadata);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(`Could not parse embedded tags for Drive file ${fileId}: ${message}`);
-      return null;
+      throw error;
     }
   }
 
   private clean(value: string | undefined | null): string | null {
     const trimmed = value?.trim();
     return trimmed ? trimmed : null;
+  }
+
+  private readTags(metadata: IAudioMetadata): EmbeddedTitleArtist {
+    return {
+      title: this.clean(metadata.common.title),
+      artist: this.clean(metadata.common.artist) ?? this.clean(metadata.common.artists?.join(", ")),
+      searchText: embeddedSearchText(metadata)
+    };
   }
 }

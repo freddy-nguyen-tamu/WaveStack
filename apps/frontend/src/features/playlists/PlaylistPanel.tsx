@@ -1,7 +1,7 @@
 import { ListPlus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../../App";
-import { formatSongDisplayName } from "../../song-format";
+import { formatSongDisplayName, matchesSongSearch } from "../../song-format";
 import { SongListRow } from "../../components/SongListRow";
 import { PaginationBar } from "../../components/PaginationBar";
 import { ToastNotice } from "../../components/ToastNotice";
@@ -71,12 +71,7 @@ export function PlaylistPanel({
       return songs;
     }
 
-    return songs.filter((song) =>
-      [song.fileName, song.title, song.artistName, song.albumTitle, formatSongDisplayName(song), ...song.genreNames]
-        .join(" ")
-        .toLowerCase()
-        .includes(needle)
-    );
+    return songs.filter(song => matchesSongSearch(song, needle));
   }, [searchQuery, songs]);
 
   const pageCount = Math.max(1, Math.ceil(libraryResults.length / PAGE_SIZE));

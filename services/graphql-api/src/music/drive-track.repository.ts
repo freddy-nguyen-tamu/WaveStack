@@ -8,6 +8,8 @@ type DriveTrackRow = {
   id: string;
   drive_file_id: string;
   file_name: string | null;
+  embedded_search: string | null;
+  normalized_search: string;
   title: string;
   artist_name: string;
   album_title: string;
@@ -159,6 +161,9 @@ export class DriveTrackRepository {
         web_view_link = EXCLUDED.web_view_link,
         mime_type = EXCLUDED.mime_type,
         modified_time = EXCLUDED.modified_time,
+        embedded_search_version = CASE
+          WHEN EXCLUDED.modified_time IS NOT NULL AND drive_tracks.modified_time IS DISTINCT FROM EXCLUDED.modified_time THEN 0
+          ELSE drive_tracks.embedded_search_version END,
         drive_created_time = COALESCE(EXCLUDED.drive_created_time, drive_tracks.drive_created_time),
         first_seen_at = COALESCE(drive_tracks.first_seen_at, EXCLUDED.first_seen_at, now()),
         size_bytes = EXCLUDED.size_bytes,
@@ -234,7 +239,7 @@ export class DriveTrackRepository {
         FROM drive_tracks
         WHERE id = ANY($1)
           AND deleted_at IS NULL
-          AND title_locked = false
+          AND (title_locked = false OR embedded_search_version < 1)
         `,
         [ids]
       )
@@ -276,7 +281,8 @@ export class DriveTrackRepository {
         SELECT *
         FROM drive_tracks
         WHERE deleted_at IS NULL
-          AND title_locked = false
+          AND ((source_type = 'drive' AND (title_locked = false OR embedded_search_version < 1))
+            OR (source_type = 'user' AND stream_url LIKE '/api/uploads/%' AND embedded_search_version < 1))
         ORDER BY synced_at DESC, id ASC
         LIMIT $1
         `,
@@ -308,6 +314,21 @@ export class DriveTrackRepository {
       `,
       [trackId, lyrics]
     );
+  }
+
+  async updateEmbeddedSearch(trackId: string, searchText: string): Promise<void> {
+    await this.database.query(
+      `UPDATE drive_tracks SET embedded_search = $2, embedded_search_version = 1 WHERE id = $1`,
+      [trackId, searchText]
+    );
+  }
+
+  async listUploadedTracksNeedingSearch(): Promise<Song[]> {
+    const result = await this.database.query<DriveTrackRow>(
+      `SELECT * FROM drive_tracks WHERE deleted_at IS NULL AND source_type = 'user'
+       AND stream_url LIKE '/api/uploads/%' AND embedded_search_version < 1`
+    );
+    return result.rows.map(row => this.rowToSong(row));
   }
 
   async listTracksMissingLyrics(limit: number): Promise<Song[]> {
@@ -373,8 +394,8 @@ export class DriveTrackRepository {
       params.push(options.userId);
     }
 
-    if (search) {
-      params.push(`%${search}%`);
+    for (const term of search?.split(/\s+/).filter(Boolean) ?? []) {
+      params.push(`%${term.replace(/[\\%_]/g, "\\$&")}%`);
       conditions.push(`normalized_search ILIKE $${params.length}`);
     }
 
@@ -440,8 +461,8 @@ export class DriveTrackRepository {
       params.push(options.userId);
     }
 
-    if (search) {
-      params.push(`%${search}%`);
+    for (const term of search?.split(/\s+/).filter(Boolean) ?? []) {
+      params.push(`%${term.replace(/[\\%_]/g, "\\$&")}%`);
       conditions.push(`normalized_search ILIKE $${params.length}`);
     }
 
@@ -577,6 +598,8 @@ export class DriveTrackRepository {
           owner_user_id,
           source_type,
           file_name,
+          embedded_search,
+          embedded_search_version,
           first_seen_at,
           normalized_search,
           synced_at,
@@ -584,7 +607,7 @@ export class DriveTrackRepository {
         )
         VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8,
-          $9, $10, $11, $12, $13, 'user', $15, now(), $14, now(), NULL
+          $9, $10, $11, $12, $13, 'user', $15, $16, 1, now(), $14, now(), NULL
         )
         `,
         [
@@ -602,7 +625,8 @@ export class DriveTrackRepository {
           song.sourceRootFolderId ?? null,
           userId,
           search,
-          song.fileName ?? null
+          song.fileName ?? null,
+          input.embeddedSearchText ?? ""
         ]
       );
 
@@ -793,6 +817,7 @@ export class DriveTrackRepository {
     return {
       id: row.id,
       fileName: row.file_name ?? undefined,
+      searchMetadata: row.normalized_search || row.embedded_search || undefined,
       title: row.title,
       artistName: row.artist_name,
       albumTitle: row.album_title,
@@ -844,6 +869,7 @@ export class DriveTrackRepository {
     return {
       id,
       fileName: input.fileName?.trim() || undefined,
+      searchMetadata: input.embeddedSearchText,
       title,
       artistName,
       albumTitle,

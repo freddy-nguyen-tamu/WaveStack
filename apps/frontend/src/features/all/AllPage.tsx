@@ -12,6 +12,7 @@ import { LoadingStatus } from "../../components/LoadingStatus";
 import { useStableScrollRegion } from "../../hooks/useStableScrollRegion";
 import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../../App";
 import { SongListRow } from "../../components/SongListRow";
+import { matchesSongSearch } from "../../song-format";
 
 const ALL_PAGE_SIZE = 60;
 
@@ -82,7 +83,7 @@ export function AllPage({
   const allSongs = useMemo(() => {
     const seen = new Set<string>();
     const needle = debouncedQuery.toLowerCase();
-    const matchingLocalTracks = localTracks.filter(song => !needle || [song.fileName, song.title, song.artistName, song.albumTitle, ...song.genreNames].join(" ").toLowerCase().includes(needle));
+    const matchingLocalTracks = localTracks.filter(song => matchesSongSearch(song, needle));
     return [...matchingLocalTracks, ...backendSongs].filter((song) => {
       if (seen.has(song.id)) {
         return false;

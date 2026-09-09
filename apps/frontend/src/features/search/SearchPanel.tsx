@@ -4,7 +4,7 @@ import { useSongPages } from "../../hooks/useSongPages";
 import { LoadingStatus } from "../../components/LoadingStatus";
 import { useStableScrollRegion } from "../../hooks/useStableScrollRegion";
 import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../../App";
-import { formatSongDisplayName } from "../../song-format";
+import { formatSongDisplayName, matchesSongSearch } from "../../song-format";
 import { SongListRow } from "../../components/SongListRow";
 import { PaginationBar } from "../../components/PaginationBar";
 import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
@@ -75,10 +75,7 @@ export function SearchPanel({
       return songs;
     }
 
-    return songs.filter((song) => {
-      const haystack = [song.fileName, song.title, song.artistName, song.albumTitle, formatSongDisplayName(song), ...song.genreNames].join(" ").toLowerCase();
-      return haystack.includes(needle);
-    });
+    return songs.filter(song => matchesSongSearch(song, needle));
   }, [debouncedQuery, songs]);
 
   const results = backendSearch ? resultPage?.nodes ?? [] : fallbackResults;

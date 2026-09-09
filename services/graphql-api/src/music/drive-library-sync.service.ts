@@ -65,16 +65,12 @@ export class DriveLibrarySyncService {
         }
       }
 
-      // Fix title/artist from embedded ID3 tags, but ONLY for songs that
-      // have never been successfully checked (title_locked = false).
-      // This is what previously re-downloaded the full audio file for
-      // every song in the library on every sync -- now it only does that
-      // for genuinely new or previously-failed songs.
-      // This runs BEFORE finishSyncRun so any error is caught and reported.
+      // Read new, changed or not-yet-indexed files once. Unchanged metadata stays cached in the DB.
       const idsNeedingRepair = await this.driveTrackRepository.filterIdsNeedingTitleArtistRepair(allIds);
       const songsNeedingRepair = songs.filter((song) => idsNeedingRepair.has(song.id));
 
-      const sweepResult = await this.sweepSongs(songsNeedingRepair);
+      const uploadsNeedingSearch = await this.driveTrackRepository.listUploadedTracksNeedingSearch();
+      const sweepResult = await this.sweepSongs([...songsNeedingRepair, ...uploadsNeedingSearch]);
       repairedCount = sweepResult.repairedCount;
       failedCount = sweepResult.failedCount;
 
@@ -141,16 +137,18 @@ export class DriveLibrarySyncService {
       const rawFileId = song.id.replace(/^drive-/, "");
 
       try {
-        const tags = await this.driveTitleArtistService.getEmbeddedTitleArtist(rawFileId);
+        const tags = await this.driveTitleArtistService.getEmbeddedTitleArtist(rawFileId, song.modifiedTime, song.streamUrl);
+        if (tags) await this.driveTrackRepository.updateEmbeddedSearch(song.id, tags.searchText);
 
-        if (!tags || (!tags.title && !tags.artist)) {
+        if (!tags) { failedCount += 1; continue; }
+        if (!tags.title && !tags.artist) {
           await this.driveTrackRepository.markTitleArtistChecked(song.id);
           failedCount += 1;
           continue;
         }
 
-        const nextTitle = tags.title ?? song.title;
-        const nextArtist = tags.artist ?? song.artistName;
+        const nextTitle = song.id.startsWith("drive-") ? tags.title ?? song.title : song.title;
+        const nextArtist = song.id.startsWith("drive-") ? tags.artist ?? song.artistName : song.artistName;
 
         await this.driveTrackRepository.updateTitleArtist(song.id, nextTitle, nextArtist);
         repairedCount += 1;

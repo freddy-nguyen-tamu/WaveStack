@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { LoadingStatus } from "../../components/LoadingStatus";
+import { LyricSearch } from "./LyricSearch";
 import { useEffect, useRef, useState } from "react";
 import { RefreshCw, X } from "lucide-react";
 import { useMutation, useQuery } from "@apollo/client";
@@ -8,7 +8,7 @@ import {
   REPAIR_EMBEDDED_LYRICS_FOR_SONG_MUTATION,
   SONG_DETAILS_QUERY
 } from "../../api";
-import { formatBytes, formatSeconds, formatSongDisplayName } from "../../song-format";
+import { formatSongDisplayName } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
 import { SongActions } from "../../components/SongActions";
 
@@ -74,7 +74,6 @@ export function SongMetadataModal({
   >(REPAIR_EMBEDDED_LYRICS_FOR_SONG_MUTATION);
 
   const details: Song = data?.songDetails ?? song;
-  const genreNames: string[] = details.genreNames ?? [];
   const lyrics = details.lyrics?.trim();
 
   useEffect(() => {
@@ -173,21 +172,8 @@ export function SongMetadataModal({
             </button>
           ) : null}
 
-          <section className="song-modal__lyrics-panel" aria-label="Lyrics">
-            <div className="song-modal__section-heading">
-              <div>
-                <p className="eyebrow">Embedded MP3 metadata</p>
-                <h3>Lyrics</h3>
-              </div>
-
-              {loading || repairingLyrics ? (
-                <LoadingStatus label={repairingLyrics ? "Extracting lyrics..." : "Refreshing metadata..."} />
-              ) : null}
-            </div>
-
-            {lyrics ? (
-              <pre className="song-modal__lyrics-text">{lyrics}</pre>
-            ) : (
+          <LyricSearch key={details.id} lyrics={lyrics ?? ""}
+            loadingLabel={loading || repairingLyrics ? (repairingLyrics ? "Extracting lyrics..." : "Loading lyrics...") : undefined}>
               <div className="song-modal__empty-state">
                 <p className="song-modal__empty">
                   {lyricsRepairMessage || "Checking this track for embedded lyrics..."}
@@ -207,8 +193,7 @@ export function SongMetadataModal({
                   {repairingLyrics ? "Checking..." : "Check embedded lyrics again"}
                 </button>
               </div>
-            )}
-          </section>
+          </LyricSearch>
 
           {!showArtwork ? (
             <div className="song-modal__actions">
@@ -222,97 +207,6 @@ export function SongMetadataModal({
             </div>
           ) : null}
 
-          <details className="song-modal__metadata" aria-label="All metadata">
-            <summary>All metadata</summary>
-
-            {details.albumTitle || genreNames.length ? (
-              <div className="song-modal__metadata-summary">
-                {details.albumTitle ? (
-                  <p className="song-modal__album">{details.albumTitle}</p>
-                ) : null}
-
-                {genreNames.length ? (
-                  <div className="song-modal__genres">
-                    {genreNames.map((genre) => (
-                      <span key={genre} className="song-modal__genre-tag">
-                        {genre}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-
-            <table className="song-modal__table">
-              <tbody>
-                <tr>
-                  <td>Display name</td>
-                  <td>{formatSongDisplayName(details)}</td>
-                </tr>
-
-                <tr>
-                  <td>Title</td>
-                  <td>{details.title}</td>
-                </tr>
-
-                <tr>
-                  <td>Artist / author</td>
-                  <td>{details.artistName}</td>
-                </tr>
-
-                <tr>
-                  <td>Album / source</td>
-                  <td>{details.albumTitle || "Unknown"}</td>
-                </tr>
-
-                <tr>
-                  <td>Duration</td>
-                  <td>{formatSeconds(details.durationSeconds)} ({details.durationSeconds || 0} seconds)</td>
-                </tr>
-
-                <tr>
-                  <td>Lyrics attribute</td>
-                  <td>{lyrics ? `${lyrics.length.toLocaleString()} characters` : "No embedded lyrics found yet"}</td>
-                </tr>
-
-                {details.webViewLink ? (
-                  <tr>
-                    <td>Drive link</td>
-                    <td>
-                      <a href={details.webViewLink} target="_blank" rel="noreferrer">
-                        Open in Google Drive
-                      </a>
-                    </td>
-                  </tr>
-                ) : null}
-
-                <tr>
-                  <td>MIME type</td>
-                  <td>{details.mimeType || "Unknown"}</td>
-                </tr>
-
-                <tr>
-                  <td>Modified</td>
-                  <td>{details.modifiedTime || "Unknown"}</td>
-                </tr>
-
-                <tr>
-                  <td>Size</td>
-                  <td>{formatBytes(details.sizeBytes)}</td>
-                </tr>
-
-                <tr>
-                  <td>Source folder</td>
-                  <td>{details.sourceRootFolderId || "Unknown"}</td>
-                </tr>
-
-                <tr>
-                  <td>Stream URL</td>
-                  <td>{details.streamUrl}</td>
-                </tr>
-              </tbody>
-            </table>
-          </details>
         </div>
 
         <button

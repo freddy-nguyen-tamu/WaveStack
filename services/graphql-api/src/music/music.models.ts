@@ -11,6 +11,9 @@ export class Song {
   @Field({ nullable: true })
   fileName?: string;
 
+  @Field({ nullable: true })
+  searchMetadata?: string;
+
   @Field()
   artistName!: string;
 
@@ -212,6 +215,8 @@ export class Artist {
 
 @InputType()
 export class UserSongInput {
+  // Populated internally by the upload parser, not accepted as a GraphQL field.
+  embeddedSearchText?: string;
   @Field({ nullable: true })
   fileName?: string;
 

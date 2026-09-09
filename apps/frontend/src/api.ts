@@ -128,6 +128,7 @@ const SONG_CARD_FIELDS = gql`
   fragment SongCardFields on Song {
     id
     fileName
+    searchMetadata
     title
     artistName
     albumTitle
@@ -149,6 +150,7 @@ const SONG_DETAIL_FIELDS = gql`
   fragment SongDetailFields on Song {
     id
     fileName
+    searchMetadata
     title
     artistName
     albumTitle

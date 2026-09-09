@@ -10,6 +10,7 @@ import { extname, join } from "node:path";
 import { AuthService } from "../auth/auth.service";
 import { DriveTrackRepository } from "./drive-track.repository";
 import { AudioJobsProducer } from "./audio-jobs.producer";
+import { embeddedSearchText } from "./embedded-search-text";
 
 const UPLOADS_DIR = "/app/uploads";
 const MAX_UPLOAD_BYTES = 250 * 1024 * 1024;
@@ -33,6 +34,7 @@ const AUDIO_EXTENSIONS = new Set([
 ]);
 
 type UploadedAudioMetadata = {
+  searchText?: string;
   duration?: number | null;
   title?: string;
   artistName?: string;
@@ -147,6 +149,7 @@ export class UploadsController {
       const song = await this.driveTrackRepository.createUserSongs(userId, [
         {
           fileName: file.originalname,
+          embeddedSearchText: metadata.searchText,
           title,
           artistName,
           albumTitle,
@@ -256,6 +259,7 @@ export class UploadsController {
 
     return {
       duration: metadata.format.duration,
+      searchText: embeddedSearchText(metadata),
       title: this.cleanText(metadata.common.title),
       artistName: this.cleanText(metadata.common.artist) ?? (artists?.length ? artists.join(", ") : undefined),
       albumTitle: this.cleanText(metadata.common.album),

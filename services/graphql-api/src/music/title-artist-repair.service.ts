@@ -30,10 +30,11 @@ export class TitleArtistRepairService {
 
     try {
       const tags = await this.withTimeout(
-        this.driveTitleArtistService.getEmbeddedTitleArtist(rawFileId),
+        this.driveTitleArtistService.getEmbeddedTitleArtist(rawFileId, song.modifiedTime, song.streamUrl),
         20000
       );
 
+      if (tags) await this.driveTrackRepository.updateEmbeddedSearch(song.id, tags.searchText);
       if (!tags || (!tags.title && !tags.artist)) {
         return {
           ok: true,
@@ -44,8 +45,8 @@ export class TitleArtistRepairService {
         };
       }
 
-      const nextTitle = tags.title ?? song.title;
-      const nextArtist = tags.artist ?? song.artistName;
+      const nextTitle = song.id.startsWith("drive-") ? tags.title ?? song.title : song.title;
+      const nextArtist = song.id.startsWith("drive-") ? tags.artist ?? song.artistName : song.artistName;
 
       await this.driveTrackRepository.updateTitleArtist(song.id, nextTitle, nextArtist);
 
@@ -102,11 +103,13 @@ export class TitleArtistRepairService {
 
       try {
         const tags = await this.withTimeout(
-          this.driveTitleArtistService.getEmbeddedTitleArtist(rawFileId),
+          this.driveTitleArtistService.getEmbeddedTitleArtist(rawFileId, song.modifiedTime, song.streamUrl),
           20000
         );
 
-        if (!tags || (!tags.title && !tags.artist)) {
+        if (tags) await this.driveTrackRepository.updateEmbeddedSearch(song.id, tags.searchText);
+        if (!tags) { failedCount += 1; continue; }
+        if (!tags.title && !tags.artist) {
           // No usable tags -- lock it anyway so this track isn't
           // redownloaded and re-parsed on every future batch run. Its
           // current filename-derived title/artist stays as-is.
@@ -115,8 +118,8 @@ export class TitleArtistRepairService {
           continue;
         }
 
-        const nextTitle = tags.title ?? song.title;
-        const nextArtist = tags.artist ?? song.artistName;
+        const nextTitle = song.id.startsWith("drive-") ? tags.title ?? song.title : song.title;
+        const nextArtist = song.id.startsWith("drive-") ? tags.artist ?? song.artistName : song.artistName;
 
         await this.driveTrackRepository.updateTitleArtist(song.id, nextTitle, nextArtist);
         repairedCount += 1;
