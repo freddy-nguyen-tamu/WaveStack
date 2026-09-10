@@ -28,6 +28,7 @@ const TEN_MINUTES_MS = 10 * 60 * 1000;
 export class DriveTitleArtistService {
   private readonly logger = new Logger(DriveTitleArtistService.name);
   private readonly cache = new Map<string, { value: EmbeddedTitleArtist | null; expiresAt: number }>();
+  private readonly pending = new Map<string, Promise<EmbeddedTitleArtist | null>>();
 
   constructor(private readonly driveDownloadService: DriveDownloadService) {}
 
@@ -39,26 +40,38 @@ export class DriveTitleArtistService {
       return cached.value;
     }
 
-    const uploadName = streamUrl?.match(/^\/api\/uploads\/([a-zA-Z0-9_.-]+)$/)?.[1];
-    const value = uploadName && uploadName !== "." && uploadName !== ".."
-      ? this.readTags(await parseFile(join("/app/uploads", uploadName), { duration: false, skipCovers: true }))
-      : await this.loadEmbeddedTitleArtist(fileId);
+    const pending = this.pending.get(cacheKey);
+    if (pending) return pending;
 
-    this.cache.set(cacheKey, {
-      value,
-      expiresAt: Date.now() + TEN_MINUTES_MS
-    });
+    const request = (async () => {
+      const uploadName = streamUrl?.match(/^\/api\/uploads\/([a-zA-Z0-9_.-]+)$/)?.[1];
+      const value = uploadName && uploadName !== "." && uploadName !== ".."
+        ? this.readTags(await parseFile(join("/app/uploads", uploadName), { duration: false, skipCovers: true }))
+        : await this.loadEmbeddedTitleArtist(fileId);
 
-    return value;
+      // Search text can include long lyrics; don't retain the entire library in RAM.
+      this.cache.delete(cacheKey);
+      while (this.cache.size >= 128) {
+        const oldest = this.cache.keys().next().value;
+        if (oldest === undefined) break;
+        this.cache.delete(oldest);
+      }
+      this.cache.set(cacheKey, { value, expiresAt: Date.now() + TEN_MINUTES_MS });
+      return value;
+    })().finally(() => this.pending.delete(cacheKey));
+    this.pending.set(cacheKey, request);
+    return request;
   }
 
   private async loadEmbeddedTitleArtist(fileId: string): Promise<EmbeddedTitleArtist | null> {
-    const upstream = await this.driveDownloadService.fetchMedia(fileId);
+    const signal = AbortSignal.timeout(30000);
+    const upstream = await this.driveDownloadService.fetchMedia(fileId, undefined, signal);
 
     if (!upstream.ok) {
       this.logger.warn(
         `Could not download Drive audio for title/artist tags. fileId=${fileId} status=${upstream.status}`
       );
+      await upstream.body?.cancel();
       throw new Error(`Could not read embedded metadata: HTTP ${upstream.status}`);
     }
 

@@ -19,9 +19,10 @@ export class DriveDownloadService {
     });
   }
 
-  async fetchMedia(fileId: string, range?: string): Promise<Response> {
+  async fetchMedia(fileId: string, range?: string, signal?: AbortSignal): Promise<Response> {
     const token = await this.getAccessToken();
-    const response = await this.requestMedia(fileId, range, token);
+    signal?.throwIfAborted();
+    const response = await this.requestMedia(fileId, range, token, signal);
 
     // The cached service-account token can go stale (early revocation, clock
     // drift, or it simply expired a little before our cached TTL assumed it
@@ -31,14 +32,16 @@ export class DriveDownloadService {
     // drop the cached token and retry once with a freshly minted one.
     if (response.status === 401 || response.status === 403) {
       this.cachedToken = null;
+      await response.body?.cancel();
       const freshToken = await this.getAccessToken();
-      return this.requestMedia(fileId, range, freshToken);
+      signal?.throwIfAborted();
+      return this.requestMedia(fileId, range, freshToken, signal);
     }
 
     return response;
   }
 
-  private requestMedia(fileId: string, range: string | undefined, token: string): Promise<Response> {
+  private requestMedia(fileId: string, range: string | undefined, token: string, signal?: AbortSignal): Promise<Response> {
     const headers: Record<string, string> = {
       authorization: `Bearer ${token}`
     };
@@ -54,7 +57,7 @@ export class DriveDownloadService {
     url.searchParams.set("alt", "media");
     url.searchParams.set("supportsAllDrives", "true");
 
-    return fetch(url.toString(), { headers });
+    return fetch(url.toString(), { headers, signal });
   }
 
   private async getAccessToken(): Promise<string> {

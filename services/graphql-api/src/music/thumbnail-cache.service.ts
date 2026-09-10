@@ -67,6 +67,7 @@ export class ThumbnailCacheService {
     try {
       const response = await this.withTimeout(
         fetch(url, {
+          signal: AbortSignal.timeout(12000),
           headers: {
             "user-agent": "WaveStack/1.0"
           }

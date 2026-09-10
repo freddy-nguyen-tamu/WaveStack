@@ -4,6 +4,7 @@ import { GoogleDriveService } from "./google-drive.service";
 import { DriveTrackRepository } from "./drive-track.repository";
 import { ThumbnailCacheService } from "./thumbnail-cache.service";
 import { DriveTitleArtistService } from "./drive-title-artist.service";
+import { runSyncWorkers } from "./sync-workers";
 
 @Injectable()
 export class DriveLibrarySyncService {
@@ -56,15 +57,6 @@ export class DriveLibrarySyncService {
       const idsMissingThumbnail = await this.driveTrackRepository.filterIdsMissingLocalThumbnail(allIds);
       const songsNeedingThumbnail = songs.filter((song) => idsMissingThumbnail.has(song.id));
 
-      for (const song of songsNeedingThumbnail) {
-        const localThumbnailUrl = await this.thumbnailCacheService.generateForSong(song);
-
-        if (localThumbnailUrl) {
-          await this.driveTrackRepository.updateLocalThumbnail(song.id, localThumbnailUrl);
-          thumbnailCount += 1;
-        }
-      }
-
       // Read new, changed or not-yet-indexed files once. Unchanged metadata stays cached in the DB.
       const idsNeedingRepair = await this.driveTrackRepository.filterIdsNeedingTitleArtistRepair(allIds);
       const songsNeedingRepair = songs.filter((song) => idsNeedingRepair.has(song.id));
@@ -73,6 +65,19 @@ export class DriveLibrarySyncService {
       const sweepResult = await this.sweepSongs([...songsNeedingRepair, ...uploadsNeedingSearch]);
       repairedCount = sweepResult.repairedCount;
       failedCount = sweepResult.failedCount;
+
+      // Titles and artists take priority over optional thumbnail generation.
+      await runSyncWorkers(songsNeedingThumbnail, 3, async song => {
+        try {
+          const localThumbnailUrl = await this.thumbnailCacheService.generateForSong(song);
+          if (localThumbnailUrl) {
+            await this.driveTrackRepository.updateLocalThumbnail(song.id, localThumbnailUrl);
+            thumbnailCount += 1;
+          }
+        } catch (error) {
+          this.logger.warn(`Thumbnail sync failed for ${song.id}: ${String(error)}`);
+        }
+      });
 
       await this.driveTrackRepository.finishSyncRun(runId, {
         status: "success",
@@ -91,7 +96,7 @@ export class DriveLibrarySyncService {
         parts.push(`Fixed title/artist from ID3 tags for ${repairedCount} track(s).`);
       }
       if (failedCount > 0) {
-        parts.push(`${failedCount} track(s) had no embedded tags.`);
+        parts.push(`${failedCount} track(s) had no title/artist tags or could not be read; failed reads can be retried.`);
       }
       if (snapshot.failedRootFolderIds.length > 0) {
         parts.push(`Skipped stale cleanup for ${snapshot.failedRootFolderIds.length} Drive root(s) that failed to scan.`);
@@ -133,18 +138,18 @@ export class DriveLibrarySyncService {
     let repairedCount = 0;
     let failedCount = 0;
 
-    for (const song of songs) {
+    await runSyncWorkers(songs, 4, async song => {
       const rawFileId = song.id.replace(/^drive-/, "");
 
       try {
         const tags = await this.driveTitleArtistService.getEmbeddedTitleArtist(rawFileId, song.modifiedTime, song.streamUrl);
         if (tags) await this.driveTrackRepository.updateEmbeddedSearch(song.id, tags.searchText);
 
-        if (!tags) { failedCount += 1; continue; }
+        if (!tags) { failedCount += 1; return; }
         if (!tags.title && !tags.artist) {
           await this.driveTrackRepository.markTitleArtistChecked(song.id);
           failedCount += 1;
-          continue;
+          return;
         }
 
         const nextTitle = song.id.startsWith("drive-") ? tags.title ?? song.title : song.title;
@@ -160,7 +165,7 @@ export class DriveLibrarySyncService {
           }`
         );
       }
-    }
+    });
 
     return {
       ok: true,
