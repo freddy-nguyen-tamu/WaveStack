@@ -109,7 +109,7 @@ function stableSongNumber(value: string): number {
   return hash;
 }
 
-function normalizeLabelPart(value: string | null | undefined, fallback: string): string {
+export function normalizeLabelPart(value: string | null | undefined, fallback: string): string {
   const normalized = String(value ?? "")
     .replace(/\.[a-z0-9]{2,5}$/i, "")
     .replace(/\s+/g, " ")

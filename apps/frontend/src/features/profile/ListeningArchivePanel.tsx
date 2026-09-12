@@ -55,12 +55,12 @@ type WarmResult = {
 export function ListeningArchivePanel() {
   const statusQuery = useQuery<{ listeningArchiveStatus: ArchiveStatus }>(
     LISTENING_ARCHIVE_STATUS_QUERY,
-    { fetchPolicy: "cache-and-network" }
+    { fetchPolicy: "cache-and-network", pollInterval: 30000, notifyOnNetworkStatusChange: true }
   );
 
   const readThroughQuery = useQuery<{ listeningArchiveReadThroughStatus: ReadThroughStatus }>(
     LISTENING_ARCHIVE_READ_THROUGH_STATUS_QUERY,
-    { fetchPolicy: "cache-and-network" }
+    { fetchPolicy: "cache-and-network", pollInterval: 30000, notifyOnNetworkStatusChange: true }
   );
 
   const [archiveOldEvents, archiveState] = useMutation<{
@@ -78,7 +78,9 @@ export function ListeningArchivePanel() {
 
   async function runDryRun() {
     await archiveOldEvents({
-      variables: { daysToKeep: 30, dryRun: true }
+      variables: { daysToKeep: 30, dryRun: true },
+      refetchQueries: [LISTENING_ARCHIVE_STATUS_QUERY, LISTENING_ARCHIVE_READ_THROUGH_STATUS_QUERY],
+      awaitRefetchQueries: true
     });
     await statusQuery.refetch();
     await readThroughQuery.refetch();
@@ -90,7 +92,9 @@ export function ListeningArchivePanel() {
     );
     if (!confirmed) return;
     await archiveOldEvents({
-      variables: { daysToKeep: 30, dryRun: false }
+      variables: { daysToKeep: 30, dryRun: false },
+      refetchQueries: [LISTENING_ARCHIVE_STATUS_QUERY, LISTENING_ARCHIVE_READ_THROUGH_STATUS_QUERY],
+      awaitRefetchQueries: true
     });
     await statusQuery.refetch();
     await readThroughQuery.refetch();
@@ -98,7 +102,9 @@ export function ListeningArchivePanel() {
 
   async function runWarmCache() {
     await warmCache({
-      variables: { period: "ALL_TIME", force: false }
+      variables: { period: "ALL_TIME", force: false },
+      refetchQueries: [LISTENING_ARCHIVE_STATUS_QUERY, LISTENING_ARCHIVE_READ_THROUGH_STATUS_QUERY],
+      awaitRefetchQueries: true
     });
     await statusQuery.refetch();
     await readThroughQuery.refetch();
@@ -106,7 +112,9 @@ export function ListeningArchivePanel() {
 
   async function runForceRefresh() {
     await warmCache({
-      variables: { period: "ALL_TIME", force: true }
+      variables: { period: "ALL_TIME", force: true },
+      refetchQueries: [LISTENING_ARCHIVE_STATUS_QUERY, LISTENING_ARCHIVE_READ_THROUGH_STATUS_QUERY],
+      awaitRefetchQueries: true
     });
     await statusQuery.refetch();
     await readThroughQuery.refetch();

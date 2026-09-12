@@ -14,6 +14,7 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
   const [selected, setSelected] = useState(0);
   const [focusRequest, setFocusRequest] = useState(0);
   const [scrollRequest, setScrollRequest] = useState(0);
+  const [forceSticky, setForceSticky] = useState(false);
   const restoreFocusRef = useRef(false);
   const sectionRef = useRef<HTMLElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
@@ -30,9 +31,16 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
     }));
   }, [lyrics, open, query]);
   const current = matches.length ? selected % matches.length : 0;
-  const searching = open && Boolean(query.trim());
+  const searching = open && (Boolean(query.trim()) || forceSticky);
 
-  function openSearch() {
+  function openSearch(stickyIfPastToolbar = false) {
+    if (stickyIfPastToolbar) {
+      const modal = sectionRef.current?.closest<HTMLElement>(".song-modal");
+      const toolbar = toolbarRef.current;
+      const modalTop = modal?.getBoundingClientRect().top ?? 0;
+      const toolbarTop = toolbar?.getBoundingClientRect().top ?? modalTop;
+      setForceSticky(toolbarTop < modalTop + 8);
+    }
     setOpen(true);
     setFocusRequest(value => value + 1);
   }
@@ -40,6 +48,7 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
   function closeSearch() {
     restoreFocusRef.current = true;
     setOpen(false);
+    setForceSticky(false);
     setSelected(0);
   }
 
@@ -57,7 +66,7 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "f") {
         event.preventDefault();
         event.stopImmediatePropagation();
-        openSearch();
+        openSearch(true);
       } else if (open && event.key === "Escape") {
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -76,7 +85,7 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
       }
       return;
     }
-    inputRef.current?.focus();
+    inputRef.current?.focus({ preventScroll: true });
     inputRef.current?.select();
   }, [open, focusRequest]);
 
@@ -84,7 +93,7 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
   useLayoutEffect(() => {
     const match = activeMatchRef.current;
     const modal = sectionRef.current?.closest<HTMLElement>(".song-modal");
-    if (!match || !modal || !open) return;
+    if (!match || !modal || !open || (!query.trim() && !scrollRequest)) return;
     const bounds = modal.getBoundingClientRect();
     const target = match.getBoundingClientRect();
     const inset = (toolbarRef.current?.getBoundingClientRect().height ?? 0) + 16;
@@ -116,7 +125,11 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
             <label className="sr-only" htmlFor={inputId}>Find in lyrics</label>
             <input ref={inputRef} id={inputId} type="text" value={query} placeholder="Find in lyrics"
               autoComplete="off" spellCheck={false}
-              onChange={event => { setQuery(event.target.value); setSelected(0); }}
+              onChange={event => {
+                setQuery(event.target.value);
+                setSelected(0);
+                if (!event.target.value.trim()) setForceSticky(false);
+              }}
               onKeyDown={event => {
                 if (event.nativeEvent.isComposing) return;
                 if (["ArrowUp", "ArrowDown", "Enter"].includes(event.key)) {
@@ -134,7 +147,7 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
             <button type="button" aria-label="Close lyric search" title="Close search" onClick={closeSearch}><X aria-hidden="true" /></button>
           </div>
         ) : (
-          <button ref={buttonRef} type="button" className="lyric-find__open" aria-label="Find in lyrics" title="Find in lyrics (Ctrl+F)" onClick={openSearch}><Search aria-hidden="true" /></button>
+          <button ref={buttonRef} type="button" className="lyric-find__open" aria-label="Find in lyrics" title="Find in lyrics (Ctrl+F)" onClick={() => openSearch()}><Search aria-hidden="true" /></button>
         )}
       </div>
       {loadingLabel ? <LoadingStatus label={loadingLabel} /> : null}

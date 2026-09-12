@@ -2042,6 +2042,11 @@ html[data-theme="dark"] .song-list-row:focus-within {
   padding-top: 1rem;
 }
 
+.song-modal__lyrics-panel {
+  width: min(100%, 76ch);
+  margin-inline: auto;
+}
+
 .song-modal__lyrics-text {
   max-height: none;
   overflow: visible;

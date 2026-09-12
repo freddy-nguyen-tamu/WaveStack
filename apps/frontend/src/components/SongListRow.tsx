@@ -1,5 +1,5 @@
 import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../App";
-import { formatSeconds, formatSongDisplayName } from "../song-format";
+import { formatSeconds, formatSongDisplayName, normalizeLabelPart } from "../song-format";
 import { useNowPlayingForSong } from "./NowPlayingContext";
 import { SongActions } from "./SongActions";
 import { SongArtwork } from "./SongArtwork";
@@ -34,6 +34,8 @@ export function SongListRow({
   onOpenDetails
 }: SongListRowProps) {
   const displayName = formatSongDisplayName(song);
+  const title = normalizeLabelPart(song.title, displayName);
+  const artist = normalizeLabelPart(song.artistName, "Unknown Artist");
   const hasDuration = Number.isFinite(song.durationSeconds) && song.durationSeconds > 0;
   const nowPlaying = useNowPlayingForSong(song.id);
 
@@ -58,11 +60,11 @@ export function SongListRow({
         <span className="song-list-row__text">
           <strong className="song-list-row__title">
             {typeof index === "number" ? <span className="song-list-row__index">{index + 1}. </span> : null}
-            {displayName}
+            {title}
           </strong>
 
           <small className="song-list-row__artist">
-            {meta || song.albumTitle || song.sourceRootFolderId || "Unknown source"}
+            {meta || artist}
           </small>
         </span>
       </button>

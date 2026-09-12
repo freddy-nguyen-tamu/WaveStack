@@ -568,6 +568,46 @@ export class HabitsService {
     return this.mapStatsEntries(this.rows(result));
   }
 
+  private async lowPlayedTracks(userId: string, period: StatsPeriod, limit = 20): Promise<ListeningStatsEntry[]> {
+    const safeLimit = Math.max(1, Math.min(limit, 50));
+    const periodWhere = this.statsPeriodWhereAlias("e", period);
+
+    const result = await this.database.query(
+      `WITH grouped AS (
+        SELECT
+          e.song_id AS key,
+          MAX(COALESCE(NULLIF(e.title, ''), 'Unknown Track')) AS label,
+          MAX(COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')) AS subtitle,
+          COUNT(*)::int AS play_count,
+          SUM(COALESCE(e.duration_seconds, 0))::float8 AS total_duration_seconds,
+          e.song_id
+        FROM app_listening_events_combined e
+        WHERE e.user_id = $1
+          ${periodWhere}
+        GROUP BY e.song_id
+      )
+      SELECT
+        g.key,
+        g.label,
+        g.subtitle,
+        ROW_NUMBER() OVER (ORDER BY g.play_count ASC, g.total_duration_seconds ASC, g.label ASC)::int AS rank,
+        0 AS previous_rank,
+        0 AS rank_change,
+        g.play_count,
+        g.total_duration_seconds,
+        g.song_id,
+        MAX(COALESCE(t.local_thumbnail_url, t.thumbnail_url, t.drive_thumbnail_url, t.embedded_artwork_url)) AS thumbnail_url
+      FROM grouped g
+      LEFT JOIN drive_tracks t ON t.id = g.song_id OR t.drive_file_id = g.song_id
+      GROUP BY g.key, g.label, g.subtitle, g.play_count, g.total_duration_seconds, g.song_id
+      ORDER BY g.play_count ASC, g.total_duration_seconds ASC, g.label ASC
+      LIMIT $2`,
+      [userId, safeLimit]
+    );
+
+    return this.mapStatsEntries(this.rows(result));
+  }
+
   async topGenres(userId: string, period: StatsPeriod, limit = 50): Promise<ListeningStatsEntry[]> {
     await this.ensureArchiveCacheForPeriod(userId, period);
     const interval = this.statsPeriodIntervalSql(period);
@@ -781,11 +821,12 @@ export class HabitsService {
     await this.ensureArchiveCacheForPeriod(userId, period);
     const generatedAt = new Date().toISOString();
 
-    const [topTracks, topArtists, topGenres, recent, comparison] = await Promise.all([
+    const [topTracks, topArtists, topGenres, recent, lowPlayedTracks, comparison] = await Promise.all([
       this.topTracks(userId, period as StatsPeriod, 25),
       this.topArtists(userId, period as StatsPeriod, 25),
       this.topGenres(userId, period as StatsPeriod, 25),
       this.recentlyPlayedDetailed(userId, period as StatsPeriod, 30),
+      this.lowPlayedTracks(userId, period as StatsPeriod, 20),
       this.tasteComparison(userId, period)
     ]);
 
@@ -821,6 +862,11 @@ export class HabitsService {
         genre: entry.label,
         plays: entry.playCount
       })),
+      lowPlayedTracks: lowPlayedTracks.map((entry) => ({
+        title: entry.label,
+        artist: entry.subtitle,
+        plays: entry.playCount
+      })),
       recent: recent.slice(0, 15).map((entry) => ({
         title: entry.title,
         artist: entry.artistName
@@ -840,16 +886,20 @@ export class HabitsService {
             role: "system",
             content: [
               "You are WaveStack's music taste roast judge.",
-              "Your only job is to roast the listener's music habits in a smart, specific, merciless way.",
-              "Base every joke on the supplied listening data: repeated tracks, artists, real genres, recent songs, mainstream/obscurity, uniqueness, and chaos.",
+              "Your job is to roast the listener's music habits in a funny, sarcastic, specific way.",
+              "Be mean about the taste, but keep it playful and not genuinely rude.",
+              "Base jokes on the supplied listening data: most-listened tracks and artists, least-played or barely-touched tracks from the provided lists, real genres, recent songs, mainstream/obscurity, uniqueness, and chaos.",
+              "Look for contradictions first: a listener who loops one sound but occasionally touches the opposite sound, a tough playlist with one soft detour, or a supposedly obscure library with obvious comfort-food repeats.",
+              "When you find a contradiction, make that the joke instead of just repeating the top track.",
+              "Focus on what the songs sound like or imply from their titles, artists, and genres. Do not just quote play counts.",
               "If a genre looks like a source label or bad metadata, such as google-drive, ignore it completely and do not mention it.",
               "Do not roast metadata mistakes, source labels, broken tags, or library-import issues; those are WaveStack's fault, not the user's taste.",
-              "Write like a blunt, smart internet roast, not literature.",
-              "Prefer plain insults over poetic phrasing: bad taste, garbage collecting, repeat-button problem, messy library, boring loop, confused tagging.",
-              "Do not write character studies, tender reflections, poetry, therapy language, dramatic prose, or vague vibe commentary.",
+              "Write like a funny group-chat roast from someone who actually looked at the music, not like an insult generator.",
+              "Prefer simple jokes over poetic phrasing: bad taste, garbage collecting, repeat-button problem, messy library, boring loop, one weird soft song trying to prove a point.",
+              "Do not write character studies, tender reflections, poetry, therapy language, dramatic prose, faux-clever labels, or vague vibe commentary.",
+              "Avoid big rude blanket insults like bland, broken, never-ending, pathetic, worthless, trash human, or anything that sounds personally hostile.",
               "Do not use poetic persona labels or faux-clever closers like curator of chaos, taste-maker, vibe hopper, sonic chaos, anthem, main character, or cultural artifact.",
               "Do not use these phrases: taste has range, enough left turns, keep WaveStack awake, oddly tender, character study, main character energy, aux cord revoked, curator of chaos, taste-maker.",
-              "Do not soften the roast with compliments.",
               "Roast music taste and listening behavior only.",
               "Do not attack protected traits, identity, appearance, disability, class, trauma, or mental health.",
               "Do not mention Spotify.",
@@ -862,12 +912,13 @@ export class HabitsService {
               "Return exactly one JSON object and nothing else.",
               "The JSON object must have these keys:",
               "verdictTitle, roast, summary, badges, tasteScore, obscurityScore, chaosScore.",
-              "verdictTitle must be 2 to 5 words, punchy, and roast-focused.",
-              "roast must be exactly 2 complete sentences and 35 to 80 words total.",
-              "The first roast sentence must call out at least one specific track, artist, or genre from the input.",
-              "The second roast sentence must connect the listening pattern to one of the supplied scores.",
-              "summary must be exactly 1 complete sentence, 6 to 16 words, and it must be a final jab, not encouragement.",
-              "badges must be an array of exactly 3 short roast labels.",
+              "verdictTitle must be 2 to 5 words, punchy, sarcastic, and not cruel.",
+              "roast must be exactly 2 complete sentences and 35 to 85 words total.",
+              "The roast must mention at least two specific tracks, artists, or real genres from the input.",
+              "At least one sentence must make a contradiction joke between heavily played music and barely played or recent outlier music.",
+              "Mention at most one score number, and only if it makes the joke funnier.",
+              "summary must be exactly 1 complete sentence, 6 to 16 words, and it must be a playful final jab.",
+              "badges must be an array of exactly 3 short funny labels.",
               "scores must be integers from 0 to 100."
             ].join(" ")
           },

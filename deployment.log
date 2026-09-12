@@ -3429,3 +3429,5 @@ LIMIT 10;
 
 SQL
 '
+
+ssh -o IdentitiesOnly=yes -i ~/.ssh/wavestack_oracle ubuntu@141.148.156.24

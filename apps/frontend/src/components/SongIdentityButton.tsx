@@ -1,5 +1,5 @@
 import type { OpenSongDetailsHandler, PlaybackContext, Song } from "../App";
-import { formatSongDisplayName } from "../song-format";
+import { formatSongDisplayName, normalizeLabelPart } from "../song-format";
 import { SongArtwork } from "./SongArtwork";
 
 type SongIdentityButtonProps = {
@@ -27,12 +27,16 @@ export function SongIdentityButton({
   playbackContext,
   onOpenDetails
 }: SongIdentityButtonProps) {
+  const displayName = formatSongDisplayName(song);
+  const title = normalizeLabelPart(song.title, displayName);
+  const artist = normalizeLabelPart(song.artistName, "Unknown Artist");
+
   return (
     <button
       type="button"
       className={className}
       onClick={() => onOpenDetails(song, playbackContext)}
-      aria-label={`Open details for ${formatSongDisplayName(song)}`}
+      aria-label={`Open details for ${displayName}`}
     >
       <SongArtwork
         song={song}
@@ -47,9 +51,9 @@ export function SongIdentityButton({
               <span className="song-list-row__index">{index}.</span>{" "}
             </>
           ) : null}
-          {formatSongDisplayName(song)}
+          {title}
         </strong>
-        <small>{subtitle ?? song.albumTitle ?? song.artistName}</small>
+        <small>{subtitle ?? artist}</small>
       </span>
     </button>
   );
