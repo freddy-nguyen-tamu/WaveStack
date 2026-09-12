@@ -42,6 +42,8 @@ type SnapshotRow = {
   generated_at: Date | string;
 };
 
+const PLACEHOLDER_SONG_ID = "demo-monkeys-spinning-monkeys";
+
 type RecentListenExportRow = {
   song_id: string;
   artist_name: string;
@@ -93,6 +95,10 @@ export class HabitsService {
     durationSeconds: number,
     completedPlayRatio: number
   ): Promise<boolean> {
+    if (songId === PLACEHOLDER_SONG_ID) {
+      return false;
+    }
+
     try {
       await this.database.query(
         `INSERT INTO app_listening_events (user_id, song_id, artist_name, title, duration_seconds, completed_play_ratio)
@@ -316,6 +322,7 @@ export class HabitsService {
       `SELECT song_id, COUNT(*) AS play_count
        FROM app_listening_events_combined
        WHERE user_id = $1
+         AND song_id <> '${PLACEHOLDER_SONG_ID}'
        GROUP BY song_id
        ORDER BY play_count DESC
        LIMIT 100`,
@@ -339,6 +346,7 @@ export class HabitsService {
          COUNT(*)::int AS play_count
        FROM app_listening_events_combined
        WHERE user_id = $1
+         AND song_id <> '${PLACEHOLDER_SONG_ID}'
        GROUP BY COALESCE(NULLIF(artist_name, ''), 'Unknown Artist')
        ORDER BY play_count DESC, artist_name ASC
        LIMIT 40`,
@@ -367,6 +375,7 @@ export class HabitsService {
            SELECT song_id, MAX(started_at) AS last_played_at
            FROM app_listening_events_combined
            WHERE user_id = $1
+             AND song_id <> '${PLACEHOLDER_SONG_ID}'
            GROUP BY song_id
          ) recent
        ORDER BY last_played_at DESC
@@ -389,7 +398,9 @@ export class HabitsService {
          COUNT(*)::int AS count,
          COALESCE(SUM(duration_seconds), 0)::float8 AS total_duration_seconds
        FROM app_listening_events_combined
-       WHERE user_id = $1 AND started_at >= now() - ${interval}
+       WHERE user_id = $1
+         AND song_id <> '${PLACEHOLDER_SONG_ID}'
+         AND started_at >= now() - ${interval}
        GROUP BY label
        ORDER BY count DESC
        LIMIT 10`,
@@ -441,7 +452,9 @@ export class HabitsService {
         `SELECT
            song_id, artist_name, title, duration_seconds, completed_play_ratio, started_at
          FROM app_listening_events_combined
-         WHERE user_id = $1 ${intervalWhere}
+         WHERE user_id = $1
+           AND song_id <> '${PLACEHOLDER_SONG_ID}'
+           ${intervalWhere}
          ORDER BY started_at DESC
          LIMIT 5000`,
         [userId]
@@ -503,6 +516,7 @@ export class HabitsService {
           e.song_id
         FROM app_listening_events_combined e
         WHERE e.user_id = $1
+          AND e.song_id <> '${PLACEHOLDER_SONG_ID}'
           ${periodWhere}
         GROUP BY e.song_id
       )
@@ -543,6 +557,7 @@ export class HabitsService {
           SUM(COALESCE(e.duration_seconds, 0))::float8 AS total_duration_seconds
         FROM app_listening_events_combined e
         WHERE e.user_id = $1
+          AND e.song_id <> '${PLACEHOLDER_SONG_ID}'
           ${periodWhere}
         GROUP BY
           lower(COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')),
@@ -583,6 +598,7 @@ export class HabitsService {
           e.song_id
         FROM app_listening_events_combined e
         WHERE e.user_id = $1
+          AND e.song_id <> '${PLACEHOLDER_SONG_ID}'
           ${periodWhere}
         GROUP BY e.song_id
       )
@@ -628,7 +644,9 @@ export class HabitsService {
          SELECT unnest(dt.genre_names) AS genre_name
          FROM app_listening_events_combined ale
          LEFT JOIN drive_tracks dt ON dt.id = ale.song_id OR dt.drive_file_id = ale.song_id
-         WHERE ale.user_id = $1 AND ale.started_at >= now() - ${interval}
+         WHERE ale.user_id = $1
+           AND ale.song_id <> '${PLACEHOLDER_SONG_ID}'
+           AND ale.started_at >= now() - ${interval}
        ) sub
        GROUP BY genre_name
        ORDER BY play_count DESC
@@ -652,7 +670,9 @@ export class HabitsService {
          completed_play_ratio,
          started_at
        FROM app_listening_events_combined
-       WHERE user_id = $1 AND started_at >= now() - ${interval}
+       WHERE user_id = $1
+         AND song_id <> '${PLACEHOLDER_SONG_ID}'
+         AND started_at >= now() - ${interval}
        ORDER BY started_at DESC
        LIMIT $2`,
       [userId, limit]
@@ -889,7 +909,9 @@ export class HabitsService {
               "Your job is to roast the listener's music habits in a funny, sarcastic, specific way.",
               "Be mean about the taste, but keep it playful and not genuinely rude.",
               "Base jokes on the supplied listening data: most-listened tracks and artists, least-played or barely-touched tracks from the provided lists, real genres, recent songs, mainstream/obscurity, uniqueness, and chaos.",
-              "Look for contradictions first: a listener who loops one sound but occasionally touches the opposite sound, a tough playlist with one soft detour, or a supposedly obscure library with obvious comfort-food repeats.",
+              "Look for contradictions first: a listener who loops one sound but occasionally touches the opposite sound, one soft detour among harder tracks, or a supposedly obscure library with obvious comfort-food repeats.",
+              "Do not mention, infer, or invent playlist names. No playlist names are supplied as reliable evidence.",
+              "When a track title, artist name, or genre offers an obvious harmless pun or double meaning, prefer a concise wordplay joke about that preference instead of a generic insult.",
               "When you find a contradiction, make that the joke instead of just repeating the top track.",
               "Focus on what the songs sound like or imply from their titles, artists, and genres. Do not just quote play counts.",
               "If a genre looks like a source label or bad metadata, such as google-drive, ignore it completely and do not mention it.",
@@ -972,13 +994,14 @@ export class HabitsService {
     const userPlayCountResult = await this.database.query(
       `SELECT COUNT(*)::int AS count
        FROM app_listening_events_combined e
-       WHERE e.user_id = $1 ${periodWhere}`,
+       WHERE e.user_id = $1 AND e.song_id <> '${PLACEHOLDER_SONG_ID}' ${periodWhere}`,
       [userId]
     );
 
     const libraryUserCountResult = await this.database.query(
       `SELECT COUNT(DISTINCT user_id)::int AS count
-       FROM app_listening_events_combined`
+       FROM app_listening_events_combined
+       WHERE song_id <> '${PLACEHOLDER_SONG_ID}'`
     );
 
     const rareArtistsResult = await this.database.query(
@@ -989,7 +1012,7 @@ export class HabitsService {
            COUNT(*)::int AS user_plays,
            COALESCE(SUM(e.duration_seconds), 0)::float8 AS total_duration_seconds
           FROM app_listening_events_combined e
-          WHERE e.user_id = $1 ${periodWhere}
+          WHERE e.user_id = $1 AND e.song_id <> '${PLACEHOLDER_SONG_ID}' ${periodWhere}
           GROUP BY lower(COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')), COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')
         ),
         global_artists AS (
@@ -998,6 +1021,7 @@ export class HabitsService {
             COUNT(DISTINCT user_id)::int AS listener_count,
             COUNT(*)::int AS global_plays
           FROM app_listening_events_combined
+          WHERE song_id <> '${PLACEHOLDER_SONG_ID}'
           GROUP BY lower(COALESCE(NULLIF(artist_name, ''), 'Unknown Artist'))
         )
         SELECT
@@ -1026,7 +1050,7 @@ export class HabitsService {
            COUNT(*)::int AS user_plays,
            COALESCE(SUM(e.duration_seconds), 0)::float8 AS total_duration_seconds
           FROM app_listening_events_combined e
-          WHERE e.user_id = $1 ${periodWhere}
+          WHERE e.user_id = $1 AND e.song_id <> '${PLACEHOLDER_SONG_ID}' ${periodWhere}
           GROUP BY lower(COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')), COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')
         ),
         global_artists AS (
@@ -1035,6 +1059,7 @@ export class HabitsService {
             COUNT(DISTINCT user_id)::int AS listener_count,
             COUNT(*)::int AS global_plays
           FROM app_listening_events_combined
+          WHERE song_id <> '${PLACEHOLDER_SONG_ID}'
           GROUP BY lower(COALESCE(NULLIF(artist_name, ''), 'Unknown Artist'))
         )
         SELECT
@@ -1070,6 +1095,7 @@ export class HabitsService {
           COUNT(*)::int AS user_plays
          FROM app_listening_events_combined e
          WHERE e.user_id = $1
+           AND e.song_id <> '${PLACEHOLDER_SONG_ID}'
            ${periodWhere}
          GROUP BY
            lower(COALESCE(NULLIF(e.artist_name, ''), 'Unknown Artist')),
@@ -1081,6 +1107,7 @@ export class HabitsService {
            COUNT(DISTINCT user_id)::int AS listener_count,
            COUNT(*)::int AS global_plays
          FROM app_listening_events_combined
+         WHERE song_id <> '${PLACEHOLDER_SONG_ID}'
          GROUP BY lower(COALESCE(NULLIF(artist_name, ''), 'Unknown Artist'))
        )
        SELECT

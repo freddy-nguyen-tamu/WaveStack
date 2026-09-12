@@ -4,6 +4,8 @@ import { Song } from "../music/music.models";
 import { MusicService } from "../music/music.service";
 import { LibraryState, UserPlaylist } from "./playlists.models";
 
+const PLACEHOLDER_SONG_ID = "demo-monkeys-spinning-monkeys";
+
 type FavoriteRow = {
   song_id: string;
 };
@@ -39,6 +41,7 @@ export class PlaylistsService {
       `SELECT song_id
        FROM app_favorites
        WHERE user_id = $1
+         AND song_id <> '${PLACEHOLDER_SONG_ID}'
        ORDER BY created_at DESC`,
       [userId]
     );
@@ -48,6 +51,10 @@ export class PlaylistsService {
   }
 
   async toggleFavorite(userId: string, songId: string): Promise<Song[]> {
+    if (songId === PLACEHOLDER_SONG_ID) {
+      return this.getFavoriteSongs(userId);
+    }
+
     const existing = await this.database.query(
       `SELECT 1
        FROM app_favorites
@@ -76,6 +83,10 @@ export class PlaylistsService {
   }
 
   async favoriteSong(userId: string, songId: string): Promise<Song[]> {
+    if (songId === PLACEHOLDER_SONG_ID) {
+      return this.getFavoriteSongs(userId);
+    }
+
     await this.database.query(
       `INSERT INTO app_favorites (user_id, song_id)
        VALUES ($1, $2)
@@ -110,7 +121,9 @@ export class PlaylistsService {
            ARRAY[]::text[]
          ) AS song_ids
        FROM app_user_playlists p
-       LEFT JOIN app_user_playlist_songs ps ON ps.playlist_id = p.id
+       LEFT JOIN app_user_playlist_songs ps
+         ON ps.playlist_id = p.id
+        AND ps.song_id <> '${PLACEHOLDER_SONG_ID}'
        WHERE p.user_id = $1
        GROUP BY p.id
        ORDER BY p.updated_at DESC, p.created_at DESC`,
@@ -164,6 +177,10 @@ export class PlaylistsService {
   }
 
   async addSongToPlaylist(userId: string, playlistId: string, songId: string): Promise<UserPlaylist[]> {
+    if (songId === PLACEHOLDER_SONG_ID) {
+      return this.getPlaylists(userId);
+    }
+
     const ownsPlaylist = await this.database.query(
       `SELECT id
        FROM app_user_playlists
@@ -227,6 +244,7 @@ export class PlaylistsService {
            MAX(e.started_at) AS latest_started_at
          FROM app_listening_events e
          WHERE e.user_id = $1
+           AND e.song_id <> '${PLACEHOLDER_SONG_ID}'
          GROUP BY e.song_id
        )
        SELECT song_id
@@ -246,6 +264,7 @@ export class PlaylistsService {
       `SELECT song_id
        FROM app_listening_monthly_rollups
        WHERE user_id = $1
+         AND song_id <> '${PLACEHOLDER_SONG_ID}'
        GROUP BY song_id
        ORDER BY MAX(month_start) DESC, SUM(play_count) DESC, MAX(updated_at) DESC
        LIMIT $2`,
@@ -266,7 +285,8 @@ export class PlaylistsService {
   }
 
   private async songsByIds(ids: string[], userId: string): Promise<Song[]> {
-    const uniqueIds = Array.from(new Set(ids)).filter(Boolean);
+    const visibleIds = ids.filter((id) => id !== PLACEHOLDER_SONG_ID);
+    const uniqueIds = Array.from(new Set(visibleIds)).filter(Boolean);
 
     if (!uniqueIds.length) {
       return [];
@@ -279,7 +299,7 @@ export class PlaylistsService {
         .map((song) => [song.id, song])
     );
 
-    return ids
+    return visibleIds
       .map((id) => songMap.get(id))
       .filter((song): song is Song => Boolean(song));
   }

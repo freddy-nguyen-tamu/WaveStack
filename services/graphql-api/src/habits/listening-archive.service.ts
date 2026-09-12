@@ -10,6 +10,8 @@ import {
   ListeningArchiveStatus
 } from "./habits.models";
 
+const PLACEHOLDER_SONG_ID = "demo-monkeys-spinning-monkeys";
+
 type QueryResultRow = Record<string, unknown>;
 type QueryResultLike = { rows: QueryResultRow[] } | QueryResultRow[];
 
@@ -87,11 +89,13 @@ export class ListeningArchiveService implements OnModuleInit, OnModuleDestroy {
           MIN(started_at) AS oldest_raw_event_at
         FROM app_listening_events
         WHERE ($1::uuid IS NULL OR user_id = $1::uuid)
+          AND song_id <> '${PLACEHOLDER_SONG_ID}'
       ),
       rollup_stats AS (
         SELECT COUNT(*)::int AS archived_rollup_row_count
         FROM app_listening_monthly_rollups
         WHERE ($1::uuid IS NULL OR user_id = $1::uuid)
+          AND song_id <> '${PLACEHOLDER_SONG_ID}'
       ),
       run_stats AS (
         SELECT
@@ -170,6 +174,7 @@ export class ListeningArchiveService implements OnModuleInit, OnModuleDestroy {
          FROM app_listening_events e
          INNER JOIN app_users u ON u.id = e.user_id
          WHERE e.started_at < $1
+           AND e.song_id <> '${PLACEHOLDER_SONG_ID}'
            AND ($3::uuid IS NULL OR e.user_id = $3::uuid)
          ORDER BY e.user_id ASC, e.started_at ASC
          LIMIT $2`,
@@ -502,7 +507,9 @@ export class ListeningArchiveService implements OnModuleInit, OnModuleDestroy {
           play_count,
           total_duration_seconds
          FROM app_listening_monthly_rollups
-         WHERE user_id = $1 AND month_start = $2
+         WHERE user_id = $1
+           AND month_start = $2
+           AND song_id <> '${PLACEHOLDER_SONG_ID}'
          ORDER BY play_count DESC, total_duration_seconds DESC, title ASC`,
         [item.userId, item.monthStart]
       );
@@ -686,7 +693,9 @@ export class ListeningArchiveService implements OnModuleInit, OnModuleDestroy {
           }
 
           const events = await this.drivePrivateExport.readListeningArchiveFileAsUser(refreshToken, driveFile.fileId);
-          const validEvents = events.filter((e) => e.userId === options.userId);
+          const validEvents = events.filter(
+            (e) => e.userId === options.userId && e.songId !== PLACEHOLDER_SONG_ID
+          );
 
           if (!validEvents.length) {
             skippedFiles++;
@@ -850,7 +859,8 @@ export class ListeningArchiveService implements OnModuleInit, OnModuleDestroy {
       const cachedEventsResult = await this.database.query(
         `SELECT COUNT(*)::int AS cached_event_count
          FROM app_listening_archive_cached_events
-         WHERE user_id = $1`,
+         WHERE user_id = $1
+           AND song_id <> '${PLACEHOLDER_SONG_ID}'`,
         [userId]
       );
       const cachedEventsRow = this.rows<{ cached_event_count: string | number }>(cachedEventsResult)[0];

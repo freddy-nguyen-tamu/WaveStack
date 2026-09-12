@@ -137,9 +137,11 @@ type SongPageQueryVariables = {
   sort?: string | null;
 };
 
+const PLACEHOLDER_SONG_ID = "demo-monkeys-spinning-monkeys";
+
 const fallbackSongs: Song[] = [
   {
-    id: "demo-monkeys-spinning-monkeys",
+    id: PLACEHOLDER_SONG_ID,
     title: "Monkeys Spinning Monkeys",
     artistName: "Kevin MacLeod",
     albumTitle: "Demo Library",
@@ -245,23 +247,38 @@ function ensureCanonicalLink(pathname: string) {
 function readStringArray(key: string): string[] {
   try {
     const value = window.localStorage.getItem(key);
-    return value ? JSON.parse(value) : [];
+    const ids = value ? JSON.parse(value) as string[] : [];
+    return ids.filter((id) => id !== PLACEHOLDER_SONG_ID);
   } catch {
     return [];
   }
 }
 
+function sanitizePlaylists(items: ClientPlaylist[]): ClientPlaylist[] {
+  return items.map((playlist) => ({
+    ...playlist,
+    songIds: playlist.songIds.filter((id) => id !== PLACEHOLDER_SONG_ID),
+    songs: playlist.songs?.filter((song) => song.id !== PLACEHOLDER_SONG_ID)
+  }));
+}
+
 function readPlaylists(): ClientPlaylist[] {
   try {
     const value = window.localStorage.getItem("wavestack:playlists");
-    return value ? JSON.parse(value) : [];
+    return value ? sanitizePlaylists(JSON.parse(value) as ClientPlaylist[]) : [];
   } catch {
     return [];
   }
 }
 
 function uniqueSongsById(songs: Song[]): Song[] {
-  return Array.from(new Map(songs.map((song) => [song.id, song])).values());
+  return Array.from(
+    new Map(
+      songs
+        .filter((song) => song.id !== PLACEHOLDER_SONG_ID)
+        .map((song) => [song.id, song])
+    ).values()
+  );
 }
 
 function readSongCache(): Song[] {
@@ -344,23 +361,24 @@ export function App() {
   }, [playlists]);
 
   function applyFavoriteIds(nextIds: string[]) {
-    const next = Array.from(new Set(nextIds.filter(Boolean)));
+    const next = Array.from(new Set(nextIds.filter((id) => Boolean(id) && id !== PLACEHOLDER_SONG_ID)));
     favoriteIdsRef.current = next;
     setFavoriteIds(next);
     writeLocalJson("wavestack:favorites", next);
   }
 
   function applyRecentSongIds(nextIds: string[]) {
-    const next = Array.from(new Set(nextIds.filter(Boolean))).slice(0, 100);
+    const next = Array.from(new Set(nextIds.filter((id) => Boolean(id) && id !== PLACEHOLDER_SONG_ID))).slice(0, 100);
     recentSongIdsRef.current = next;
     setRecentSongIds(next);
     writeLocalJson("wavestack:recent", next);
   }
 
   function applyPlaylists(nextPlaylists: ClientPlaylist[]) {
-    playlistsRef.current = nextPlaylists;
-    setPlaylists(nextPlaylists);
-    writeLocalJson("wavestack:playlists", nextPlaylists);
+    const next = sanitizePlaylists(nextPlaylists);
+    playlistsRef.current = next;
+    setPlaylists(next);
+    writeLocalJson("wavestack:playlists", next);
   }
 
   useEffect(() => {
@@ -661,7 +679,7 @@ export function App() {
   });
 
   const songs = useMemo<Song[]>(
-    () => uniqueSongsById(data?.dashboardSongs?.length ? data.dashboardSongs : fallbackSongs),
+    () => uniqueSongsById(data?.dashboardSongs ?? []),
     [data]
   );
 
@@ -947,6 +965,8 @@ export function App() {
   }, []);
 
   function rememberRecent(song: Song) {
+    if (song.id === PLACEHOLDER_SONG_ID) return;
+
     rememberSongObjects([song]);
 
     applyRecentSongIds([
@@ -958,6 +978,8 @@ export function App() {
   }
 
   function rememberPlayedSong(song: Song) {
+    if (song.id === PLACEHOLDER_SONG_ID) return;
+
     setPlayHistory((items) => {
       const withoutDuplicate = items.filter((item) => item.id !== song.id);
       return [song, ...withoutDuplicate].slice(0, 100);
@@ -1435,6 +1457,8 @@ export function App() {
   }
 
   function queueSong(song: Song) {
+    if (song.id === PLACEHOLDER_SONG_ID) return;
+
     setQueue((currentQueue) => {
       if (currentQueue.some((item) => item.id === song.id) || activeSong?.id === song.id) {
         showNotice(`${formatSongDisplayName(song)} is already in the queue.`);
@@ -1462,6 +1486,8 @@ export function App() {
   }
 
   async function toggleFavorite(song: Song) {
+    if (song.id === PLACEHOLDER_SONG_ID) return;
+
     rememberSongObjects([song]);
 
     const currentFavoriteIds = favoriteIdsRef.current;
@@ -1608,6 +1634,8 @@ export function App() {
   }
 
   async function addToPlaylist(playlistId: string, song: Song) {
+    if (song.id === PLACEHOLDER_SONG_ID) return;
+
     rememberSongObjects([song]);
 
     if (!playlistId) {
@@ -1924,7 +1952,7 @@ export function App() {
   }, [authToken, favoriteIds.join("|"), recentSongIds.join("|")]);
 
   useEffect(() => {
-    if (!authUser || !currentSong) return;
+    if (!authUser || !currentSong || currentSong.id === PLACEHOLDER_SONG_ID) return;
 
     const key = `${authUser.id}:${currentSong.id}`;
 
@@ -2271,7 +2299,11 @@ export function App() {
             onToggleFavorite={() => toggleFavorite(currentSong)}
             onToggleShuffle={toggleShuffle}
             onCycleRepeatMode={cycleRepeatMode}
-            onQueueChange={setQueue}
+            onQueueChange={(nextQueue) => {
+              const sanitizedQueue = uniqueSongsById(nextQueue);
+              queueRef.current = sanitizedQueue;
+              setQueue(sanitizedQueue);
+            }}
             onActiveSongChange={(song) => startSong(song)}
             onOpenDetails={openDetails}
             onPlaybackStateChange={setNowPlayingState}
