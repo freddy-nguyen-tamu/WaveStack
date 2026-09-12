@@ -1,9 +1,10 @@
-import { Controller, Get, Header, NotFoundException, Param, Req, Res } from "@nestjs/common";
+import { Controller, Get, Header, NotFoundException, Param, Query, Req, Res, UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Request, Response } from "express";
 import { createReadStream, existsSync } from "node:fs";
 import { join } from "node:path";
 import { Readable } from "node:stream";
+import { SignedUrlService } from "../storage/signed-url.service";
 import { DriveArtworkService } from "./drive-artwork.service";
 import { DriveDownloadService } from "./drive-download.service";
 import { GoogleDriveService } from "./google-drive.service";
@@ -14,7 +15,8 @@ export class GoogleDriveController {
     private readonly googleDriveService: GoogleDriveService,
     private readonly driveArtworkService: DriveArtworkService,
     private readonly config: ConfigService,
-    private readonly driveDownloadService: DriveDownloadService
+    private readonly driveDownloadService: DriveDownloadService,
+    private readonly signedUrlService: SignedUrlService
   ) {}
 
   @Get("debug")
@@ -41,9 +43,15 @@ export class GoogleDriveController {
   @Header("Accept-Ranges", "bytes")
   async stream(
     @Param("fileId") fileId: string,
+    @Query("expires") expires: string | undefined,
+    @Query("signature") signature: string | undefined,
     @Req() request: Request,
     @Res() response: Response
   ) {
+    if (!this.signedUrlService.verifySignedStreamUrl(`/drive/stream/${fileId}`, Number(expires), signature ?? "")) {
+      throw new UnauthorizedException("This playback link expired.");
+    }
+
     const upstream = await this.driveDownloadService.fetchMedia(
       fileId,
       request.headers.range as string | undefined
@@ -52,12 +60,18 @@ export class GoogleDriveController {
     const contentType = upstream.headers.get("content-type") ?? "audio/mpeg";
     const contentLength = upstream.headers.get("content-length");
     const contentRange = upstream.headers.get("content-range");
+    const frontendOrigin =
+      this.config.get<string>("FRONTEND_PUBLIC_ORIGIN") ??
+      this.config.get<string>("FRONTEND_ORIGIN") ??
+      "https://wavestack.duckdns.org";
 
     response.status(upstream.status);
     response.setHeader("Content-Type", contentType);
-    response.setHeader("Access-Control-Allow-Origin", "*");
+    response.setHeader("Access-Control-Allow-Origin", frontendOrigin);
     response.setHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges");
     response.setHeader("Accept-Ranges", "bytes");
+    response.setHeader("Content-Disposition", "inline");
+    response.setHeader("X-Content-Type-Options", "nosniff");
 
     if (contentLength) {
       response.setHeader("Content-Length", contentLength);
@@ -78,7 +92,7 @@ export class GoogleDriveController {
     // memory leak that "went away after a while" and why it only affected
     // whichever browser/device had actually made the failing request.
     if (upstream.ok) {
-      response.setHeader("Cache-Control", "public, max-age=3600");
+      response.setHeader("Cache-Control", "private, no-store");
     } else {
       response.setHeader("Cache-Control", "no-store");
     }

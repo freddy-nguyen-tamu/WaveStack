@@ -1,6 +1,6 @@
 import {
   BadRequestException,
-  Controller, Get, Header, Logger, NotFoundException, Param, Post, Req, Res, UnauthorizedException, UploadedFile, UseInterceptors
+  Controller, Get, Header, Logger, NotFoundException, Param, Post, Query, Req, Res, UnauthorizedException, UploadedFile, UseInterceptors
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { diskStorage } from "multer";
@@ -8,6 +8,7 @@ import { Request, Response } from "express";
 import { createReadStream, existsSync, mkdirSync, statSync, unlinkSync } from "node:fs";
 import { extname, join } from "node:path";
 import { AuthService } from "../auth/auth.service";
+import { SignedUrlService } from "../storage/signed-url.service";
 import { DriveTrackRepository } from "./drive-track.repository";
 import { AudioJobsProducer } from "./audio-jobs.producer";
 import { embeddedSearchText } from "./embedded-search-text";
@@ -68,7 +69,8 @@ export class UploadsController {
   constructor(
     private readonly authService: AuthService,
     private readonly driveTrackRepository: DriveTrackRepository,
-    private readonly audioJobsProducer: AudioJobsProducer
+    private readonly audioJobsProducer: AudioJobsProducer,
+    private readonly signedUrlService: SignedUrlService
   ) {}
 
   @Post("upload")
@@ -186,11 +188,21 @@ export class UploadsController {
 
   @Get("uploads/:fileName")
   @Header("Accept-Ranges", "bytes")
-  streamUpload(@Param("fileName") fileName: string, @Req() request: Request, @Res() response: Response) {
+  streamUpload(
+    @Param("fileName") fileName: string,
+    @Query("expires") expires: string | undefined,
+    @Query("signature") signature: string | undefined,
+    @Req() request: Request,
+    @Res() response: Response
+  ) {
     const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "");
 
     if (!safeName) {
       throw new NotFoundException("Invalid file name.");
+    }
+
+    if (!this.signedUrlService.verifySignedStreamUrl(`/api/uploads/${safeName}`, Number(expires), signature ?? "")) {
+      throw new UnauthorizedException("This playback link expired.");
     }
 
     const filePath = join(UPLOADS_DIR, safeName);
@@ -214,10 +226,16 @@ export class UploadsController {
       response.setHeader("Accept-Ranges", "bytes");
       response.setHeader("Content-Length", chunkSize);
       response.setHeader("Content-Type", this.contentTypeForFile(safeName));
+      response.setHeader("Content-Disposition", "inline");
+      response.setHeader("Cache-Control", "private, no-store");
+      response.setHeader("X-Content-Type-Options", "nosniff");
       stream.pipe(response);
     } else {
       response.setHeader("Content-Type", this.contentTypeForFile(safeName));
       response.setHeader("Content-Length", fileSize);
+      response.setHeader("Content-Disposition", "inline");
+      response.setHeader("Cache-Control", "private, no-store");
+      response.setHeader("X-Content-Type-Options", "nosniff");
       createReadStream(filePath).pipe(response);
     }
   }

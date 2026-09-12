@@ -57,7 +57,6 @@ export function SongMetadataModal({
 }: SongMetadataModalProps) {
   const attemptedAutoRepairRef = useRef("");
   const [lyricsRepairMessage, setLyricsRepairMessage] = useState("");
-  const [showArtwork, setShowArtwork] = useState(true);
 
   const { data, loading, refetch } = useQuery<SongDetailsQueryData, SongDetailsQueryVariables>(
     SONG_DETAILS_QUERY,
@@ -75,10 +74,6 @@ export function SongMetadataModal({
 
   const details: Song = data?.songDetails ?? song;
   const lyrics = details.lyrics?.trim();
-
-  useEffect(() => {
-    setShowArtwork(true);
-  }, [details.id]);
 
   async function extractLyricsForThisSong(manual = false) {
     if (repairingLyrics) {
@@ -139,7 +134,7 @@ export function SongMetadataModal({
       }}
     >
       <div className="song-modal" onClick={(event) => event.stopPropagation()}>
-        <div className={showArtwork ? "song-modal__body song-modal__content" : "song-modal__body song-modal__content song-modal__content--art-hidden"}>
+        <div className="song-modal__body song-modal__content">
           <h2>{details.title}</h2>
           <p className="song-modal__artist">{details.artistName}</p>
 
@@ -154,23 +149,14 @@ export function SongMetadataModal({
             className="song-actions--modal"
           />
 
-          {showArtwork ? (
-            <button
-              type="button"
-              className="song-modal__art-button"
-              onClick={() => setShowArtwork(false)}
-              aria-label="Hide thumbnail and expand lyrics"
-            >
-              <SongArtwork
-                song={details}
-                wrapClassName="song-modal__hero"
-                fallbackClassName="song-modal__fallback"
-                loading="eager"
-                eager
-                disableNowPlayingStyle
-              />
-            </button>
-          ) : null}
+          <SongArtwork
+            song={details}
+            wrapClassName="song-modal__hero"
+            fallbackClassName="song-modal__fallback"
+            loading="eager"
+            eager
+            disableNowPlayingStyle
+          />
 
           <LyricSearch key={details.id} lyrics={lyrics ?? ""}
             loadingLabel={loading || repairingLyrics ? (repairingLyrics ? "Extracting lyrics..." : "Loading lyrics...") : undefined}>
@@ -194,18 +180,6 @@ export function SongMetadataModal({
                 </button>
               </div>
           </LyricSearch>
-
-          {!showArtwork ? (
-            <div className="song-modal__actions">
-              <button
-                type="button"
-                className="song-modal__secondary-button"
-                onClick={() => setShowArtwork(true)}
-              >
-                Show thumbnail
-              </button>
-            </div>
-          ) : null}
 
         </div>
 

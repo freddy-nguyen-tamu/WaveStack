@@ -1,6 +1,8 @@
 import { Injectable } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { randomUUID } from "crypto";
 import { DatabaseService } from "../database/database.service";
+import { SignedUrlService } from "../storage/signed-url.service";
 import { DriveSyncStatus, Song, SongConnection, UserSongAttributeInput, UserSongInput } from "./music.models";
 import { CURRENT_THUMBNAIL_CACHE_SUFFIX } from "./thumbnail-cache.service";
 
@@ -51,7 +53,11 @@ type SyncStatusRow = {
 
 @Injectable()
 export class DriveTrackRepository {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly config: ConfigService,
+    private readonly signedUrlService: SignedUrlService
+  ) {}
 
   async upsertTracks(songs: Song[]): Promise<number> {
     const CONCURRENCY = 20;
@@ -630,7 +636,10 @@ export class DriveTrackRepository {
         ]
       );
 
-      songs.push(song);
+      songs.push({
+        ...song,
+        streamUrl: this.exposeStreamUrl(song.streamUrl)
+      });
     }
 
     return songs;
@@ -822,7 +831,7 @@ export class DriveTrackRepository {
       artistName: row.artist_name,
       albumTitle: row.album_title,
       durationSeconds: Number(row.duration_seconds ?? 0),
-      streamUrl: row.stream_url,
+      streamUrl: this.exposeStreamUrl(row.stream_url),
       genreNames: row.genre_names ?? [],
       score: row.score ?? undefined,
       thumbnailUrl: row.local_thumbnail_url ?? row.thumbnail_url ?? row.drive_thumbnail_url ?? undefined,
@@ -838,6 +847,18 @@ export class DriveTrackRepository {
       sizeBytes: row.size_bytes ? Number(row.size_bytes) : undefined,
       sourceRootFolderId: row.source_root_folder_id ?? undefined
     };
+  }
+
+  private exposeStreamUrl(url: string): string {
+    if (/\/(?:drive\/stream|api\/uploads)\//.test(url)) {
+      const browserUrl = url.startsWith("/")
+        ? `${this.config.get<string>("API_PUBLIC_ORIGIN") ?? "http://localhost:3000"}${url}`
+        : url;
+
+      return this.signedUrlService.signExistingUrl(browserUrl);
+    }
+
+    return url;
   }
 
   private async getOwnedUserSong(songId: string, userId: string): Promise<Song | null> {

@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { SignedUrlService } from "../storage/signed-url.service";
 import { Song } from "./music.models";
 
 type DriveShortcutDetails = {
@@ -83,7 +84,10 @@ export class GoogleDriveService {
   private readonly logger = new Logger(GoogleDriveService.name);
   private readonly imageById = new Map<string, DriveFile>();
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly signedUrlService: SignedUrlService
+  ) {}
 
   private get apiKey(): string {
     return this.config.get<string>("GOOGLE_DRIVE_API_KEY") ?? "";
@@ -169,7 +173,7 @@ export class GoogleDriveService {
           this.cleanOptional(properties.album) ??
           (file.sourceRootFolderId ? `Drive Folder ${file.sourceRootFolderId}` : "Public Drive Folder"),
         durationSeconds,
-        streamUrl: `${this.publicApiOrigin}/drive/stream/${file.id}`,
+        streamUrl: this.signedUrlService.signExistingUrl(`${this.publicApiOrigin}/drive/stream/${file.id}`),
         genreNames: this.parseGenres(properties.genreNames ?? properties.genres),
         thumbnailUrl: file.thumbnailLink,
         driveThumbnailUrl,

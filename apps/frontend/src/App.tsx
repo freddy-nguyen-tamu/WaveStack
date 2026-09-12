@@ -6,6 +6,7 @@ import {
     LISTENING_HABIT_SUMMARY_QUERY,
     ME_QUERY,
     MUSIC_HOME_QUERY,
+    SONG_DETAILS_QUERY,
     SONG_PAGE_QUERY,
     RANDOM_SONG_QUERY,
     RECOMMENDED_SONGS_QUERY,
@@ -387,6 +388,7 @@ export function App() {
   }));
 
   const currentSongRef = useRef<Song | null>(null);
+  const playRequestIdRef = useRef(0);
   const shuffleEnabledRef = useRef(false);
   const repeatModeRef = useRef<RepeatMode>("none");
   const playHistoryRef = useRef<Song[]>([]);
@@ -1046,9 +1048,38 @@ export function App() {
   type PlaybackAdvanceReason = "manual" | "ended";
 
   function startSong(song: Song, options: { preserveContext?: boolean } = {}) {
-    currentSongRef.current = song;
-    setActiveSong(song);
-    setPlaySignal((value) => value + 1);
+    const requestId = playRequestIdRef.current + 1;
+    playRequestIdRef.current = requestId;
+
+    void (async () => {
+      let playableSong = song;
+
+      if (/\/(?:drive\/stream|api\/uploads)\//.test(song.streamUrl)) {
+        try {
+          const result = await apolloClient.query<{ songDetails: Song | null }>({
+            query: SONG_DETAILS_QUERY,
+            variables: { id: song.id },
+            fetchPolicy: "network-only"
+          });
+          if (result.data.songDetails?.streamUrl) {
+            playableSong = {
+              ...song,
+              streamUrl: result.data.songDetails.streamUrl
+            };
+          }
+        } catch {
+          playableSong = song;
+        }
+      }
+
+      if (playRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      currentSongRef.current = playableSong;
+      setActiveSong(playableSong);
+      setPlaySignal((value) => value + 1);
+    })();
   }
 
   function popNextQueuedSong(): Song | null {

@@ -402,7 +402,7 @@ export class ListeningArchiveService implements OnModuleInit, OnModuleDestroy {
     this.dailyArchiveRunning = true;
 
     try {
-      const daysToKeep = Number(this.config.get<string>("LISTENING_ARCHIVE_DAILY_DAYS_TO_KEEP") ?? 1);
+      const daysToKeep = Number(this.config.get<string>("LISTENING_ARCHIVE_DAILY_DAYS_TO_KEEP") ?? 30);
       const result = await this.archiveOldEvents({
         daysToKeep,
         dryRun: false,

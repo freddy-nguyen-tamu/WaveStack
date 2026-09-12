@@ -24,7 +24,7 @@ async function bootstrap() {
   // Discourage ordinary image copying without interfering with lyric selection.
   for (const eventName of ["dragstart", "contextmenu", "selectstart"] as const) {
     document.addEventListener(eventName, event => {
-      if (event.target instanceof Element && event.target.closest("img, .song-artwork, .song-modal__art-button")) {
+      if (event.target instanceof Element && event.target.closest("img, .song-artwork")) {
         event.preventDefault();
         event.stopPropagation();
       }

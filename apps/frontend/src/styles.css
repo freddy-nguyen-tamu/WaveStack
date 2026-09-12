@@ -1974,23 +1974,6 @@ html[data-theme="dark"] .song-list-row:focus-within {
   align-items: center;
 }
 
-.song-modal__art-button {
-  display: block;
-  width: 100%;
-  min-height: 0;
-  border: 0;
-  border-radius: var(--radius-card);
-  padding: 0;
-  overflow: hidden;
-  background: transparent;
-}
-
-.song-modal__art-button:hover:not(:disabled),
-.song-modal__art-button:focus-visible {
-  background: transparent;
-  color: var(--color-ink);
-}
-
 .song-modal__hero,
 .song-modal__fallback {
   display: grid;
@@ -2059,6 +2042,7 @@ html[data-theme="dark"] .song-list-row:focus-within {
   font-family: var(--font-sans);
   font-size: 1.1rem;
   line-height: 1.35;
+  text-align: center;
 }
 
 .lyric-find__toolbar {
@@ -2154,10 +2138,6 @@ img, .song-artwork {
 .song-modal__lyrics-text .lyric-find__match--active {
   outline: 2px solid var(--color-ink);
   outline-offset: 1px;
-}
-
-.song-modal__content--art-hidden .song-modal__lyrics-text {
-  font-size: 1.25rem;
 }
 
 .song-modal__metadata {

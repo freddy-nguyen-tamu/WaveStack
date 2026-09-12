@@ -44,7 +44,7 @@ export class DriveTitleArtistService {
     if (pending) return pending;
 
     const request = (async () => {
-      const uploadName = streamUrl?.match(/^\/api\/uploads\/([a-zA-Z0-9_.-]+)$/)?.[1];
+      const uploadName = streamUrl?.match(/(?:^|https?:\/\/[^/]+)\/api\/uploads\/([a-zA-Z0-9_.-]+)(?:\?|$)/)?.[1];
       const value = uploadName && uploadName !== "." && uploadName !== ".."
         ? this.readTags(await parseFile(join("/app/uploads", uploadName), { duration: false, skipCovers: true }))
         : await this.loadEmbeddedTitleArtist(fileId);
