@@ -530,7 +530,6 @@ export function Player({
           src={activeSong.streamUrl}
           preload="metadata"
           controlsList="nodownload noplaybackrate noremoteplayback"
-          disableRemotePlayback
           onLoadedMetadata={syncProgressFromAudio}
           onTimeUpdate={syncProgressFromAudio}
           onDurationChange={syncProgressFromAudio}
