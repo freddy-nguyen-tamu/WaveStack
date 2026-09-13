@@ -1071,6 +1071,11 @@ export function App() {
 
   function startSong(song: Song, options: { preserveContext?: boolean } = {}) {
     const requestId = playRequestIdRef.current + 1;
+    const previousSong = currentSongRef.current;
+    const shouldFollowPlaybackInDetails =
+      Boolean(previousSong) &&
+      detailsSong?.id === previousSong?.id &&
+      nowPlayingState.isPlaying;
     playRequestIdRef.current = requestId;
 
     void (async () => {
@@ -1100,6 +1105,18 @@ export function App() {
 
       currentSongRef.current = playableSong;
       setActiveSong(playableSong);
+
+      if (
+        shouldFollowPlaybackInDetails &&
+        previousSong &&
+        playableSong.id !== previousSong.id
+      ) {
+        setDetailsSong((openSong) =>
+          openSong?.id === previousSong.id ? playableSong : openSong
+        );
+        setDetailsPlaybackContext(playbackContextRef.current);
+      }
+
       setPlaySignal((value) => value + 1);
     })();
   }
@@ -2357,12 +2374,20 @@ export function App() {
                 favoriteIds={favoriteIds}
                 onPlay={(song: Song) =>
                   playSongFromContext(song, {
-	                    id: "dashboard:recommendations",
-	                    label: "Dashboard recommendations",
-	                    source: "dashboard",
-	                    songs: allKnownSongs.length ? allKnownSongs : recommendationSongs.length ? recommendationSongs : songs
-	                  })
-	                }
+                    id: "dashboard:recommendations",
+                    label: "Dashboard recommendations",
+                    source: "dashboard",
+                    songs: allKnownSongs.length ? allKnownSongs : recommendationSongs.length ? recommendationSongs : songs
+                  })
+                }
+                onOpenDetails={(song: Song) =>
+                  openDetails(song, {
+                    id: "dashboard:recommendations",
+                    label: "Dashboard recommendations",
+                    source: "dashboard",
+                    songs: allKnownSongs.length ? allKnownSongs : recommendationSongs.length ? recommendationSongs : songs
+                  })
+                }
                 onQueue={queueSong}
                 onToggleFavorite={toggleFavorite}
                 onAddToPlaylist={addToPlaylist}
@@ -2559,3 +2584,4 @@ export function App() {
     </>
   );
 }
+

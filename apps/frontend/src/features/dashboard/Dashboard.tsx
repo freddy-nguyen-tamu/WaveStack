@@ -1,10 +1,9 @@
 import { Activity, Clock, Flame, Heart, Shuffle, TrendingUp } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import type { HabitSummaryEntry, RecommendResult, Song } from "../../App";
+import { useMemo } from "react";
+import type { HabitSummaryEntry, OpenSongDetailsHandler, RecommendResult, Song } from "../../App";
 import type { ClientPlaylist } from "../../App";
 import { formatSeconds, getSongCardSize } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
-import { SongMetadataModal } from "./SongMetadataModal";
 import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
 import { LoadingStatus } from "../../components/LoadingStatus";
 import { SongActions } from "../../components/SongActions";
@@ -19,6 +18,7 @@ type DashboardProps = {
   playlists: ClientPlaylist[];
   favoriteIds: string[];
   onPlay: (song: Song) => void;
+  onOpenDetails: OpenSongDetailsHandler;
   onQueue: (song: Song) => void;
   onToggleFavorite: (song: Song) => void;
   onAddToPlaylist: (playlistId: string, song: Song) => void;
@@ -40,6 +40,7 @@ export function Dashboard({
   playlists,
   favoriteIds,
   onPlay,
+  onOpenDetails,
   onQueue,
   onToggleFavorite,
   onAddToPlaylist,
@@ -50,8 +51,6 @@ export function Dashboard({
   onShuffleRecommendations,
   shufflingRecommendations
 }: DashboardProps) {
-  const [selectedSong, setSelectedSong] = useState<Song | null>(null);
-
   const reasonBySongId = useMemo(() => {
     const map = new Map<string, string>();
 
@@ -65,28 +64,6 @@ export function Dashboard({
   const suggestions = useMemo(() => {
     return recommendations.map((item) => item.song);
   }, [recommendations]);
-
-  useEffect(() => {
-    if (!selectedSong) {
-      document.body.classList.remove("modal-open");
-      return;
-    }
-
-    document.body.classList.add("modal-open");
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setSelectedSong(null);
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      document.body.classList.remove("modal-open");
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [selectedSong]);
 
   const recommendationSentinelRef = useInfiniteScroll({
     enabled: Boolean(onLoadMoreRecommendations),
@@ -185,7 +162,7 @@ export function Dashboard({
                 <button
                   className="song-tile__open"
                   type="button"
-                  onClick={() => setSelectedSong(song)}
+                  onClick={() => onOpenDetails(song)}
                   aria-label={`Open metadata for ${song.artistName} - ${song.title}`}
                 >
                   <SongArtwork
@@ -238,18 +215,7 @@ export function Dashboard({
         <p className="infinite-scroll-status">You reached the end of the recommendation wall.</p>
       ) : null}
 
-      {selectedSong ? (
-        <SongMetadataModal
-          song={selectedSong}
-          onPlay={() => onPlay(selectedSong)}
-          onQueue={() => onQueue(selectedSong)}
-          isFavorite={favoriteIds.includes(selectedSong.id)}
-          playlists={playlists}
-          onToggleFavorite={() => onToggleFavorite(selectedSong)}
-          onAddToPlaylist={(playlistId) => onAddToPlaylist(playlistId, selectedSong)}
-          onClose={() => setSelectedSong(null)}
-        />
-      ) : null}
     </article>
   );
 }
+
