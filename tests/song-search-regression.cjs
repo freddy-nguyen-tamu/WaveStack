@@ -1,4 +1,3 @@
-
 // Run against the disposable regression database, after building graphql-api.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -24,25 +23,26 @@ const pool = new Pool({ host: '127.0.0.1', port: 55439, database: 'postgres', us
       assert.equal((await repo.listSongs({ first: 60, query })).nodes[0].id, 'legacy');
     }
     assert.equal((await repo.listSongs({ first: 60, query: 'old filename' })).nodes.length, 0);
-    const song = { id: 'drive-new', fileName: 'original recording.mp3', title: 'Filename Guess', artistName: 'Filename Artist', albumTitle: 'Album', durationSeconds: 60, streamUrl: '/test', genreNames: ['Pop'], lyrics: 'lyric-only needle' };
+    const song = { id: 'drive-new', fileName: 'bài hát original.mp3', title: 'Filename Guess', artistName: 'Filename Artist', albumTitle: 'Nhạc Việt', durationSeconds: 60, streamUrl: '/test', genreNames: ['Pop'], lyrics: 'một ngày lyric-only needle' };
     await repo.upsertTracks([song]);
-    await repo.updateTitleArtist(song.id, 'Actual Song Title', 'Actual Artist');
+    await repo.updateTitleArtist(song.id, 'Chiều Nay', 'Đông Nhi');
     await repo.upsertTracks([song]);
-    for (const query of ['Actual Song Title', 'Actual Artist', 'original recording.mp3', 'lyric-only needle']) {
+    for (const query of ['Chiều Nay', 'chieu nay', 'Chiếu Nay', 'Dong Nhi', 'Nhac Viet', 'bai hat original.mp3', 'mot ngay', 'lyric-only needle']) {
       assert.equal((await repo.listSongs({ first: 60, query })).nodes[0].id, song.id);
     }
-    for (const query of ['Album', 'Pop']) {
-      assert.equal((await repo.listSongs({ first: 60, query })).nodes.length, 0);
-    }
+    assert.equal((await repo.listSongs({ first: 60, query: 'Pop' })).nodes.length, 0);
+    assert.equal((await repo.listSongs({ first: 60, query: 'Filename Guess' })).nodes.length, 0);
     await repo.updateEmbeddedSearch(song.id, 'hidden metadata encoder comment');
     assert.equal((await repo.listSongs({ first: 60, query: 'encoder comment' })).nodes.length, 0);
     assert.equal((await repo.listSongs({ first: 60, query: 'no match anywhere' })).nodes.length, 0);
     const owner = '00000000-0000-0000-0000-000000000001';
-    const [upload] = await repo.createUserSongs(owner, [{ ...song, fileName: 'upload-original.mp3' }]);
+    const [upload] = await repo.createUserSongs(owner, [{ ...song, fileName: 'upload-original.mp3', embeddedSearchText: 'hidden upload metadata' }]);
     assert.equal((await repo.listSongs({ first: 60, query: 'upload-original', userId: owner })).nodes[0].id, upload.id);
     assert.equal((await repo.listSongs({ first: 60, query: 'upload-original' })).nodes.length, 0);
+    assert.equal((await repo.listSongs({ first: 60, query: 'hidden upload', userId: owner })).nodes.length, 0);
+    assert.equal(upload.searchMetadata?.includes('hidden upload'), false);
     await pool.query(SONG_SEARCH_SCHEMA);
-    assert.equal((await repo.getSong(song.id)).title, 'Actual Song Title');
-    console.log('PASS: filename/title/artist/lyrics-only search, metadata exclusions, post-repair sync, upload visibility, idempotent startup');
+    assert.equal((await repo.getSong(song.id)).title, 'Chiều Nay');
+    console.log('PASS: accent-insensitive filename/title/artist/album/lyrics search, metadata exclusions, post-repair sync, upload visibility, idempotent startup');
   } finally { await pool.end(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

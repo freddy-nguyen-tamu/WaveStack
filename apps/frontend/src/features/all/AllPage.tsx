@@ -1,4 +1,3 @@
-
 import { Search } from "lucide-react";
 import {
   useCallback,
@@ -233,7 +232,7 @@ export function AllPage({
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filename, song, artist, or lyrics"
+            placeholder="Filename, song, artist, album, or lyrics"
           />
         </label>
 

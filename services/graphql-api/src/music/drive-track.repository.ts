@@ -1,4 +1,3 @@
-
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { randomUUID } from "crypto";
@@ -102,14 +101,7 @@ export class DriveTrackRepository {
   }
 
   private async upsertTrack(song: Song): Promise<void> {
-    const search = [
-      song.title,
-      song.artistName,
-      song.albumTitle,
-      ...(song.genreNames ?? [])
-    ]
-      .join(" ")
-      .toLowerCase();
+    const search = this.normalizedSearch(song);
 
     await this.database.query(
       `
@@ -307,9 +299,13 @@ export class DriveTrackRepository {
   ): Promise<string> {
     const existing = await this.getSong(trackId);
 
-    return [existing?.fileName, title, artist, existing?.lyrics]
-      .join(" ")
-      .toLowerCase();
+    return this.normalizeSearchText([
+      existing?.fileName,
+      title,
+      artist,
+      existing?.albumTitle,
+      existing?.lyrics
+    ].filter(Boolean).join(" "));
   }
 
   async updateLyrics(trackId: string, lyrics: string): Promise<void> {
@@ -380,7 +376,7 @@ export class DriveTrackRepository {
     const first = Math.max(1, Math.min(options.first || 50, 100));
     const offset = options.after ? Number(Buffer.from(options.after, "base64url").toString("utf8")) : 0;
     const safeOffset = Number.isFinite(offset) && offset >= 0 ? offset : 0;
-    const search = options.query?.trim().toLowerCase();
+    const search = this.normalizeSearchText(options.query ?? "");
     const sort = options.sort ?? "DATE_DESC";
     const orderBy =
       sort === "TITLE_ASC"
@@ -457,7 +453,7 @@ export class DriveTrackRepository {
     userId?: string | null;
     excludeIds?: string[];
   }): Promise<Song | null> {
-    const search = options.query?.trim().toLowerCase();
+    const search = this.normalizeSearchText(options.query ?? "");
     const params: unknown[] = [];
     const conditions = [
       "deleted_at IS NULL",
@@ -827,7 +823,7 @@ export class DriveTrackRepository {
     return {
       id: row.id,
       fileName: row.file_name ?? undefined,
-      searchMetadata: row.normalized_search || row.embedded_search || undefined,
+      searchMetadata: row.normalized_search || undefined,
       title: row.title,
       artistName: row.artist_name,
       albumTitle: row.album_title,
@@ -891,7 +887,8 @@ export class DriveTrackRepository {
     return {
       id,
       fileName: input.fileName?.trim() || undefined,
-      searchMetadata: input.embeddedSearchText,
+      searchMetadata: this.normalizeSearchText([input.fileName, title, artistName, albumTitle, input.lyrics]
+        .filter(Boolean).join(" ")),
       title,
       artistName,
       albumTitle,
@@ -906,8 +903,20 @@ export class DriveTrackRepository {
   }
 
   private normalizedSearch(song: Song): string {
-    return [song.fileName, song.title, song.artistName, song.lyrics]
-      .join(" ")
+    return this.normalizeSearchText([
+      song.fileName,
+      song.title,
+      song.artistName,
+      song.albumTitle,
+      song.lyrics
+    ].filter(Boolean).join(" "));
+  }
+
+  private normalizeSearchText(value: string): string {
+    return value
+      .normalize("NFKD")
+      .replace(/\p{M}/gu, "")
+      .replace(/[đĐ]/g, letter => letter === "Đ" ? "D" : "d")
       .toLowerCase();
   }
 

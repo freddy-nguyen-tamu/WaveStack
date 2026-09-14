@@ -1,13 +1,27 @@
-
 import type { Song } from "./App";
 
 export type SongCardSize = "small" | "medium" | "large" | "hero";
 
 export function matchesSongSearch(song: Song, query: string): boolean {
-  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const terms = normalizeSearchText(query).split(/\s+/).filter(Boolean);
   if (!terms.length) return true;
-  const text = [song.fileName, song.title, song.artistName, song.lyrics].join(" ").toLowerCase();
+  const text = normalizeSearchText([
+    song.fileName,
+    song.title,
+    song.artistName,
+    song.albumTitle,
+    song.lyrics,
+    song.searchMetadata
+  ].filter(Boolean).join(" "));
   return terms.every(term => text.includes(term));
+}
+
+function normalizeSearchText(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[đĐ]/g, letter => letter === "Đ" ? "D" : "d")
+    .toLowerCase();
 }
 
 export function formatSongDisplayName(song: Pick<Song, "artistName" | "title">): string {
