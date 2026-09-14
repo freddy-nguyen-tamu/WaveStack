@@ -1,3 +1,4 @@
+
 import type { Song } from "./App";
 
 export type SongCardSize = "small" | "medium" | "large" | "hero";
@@ -5,8 +6,7 @@ export type SongCardSize = "small" | "medium" | "large" | "hero";
 export function matchesSongSearch(song: Song, query: string): boolean {
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return true;
-  const text = [song.fileName, song.title, song.artistName, song.albumTitle,
-    song.searchMetadata, song.lyrics, formatSongDisplayName(song), ...song.genreNames].join(" ").toLowerCase();
+  const text = [song.fileName, song.title, song.artistName, song.lyrics].join(" ").toLowerCase();
   return terms.every(term => text.includes(term));
 }
 

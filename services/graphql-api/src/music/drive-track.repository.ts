@@ -1,3 +1,4 @@
+
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { randomUUID } from "crypto";
@@ -306,7 +307,7 @@ export class DriveTrackRepository {
   ): Promise<string> {
     const existing = await this.getSong(trackId);
 
-    return [title, artist, existing?.albumTitle ?? "", ...(existing?.genreNames ?? [])]
+    return [existing?.fileName, title, artist, existing?.lyrics]
       .join(" ")
       .toLowerCase();
   }
@@ -905,12 +906,7 @@ export class DriveTrackRepository {
   }
 
   private normalizedSearch(song: Song): string {
-    return [
-      song.title,
-      song.artistName,
-      song.albumTitle,
-      ...(song.genreNames ?? [])
-    ]
+    return [song.fileName, song.title, song.artistName, song.lyrics]
       .join(" ")
       .toLowerCase();
   }

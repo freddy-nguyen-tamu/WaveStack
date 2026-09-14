@@ -1,3 +1,4 @@
+
 // Run against the disposable regression database, after building graphql-api.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -19,16 +20,22 @@ const pool = new Pool({ host: '127.0.0.1', port: 55439, database: 'postgres', us
       VALUES ('legacy','legacy','Repaired Title','Repaired Artist','old filename')`);
     await pool.query(SONG_SEARCH_SCHEMA);
     const repo = new DriveTrackRepository(pool);
-    for (const query of ['Repaired Title', 'Repaired Artist', 'old filename']) {
+    for (const query of ['Repaired Title', 'Repaired Artist']) {
       assert.equal((await repo.listSongs({ first: 60, query })).nodes[0].id, 'legacy');
     }
-    const song = { id: 'drive-new', fileName: 'original recording.mp3', title: 'Filename Guess', artistName: 'Filename Artist', albumTitle: 'Album', durationSeconds: 60, streamUrl: '/test', genreNames: ['Pop'] };
+    assert.equal((await repo.listSongs({ first: 60, query: 'old filename' })).nodes.length, 0);
+    const song = { id: 'drive-new', fileName: 'original recording.mp3', title: 'Filename Guess', artistName: 'Filename Artist', albumTitle: 'Album', durationSeconds: 60, streamUrl: '/test', genreNames: ['Pop'], lyrics: 'lyric-only needle' };
     await repo.upsertTracks([song]);
     await repo.updateTitleArtist(song.id, 'Actual Song Title', 'Actual Artist');
     await repo.upsertTracks([song]);
-    for (const query of ['Actual Song Title', 'Actual Artist', 'original recording.mp3']) {
+    for (const query of ['Actual Song Title', 'Actual Artist', 'original recording.mp3', 'lyric-only needle']) {
       assert.equal((await repo.listSongs({ first: 60, query })).nodes[0].id, song.id);
     }
+    for (const query of ['Album', 'Pop']) {
+      assert.equal((await repo.listSongs({ first: 60, query })).nodes.length, 0);
+    }
+    await repo.updateEmbeddedSearch(song.id, 'hidden metadata encoder comment');
+    assert.equal((await repo.listSongs({ first: 60, query: 'encoder comment' })).nodes.length, 0);
     assert.equal((await repo.listSongs({ first: 60, query: 'no match anywhere' })).nodes.length, 0);
     const owner = '00000000-0000-0000-0000-000000000001';
     const [upload] = await repo.createUserSongs(owner, [{ ...song, fileName: 'upload-original.mp3' }]);
@@ -36,6 +43,6 @@ const pool = new Pool({ host: '127.0.0.1', port: 55439, database: 'postgres', us
     assert.equal((await repo.listSongs({ first: 60, query: 'upload-original' })).nodes.length, 0);
     await pool.query(SONG_SEARCH_SCHEMA);
     assert.equal((await repo.getSong(song.id)).title, 'Actual Song Title');
-    console.log('PASS: legacy repair, filename/title/artist, post-repair sync, empty results, upload visibility, idempotent startup');
+    console.log('PASS: filename/title/artist/lyrics-only search, metadata exclusions, post-repair sync, upload visibility, idempotent startup');
   } finally { await pool.end(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

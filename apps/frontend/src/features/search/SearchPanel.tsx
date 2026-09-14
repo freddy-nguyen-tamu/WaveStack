@@ -1,3 +1,4 @@
+
 import { Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useSongPages } from "../../hooks/useSongPages";
@@ -144,7 +145,7 @@ export function SearchPanel({
     <article ref={regionRef}>
       <h2>{title}</h2>
       <label>
-        <Search aria-hidden="true" /> Song, artist, album, or genre
+        <Search aria-hidden="true" /> Filename, song, artist, or lyrics
         <input value={query} onChange={(event) => setQuery(event.target.value)} />
       </label>
       {message ? (
