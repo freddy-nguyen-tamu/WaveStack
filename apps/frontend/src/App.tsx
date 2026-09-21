@@ -416,6 +416,7 @@ export function App() {
   const playedSinceManualPlayIdsRef = useRef<Set<string>>(new Set());
   const seededStartupAllContextRef = useRef(false);
   const startupAllContextFallbackTimerRef = useRef<number | null>(null);
+  const lastPlayedSongIdRef = useRef(window.localStorage.getItem("wavestack:last-song-id"));
 
   const [localTracks, setLocalTracks] = useState<Song[]>(() => {
     try {
@@ -539,9 +540,14 @@ export function App() {
   const lastListenRef = useRef("");
   const hasToken = Boolean(authToken);
 
-  const [shuffleEnabled, setShuffleEnabled] = useState(false);
+  const [shuffleEnabled, setShuffleEnabled] = useState(() =>
+    window.localStorage.getItem("wavestack:shuffle-enabled") === "true"
+  );
   const [isResolvingNextSong, setIsResolvingNextSong] = useState(false);
-  const [repeatMode, setRepeatMode] = useState<RepeatMode>("none");
+  const [repeatMode, setRepeatMode] = useState<RepeatMode>(() => {
+    const stored = window.localStorage.getItem("wavestack:repeat-mode");
+    return stored === "all" || stored === "one" ? stored : "none";
+  });
   const [playHistory, setPlayHistory] = useState<Song[]>([]);
   const [dismissedRecommendationIds, setDismissedRecommendationIds] = useState<string[]>([]);
   const [recommendationOffset, setRecommendationOffset] = useState(0);
@@ -835,8 +841,11 @@ export function App() {
         return;
       }
 
+      const lastPlayedSong = lastPlayedSongIdRef.current
+        ? startupAllSongs.find((song) => song.id === lastPlayedSongIdRef.current)
+        : null;
       const randomIndex = Math.floor(Math.random() * startupAllSongs.length);
-      const startupSong = startupAllSongs[randomIndex] ?? startupAllSongs[0];
+      const startupSong = lastPlayedSong ?? startupAllSongs[randomIndex] ?? startupAllSongs[0];
 
       if (!startupSong) {
         return;
@@ -1067,6 +1076,14 @@ export function App() {
   queueRef.current = queue;
   allKnownSongsRef.current = allKnownSongs;
 
+  useEffect(() => {
+    window.localStorage.setItem("wavestack:shuffle-enabled", String(shuffleEnabled));
+  }, [shuffleEnabled]);
+
+  useEffect(() => {
+    window.localStorage.setItem("wavestack:repeat-mode", repeatMode);
+  }, [repeatMode]);
+
   type PlaybackAdvanceReason = "manual" | "ended";
 
   function startSong(song: Song, options: { preserveContext?: boolean } = {}) {
@@ -1104,6 +1121,8 @@ export function App() {
       }
 
       currentSongRef.current = playableSong;
+      lastPlayedSongIdRef.current = playableSong.id;
+      window.localStorage.setItem("wavestack:last-song-id", playableSong.id);
       setActiveSong(playableSong);
 
       if (
@@ -2584,4 +2603,3 @@ export function App() {
     </>
   );
 }
-

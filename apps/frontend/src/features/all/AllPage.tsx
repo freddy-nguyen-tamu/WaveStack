@@ -13,6 +13,7 @@ import { useStableScrollRegion } from "../../hooks/useStableScrollRegion";
 import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../../App";
 import { SongListRow } from "../../components/SongListRow";
 import { matchesSongSearch } from "../../song-format";
+import { readSearchHistory, rememberSearch } from "../../search-history";
 
 const ALL_PAGE_SIZE = 60;
 
@@ -59,6 +60,7 @@ export function AllPage({
   const fastScrollTrackRef = useRef<HTMLDivElement | null>(null);
   const fastScrollThumbRef = useRef<HTMLButtonElement | null>(null);
   const [query, setQuery] = useState("");
+  const [searchHistory, setSearchHistory] = useState<string[]>(readSearchHistory);
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("az");
   const [isDraggingFastScroll, setIsDraggingFastScroll] = useState(false);
@@ -205,6 +207,12 @@ export function AllPage({
     scrollToFastScrollRatio(getRatioFromPointer(event.clientY));
   }
 
+  function saveSearchHistory() {
+    if (query.trim()) {
+      setSearchHistory(rememberSearch(query));
+    }
+  }
+
   useEffect(() => {
     updateThumbFromWindowScroll();
 
@@ -231,9 +239,17 @@ export function AllPage({
           <Search aria-hidden="true" /> Search all songs
           <input
             value={query}
+            list="wavestack-search-history"
             onChange={(event) => setQuery(event.target.value)}
+            onBlur={saveSearchHistory}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") saveSearchHistory();
+            }}
             placeholder="Filename, song, artist, album, or lyrics"
           />
+          <datalist id="wavestack-search-history">
+            {searchHistory.map((item) => <option key={item} value={item} />)}
+          </datalist>
         </label>
 
         <label className="all-page__sort">

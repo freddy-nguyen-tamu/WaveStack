@@ -129,7 +129,7 @@ export function Player({
       void playCurrent();
       setPendingAutoplay(false);
     }
-  }, [activeSong.id]);
+  }, [activeSong.id, activeSong.streamUrl]);
 
   useEffect(() => {
     if (playSignal > 0) {
@@ -197,6 +197,19 @@ export function Player({
     }
   }
 
+  function signedStreamUrlExpired(url: string): boolean {
+    if (!/\/(?:drive\/stream|api\/uploads)\//.test(url)) {
+      return false;
+    }
+
+    try {
+      const expires = Number(new URL(url, window.location.origin).searchParams.get("expires"));
+      return Number.isFinite(expires) && expires <= Math.floor(Date.now() / 1000) + 5;
+    } catch {
+      return false;
+    }
+  }
+
   async function playCurrent() {
     const audio = audioRef.current;
 
@@ -245,6 +258,11 @@ export function Player({
 
     if (isPlaying) {
       pauseCurrent(`Paused: ${displayName}`);
+      return;
+    }
+
+    if (signedStreamUrlExpired(activeSong.streamUrl)) {
+      onActiveSongChange(activeSong);
       return;
     }
 
@@ -471,7 +489,7 @@ export function Player({
         title: songTitle,
         artist: songArtist,
         album: activeSong.albumTitle,
-        artwork: [{ src: activeSong.localThumbnailUrl || activeSong.thumbnailUrl || "/favicon.ico" }]
+        artwork: [{ src: activeSong.localThumbnailUrl || activeSong.thumbnailUrl || activeSong.driveThumbnailUrl || "/favicon.ico" }]
       });
     }
     session.playbackState = isPlaying ? "playing" : "paused";

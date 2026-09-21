@@ -9,6 +9,7 @@ import { SongListRow } from "../../components/SongListRow";
 import { PaginationBar } from "../../components/PaginationBar";
 import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
 import { ToastNotice } from "../../components/ToastNotice";
+import { readSearchHistory, rememberSearch } from "../../search-history";
 
 type SearchPanelProps = {
   pageKey: string;
@@ -42,6 +43,7 @@ export function SearchPanel({
   onOpenDetails
 }: SearchPanelProps) {
   const [query, setQuery] = useState("");
+  const [searchHistory, setSearchHistory] = useState<string[]>(readSearchHistory);
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [message, setMessage] = useState("");
   const [page, setPage] = useState(1);
@@ -121,6 +123,12 @@ export function SearchPanel({
     return () => window.clearTimeout(timer);
   }, [message]);
 
+  function saveSearchHistory() {
+    if (query.trim()) {
+      setSearchHistory(rememberSearch(query));
+    }
+  }
+
   function play(song: Song) {
     onPlay(song, playbackContext);
     setMessage(`Playing: ${formatSongDisplayName(song)}`);
@@ -145,7 +153,18 @@ export function SearchPanel({
       <h2>{title}</h2>
       <label>
         <Search aria-hidden="true" /> Filename, song, artist, album, or lyrics
-        <input value={query} onChange={(event) => setQuery(event.target.value)} />
+        <input
+          value={query}
+          list="wavestack-search-history"
+          onChange={(event) => setQuery(event.target.value)}
+          onBlur={saveSearchHistory}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") saveSearchHistory();
+          }}
+        />
+        <datalist id="wavestack-search-history">
+          {searchHistory.map((item) => <option key={item} value={item} />)}
+        </datalist>
       </label>
       {message ? (
         <ToastNotice onDismiss={() => setMessage("")}>

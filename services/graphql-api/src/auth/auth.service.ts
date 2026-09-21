@@ -126,7 +126,7 @@ export class AuthService {
     }
 
     const token = jwt.sign({ userId: userRow.id, email: userRow.email }, this.jwtSecret, {
-      expiresIn: "7d"
+      expiresIn: "180d"
     });
 
     this.logger.log(`[Google OAuth] Login successful for ${email}`);

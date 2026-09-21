@@ -16,6 +16,7 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
   const [scrollRequest, setScrollRequest] = useState(0);
   const [forceSticky, setForceSticky] = useState(false);
   const restoreFocusRef = useRef(false);
+  const restoreScrollTopRef = useRef<number | null>(null);
   const sectionRef = useRef<HTMLElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -46,8 +47,11 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
   }
 
   function closeSearch() {
+    const modal = sectionRef.current?.closest<HTMLElement>(".song-modal");
+    restoreScrollTopRef.current = modal?.scrollTop ?? null;
     restoreFocusRef.current = true;
     setOpen(false);
+    setQuery("");
     setForceSticky(false);
     setSelected(0);
   }
@@ -79,6 +83,11 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
 
   useLayoutEffect(() => {
     if (!open) {
+      const modal = sectionRef.current?.closest<HTMLElement>(".song-modal");
+      if (modal && restoreScrollTopRef.current !== null) {
+        modal.scrollTop = restoreScrollTopRef.current;
+        restoreScrollTopRef.current = null;
+      }
       if (restoreFocusRef.current) {
         buttonRef.current?.focus({ preventScroll: true });
         restoreFocusRef.current = false;
@@ -126,9 +135,13 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
             <input ref={inputRef} id={inputId} type="text" value={query} placeholder="Find in lyrics"
               autoComplete="off" spellCheck={false}
               onChange={event => {
-                setQuery(event.target.value);
+                const nextQuery = event.target.value;
+                if (!nextQuery.trim() && query.trim()) {
+                  closeSearch();
+                  return;
+                }
+                setQuery(nextQuery);
                 setSelected(0);
-                if (!event.target.value.trim()) setForceSticky(false);
               }}
               onKeyDown={event => {
                 if (event.nativeEvent.isComposing) return;
