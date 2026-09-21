@@ -1,3 +1,4 @@
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ApolloQueryResult, useApolloClient, useMutation, useQuery } from "@apollo/client";
 import { Activity, Clock, Heart, ListMusic, Music2, RefreshCw, Search, TrendingUp, Upload } from "lucide-react";
@@ -290,6 +291,16 @@ function readSongCache(): Song[] {
   }
 }
 
+function readLastPlayedSong(): Song | null {
+  try {
+    const value = window.localStorage.getItem("wavestack:last-song");
+    const song = value ? JSON.parse(value) as Song : null;
+    return song?.id && song.id !== PLACEHOLDER_SONG_ID ? song : null;
+  } catch {
+    return null;
+  }
+}
+
 function writeLocalJson(key: string, value: unknown) {
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
@@ -323,7 +334,7 @@ export function App() {
     ensureCanonicalLink(location.pathname);
   }, [location.pathname]);
 
-  const [activeSong, setActiveSong] = useState<Song | null>(null);
+  const [activeSong, setActiveSong] = useState<Song | null>(readLastPlayedSong);
   const [queue, setQueue] = useState<Song[]>([]);
   const [playSignal, setPlaySignal] = useState(0);
   const [nowPlayingState, setNowPlayingState] = useState<
@@ -416,7 +427,7 @@ export function App() {
   const playedSinceManualPlayIdsRef = useRef<Set<string>>(new Set());
   const seededStartupAllContextRef = useRef(false);
   const startupAllContextFallbackTimerRef = useRef<number | null>(null);
-  const lastPlayedSongIdRef = useRef(window.localStorage.getItem("wavestack:last-song-id"));
+  const lastPlayedSongIdRef = useRef(activeSong?.id ?? window.localStorage.getItem("wavestack:last-song-id"));
 
   const [localTracks, setLocalTracks] = useState<Song[]>(() => {
     try {
@@ -1123,6 +1134,7 @@ export function App() {
       currentSongRef.current = playableSong;
       lastPlayedSongIdRef.current = playableSong.id;
       window.localStorage.setItem("wavestack:last-song-id", playableSong.id);
+      writeLocalJson("wavestack:last-song", playableSong);
       setActiveSong(playableSong);
 
       if (
