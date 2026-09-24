@@ -9,6 +9,7 @@ import { SongListRow } from "../../components/SongListRow";
 import { PaginationBar } from "../../components/PaginationBar";
 import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
 import { ToastNotice } from "../../components/ToastNotice";
+import { SearchHistorySuggestions } from "../../components/SearchHistorySuggestions";
 import { readSearchHistory, rememberSearch } from "../../search-history";
 
 type SearchPanelProps = {
@@ -44,6 +45,7 @@ export function SearchPanel({
 }: SearchPanelProps) {
   const [query, setQuery] = useState("");
   const [searchHistory, setSearchHistory] = useState<string[]>(readSearchHistory);
+  const [searchHistoryOpen, setSearchHistoryOpen] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [message, setMessage] = useState("");
   const [page, setPage] = useState(1);
@@ -153,18 +155,42 @@ export function SearchPanel({
       <h2>{title}</h2>
       <label>
         <Search aria-hidden="true" /> Filename, song, artist, album, or lyrics
-        <input
-          value={query}
-          list="wavestack-search-history"
-          onChange={(event) => setQuery(event.target.value)}
-          onBlur={saveSearchHistory}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") saveSearchHistory();
-          }}
-        />
-        <datalist id="wavestack-search-history">
-          {searchHistory.map((item) => <option key={item} value={item} />)}
-        </datalist>
+        <span className="search-history-field">
+          <input
+            value={query}
+            autoComplete="off"
+            onFocus={() => {
+              setSearchHistory(readSearchHistory());
+              setSearchHistoryOpen(true);
+            }}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setSearchHistoryOpen(true);
+            }}
+            onBlur={() => {
+              saveSearchHistory();
+              setSearchHistoryOpen(false);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                saveSearchHistory();
+                setSearchHistoryOpen(false);
+              } else if (event.key === "Escape") {
+                setSearchHistoryOpen(false);
+              }
+            }}
+          />
+          <SearchHistorySuggestions
+            history={searchHistory}
+            query={query}
+            open={searchHistoryOpen}
+            onSelect={(value) => {
+              setQuery(value);
+              setSearchHistory(rememberSearch(value));
+              setSearchHistoryOpen(false);
+            }}
+          />
+        </span>
       </label>
       {message ? (
         <ToastNotice onDismiss={() => setMessage("")}>
@@ -221,3 +247,4 @@ export function SearchPanel({
     </article>
   );
 }
+

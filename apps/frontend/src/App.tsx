@@ -1,4 +1,3 @@
-
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ApolloQueryResult, useApolloClient, useMutation, useQuery } from "@apollo/client";
 import { Activity, Clock, Heart, ListMusic, Music2, RefreshCw, Search, TrendingUp, Upload } from "lucide-react";
@@ -1097,59 +1096,73 @@ export function App() {
 
   type PlaybackAdvanceReason = "manual" | "ended";
 
+  async function fetchFreshPlayableSong(song: Song): Promise<Song> {
+    if (!/\/(?:drive\/stream|api\/uploads)\//.test(song.streamUrl)) {
+      return song;
+    }
+
+    const result = await apolloClient.query<{ songDetails: Song | null }>({
+      query: SONG_DETAILS_QUERY,
+      variables: { id: song.id },
+      fetchPolicy: "network-only"
+    });
+    const refreshed = result.data.songDetails;
+
+    if (!refreshed?.streamUrl) {
+      throw new Error("WaveStack could not refresh this song's playback link.");
+    }
+
+    return {
+      ...song,
+      ...refreshed,
+      streamUrl: refreshed.streamUrl
+    };
+  }
+
+  async function refreshSongStreamUrl(song: Song): Promise<Song> {
+    const refreshed = await fetchFreshPlayableSong(song);
+
+    if (currentSongRef.current?.id === song.id) {
+      currentSongRef.current = refreshed;
+      lastPlayedSongIdRef.current = refreshed.id;
+      window.localStorage.setItem("wavestack:last-song-id", refreshed.id);
+      writeLocalJson("wavestack:last-song", refreshed);
+      setActiveSong(refreshed);
+    }
+
+    return refreshed;
+  }
+
   function startSong(song: Song, options: { preserveContext?: boolean } = {}) {
-    const requestId = playRequestIdRef.current + 1;
     const previousSong = currentSongRef.current;
     const shouldFollowPlaybackInDetails =
       Boolean(previousSong) &&
       detailsSong?.id === previousSong?.id &&
       nowPlayingState.isPlaying;
-    playRequestIdRef.current = requestId;
 
-    void (async () => {
-      let playableSong = song;
+    // Commit the user's play request immediately. Do not wait for a network refresh here:
+    // delaying the state change makes rapid song clicks race each other and can outlive
+    // the browser's transient user-activation window. The Player refreshes an expired
+    // signed URL on demand and retries failed signed streams without lengthening the URL TTL.
+    playRequestIdRef.current += 1;
+    currentSongRef.current = song;
+    lastPlayedSongIdRef.current = song.id;
+    window.localStorage.setItem("wavestack:last-song-id", song.id);
+    writeLocalJson("wavestack:last-song", song);
+    setActiveSong(song);
 
-      if (/\/(?:drive\/stream|api\/uploads)\//.test(song.streamUrl)) {
-        try {
-          const result = await apolloClient.query<{ songDetails: Song | null }>({
-            query: SONG_DETAILS_QUERY,
-            variables: { id: song.id },
-            fetchPolicy: "network-only"
-          });
-          if (result.data.songDetails?.streamUrl) {
-            playableSong = {
-              ...song,
-              streamUrl: result.data.songDetails.streamUrl
-            };
-          }
-        } catch {
-          playableSong = song;
-        }
-      }
+    if (
+      shouldFollowPlaybackInDetails &&
+      previousSong &&
+      song.id !== previousSong.id
+    ) {
+      setDetailsSong((openSong) =>
+        openSong?.id === previousSong.id ? song : openSong
+      );
+      setDetailsPlaybackContext(playbackContextRef.current);
+    }
 
-      if (playRequestIdRef.current !== requestId) {
-        return;
-      }
-
-      currentSongRef.current = playableSong;
-      lastPlayedSongIdRef.current = playableSong.id;
-      window.localStorage.setItem("wavestack:last-song-id", playableSong.id);
-      writeLocalJson("wavestack:last-song", playableSong);
-      setActiveSong(playableSong);
-
-      if (
-        shouldFollowPlaybackInDetails &&
-        previousSong &&
-        playableSong.id !== previousSong.id
-      ) {
-        setDetailsSong((openSong) =>
-          openSong?.id === previousSong.id ? playableSong : openSong
-        );
-        setDetailsPlaybackContext(playbackContextRef.current);
-      }
-
-      setPlaySignal((value) => value + 1);
-    })();
+    setPlaySignal((value) => value + 1);
   }
 
   function popNextQueuedSong(): Song | null {
@@ -2352,7 +2365,7 @@ export function App() {
               queueRef.current = sanitizedQueue;
               setQueue(sanitizedQueue);
             }}
-            onActiveSongChange={(song) => startSong(song)}
+            onRefreshStreamUrl={refreshSongStreamUrl}
             onOpenDetails={openDetails}
             onPlaybackStateChange={setNowPlayingState}
             resolvingNext={isResolvingNextSong}
@@ -2615,3 +2628,4 @@ export function App() {
     </>
   );
 }
+

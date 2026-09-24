@@ -1,5 +1,14 @@
 import { ArrowDown, ArrowUp, Search, X } from "lucide-react";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode
+} from "react";
 import { LoadingStatus } from "../../components/LoadingStatus";
 
 type LyricSearchProps = {
@@ -8,15 +17,17 @@ type LyricSearchProps = {
   children?: ReactNode;
 };
 
+type FloatingSearchStyle = Pick<CSSProperties, "top" | "left" | "width">;
+
 export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
   const [focusRequest, setFocusRequest] = useState(0);
   const [scrollRequest, setScrollRequest] = useState(0);
-  const [forceSticky, setForceSticky] = useState(false);
+  const [floating, setFloating] = useState(false);
+  const [floatingStyle, setFloatingStyle] = useState<FloatingSearchStyle>({});
   const restoreFocusRef = useRef(false);
-  const restoreScrollTopRef = useRef<number | null>(null);
   const sectionRef = useRef<HTMLElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -32,27 +43,52 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
     }));
   }, [lyrics, open, query]);
   const current = matches.length ? selected % matches.length : 0;
-  const searching = open && (Boolean(query.trim()) || forceSticky);
+  const searching = open && Boolean(query.trim());
 
-  function openSearch(stickyIfPastToolbar = false) {
-    if (stickyIfPastToolbar) {
-      const modal = sectionRef.current?.closest<HTMLElement>(".song-modal");
-      const toolbar = toolbarRef.current;
-      const modalTop = modal?.getBoundingClientRect().top ?? 0;
-      const toolbarTop = toolbar?.getBoundingClientRect().top ?? modalTop;
-      setForceSticky(toolbarTop < modalTop + 8);
+  function updateFloatingPosition() {
+    const modal = sectionRef.current?.closest<HTMLElement>(".song-modal");
+
+    if (!modal) {
+      return;
+    }
+
+    const modalBounds = modal.getBoundingClientRect();
+    const horizontalInset = window.innerWidth <= 640 ? 12 : 20;
+    const width = Math.max(240, Math.min(420, modalBounds.width - horizontalInset * 2));
+
+    setFloatingStyle({
+      top: Math.max(12, modalBounds.top + 12),
+      left: Math.max(12, modalBounds.right - width - horizontalInset),
+      width
+    });
+  }
+
+  function openSearch(floatWhenOutOfView = false) {
+    const modal = sectionRef.current?.closest<HTMLElement>(".song-modal");
+    const toolbar = toolbarRef.current;
+    let shouldFloat = false;
+
+    if (floatWhenOutOfView && modal && toolbar) {
+      const modalBounds = modal.getBoundingClientRect();
+      const toolbarBounds = toolbar.getBoundingClientRect();
+      shouldFloat =
+        toolbarBounds.bottom < modalBounds.top + 8 ||
+        toolbarBounds.top > modalBounds.bottom - 8;
+    }
+
+    setFloating(shouldFloat);
+    if (shouldFloat) {
+      updateFloatingPosition();
     }
     setOpen(true);
     setFocusRequest(value => value + 1);
   }
 
   function closeSearch() {
-    const modal = sectionRef.current?.closest<HTMLElement>(".song-modal");
-    restoreScrollTopRef.current = modal?.scrollTop ?? null;
     restoreFocusRef.current = true;
     setOpen(false);
     setQuery("");
-    setForceSticky(false);
+    setFloating(false);
     setSelected(0);
   }
 
@@ -67,6 +103,7 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
     function handleFind(event: KeyboardEvent) {
       const modals = document.querySelectorAll(".song-modal-backdrop");
       if (sectionRef.current?.closest(".song-modal-backdrop") !== modals[modals.length - 1]) return;
+
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "f") {
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -77,47 +114,60 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
         closeSearch();
       }
     }
+
     window.addEventListener("keydown", handleFind, true);
     return () => window.removeEventListener("keydown", handleFind, true);
   }, [open]);
 
   useLayoutEffect(() => {
     if (!open) {
-      const modal = sectionRef.current?.closest<HTMLElement>(".song-modal");
-      if (modal && restoreScrollTopRef.current !== null) {
-        modal.scrollTop = restoreScrollTopRef.current;
-        restoreScrollTopRef.current = null;
-      }
       if (restoreFocusRef.current) {
         buttonRef.current?.focus({ preventScroll: true });
         restoreFocusRef.current = false;
       }
       return;
     }
+
     inputRef.current?.focus({ preventScroll: true });
     inputRef.current?.select();
   }, [open, focusRequest]);
 
-  // Scroll once for a new query or explicit navigation; manual scrolling never re-triggers it.
+  useEffect(() => {
+    if (!open || !floating) {
+      return;
+    }
+
+    updateFloatingPosition();
+    window.addEventListener("resize", updateFloatingPosition);
+
+    return () => window.removeEventListener("resize", updateFloatingPosition);
+  }, [open, floating]);
+
+  // Scroll only when a match is chosen. Opening/closing the find UI itself never moves the modal.
   useLayoutEffect(() => {
     const match = activeMatchRef.current;
     const modal = sectionRef.current?.closest<HTMLElement>(".song-modal");
-    if (!match || !modal || !open || (!query.trim() && !scrollRequest)) return;
+    if (!match || !modal || !open || !query.trim()) return;
+
     const bounds = modal.getBoundingClientRect();
     const target = match.getBoundingClientRect();
-    const inset = (toolbarRef.current?.getBoundingClientRect().height ?? 0) + 16;
+    const inset = floating ? 76 : (toolbarRef.current?.getBoundingClientRect().height ?? 0) + 16;
+
     if (target.top < bounds.top + inset || target.bottom > bounds.bottom - 16) {
       modal.scrollTop += target.top - bounds.top - inset;
     }
-  }, [matches, current, open, scrollRequest]);
+  }, [matches, current, open, query, scrollRequest, floating]);
 
   const highlightedLyrics: ReactNode[] = [];
   let end = 0;
   matches.forEach((match, index) => {
     highlightedLyrics.push(lyrics.slice(end, match.start));
     highlightedLyrics.push(
-      <mark key={match.start} ref={index === current ? activeMatchRef : undefined}
-        className={index === current ? "lyric-find__match lyric-find__match--active" : "lyric-find__match"}>
+      <mark
+        key={match.start}
+        ref={index === current ? activeMatchRef : undefined}
+        className={index === current ? "lyric-find__match lyric-find__match--active" : "lyric-find__match"}
+      >
         {lyrics.slice(match.start, match.end)}
       </mark>
     );
@@ -125,42 +175,73 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
   });
   highlightedLyrics.push(lyrics.slice(end));
 
+  const searchControls = open ? (
+    <div className="lyric-find__controls" role="search" aria-label="Find in this song's lyrics">
+      <label className="sr-only" htmlFor={inputId}>Find in lyrics</label>
+      <input
+        ref={inputRef}
+        id={inputId}
+        type="text"
+        value={query}
+        placeholder="Find in lyrics"
+        autoComplete="off"
+        spellCheck={false}
+        onChange={event => {
+          const nextQuery = event.target.value;
+          if (!nextQuery.trim() && query.trim()) {
+            closeSearch();
+            return;
+          }
+          setQuery(nextQuery);
+          setSelected(0);
+        }}
+        onKeyDown={event => {
+          if (event.nativeEvent.isComposing) return;
+          if (["ArrowUp", "ArrowDown", "Enter"].includes(event.key)) {
+            event.preventDefault();
+            event.stopPropagation();
+            navigate(event.key === "ArrowUp" || (event.key === "Enter" && event.shiftKey) ? -1 : 1);
+          }
+        }}
+      />
+      <span className="lyric-find__count" aria-live="polite" aria-atomic="true">
+        {query.trim() ? `${matches.length ? current + 1 : 0}/${matches.length}` : ""}
+      </span>
+      <button type="button" aria-label="Previous lyric match" title="Previous match" disabled={!matches.length} onClick={() => navigate(-1)}>
+        <ArrowUp aria-hidden="true" />
+      </button>
+      <button type="button" aria-label="Next lyric match" title="Next match" disabled={!matches.length} onClick={() => navigate(1)}>
+        <ArrowDown aria-hidden="true" />
+      </button>
+      <button type="button" aria-label="Close lyric search" title="Close search" onClick={closeSearch}>
+        <X aria-hidden="true" />
+      </button>
+    </div>
+  ) : null;
+
   return (
     <section ref={sectionRef} className={searching ? "song-modal__lyrics-panel lyric-find--searching" : "song-modal__lyrics-panel"} aria-label="Lyrics">
+      {open && floating ? (
+        <div className="lyric-find__floating" style={floatingStyle}>
+          {searchControls}
+        </div>
+      ) : null}
+
       <div ref={toolbarRef} className="lyric-find__toolbar">
         <h3>Lyrics</h3>
         {open ? (
-          <div className="lyric-find__controls" role="search" aria-label="Find in this song's lyrics">
-            <label className="sr-only" htmlFor={inputId}>Find in lyrics</label>
-            <input ref={inputRef} id={inputId} type="text" value={query} placeholder="Find in lyrics"
-              autoComplete="off" spellCheck={false}
-              onChange={event => {
-                const nextQuery = event.target.value;
-                if (!nextQuery.trim() && query.trim()) {
-                  closeSearch();
-                  return;
-                }
-                setQuery(nextQuery);
-                setSelected(0);
-              }}
-              onKeyDown={event => {
-                if (event.nativeEvent.isComposing) return;
-                if (["ArrowUp", "ArrowDown", "Enter"].includes(event.key)) {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  navigate(event.key === "ArrowUp" || (event.key === "Enter" && event.shiftKey) ? -1 : 1);
-                }
-              }}
-            />
-            <span className="lyric-find__count" aria-live="polite" aria-atomic="true">
-              {query.trim() ? `${matches.length ? current + 1 : 0}/${matches.length}` : ""}
-            </span>
-            <button type="button" aria-label="Previous lyric match" title="Previous match" disabled={!matches.length} onClick={() => navigate(-1)}><ArrowUp aria-hidden="true" /></button>
-            <button type="button" aria-label="Next lyric match" title="Next match" disabled={!matches.length} onClick={() => navigate(1)}><ArrowDown aria-hidden="true" /></button>
-            <button type="button" aria-label="Close lyric search" title="Close search" onClick={closeSearch}><X aria-hidden="true" /></button>
-          </div>
+          floating ? null : searchControls
         ) : (
-          <button ref={buttonRef} type="button" className="lyric-find__open" aria-label="Find in lyrics" title="Find in lyrics (Ctrl+F)" onClick={() => openSearch()}><Search aria-hidden="true" /></button>
+          <button
+            ref={buttonRef}
+            type="button"
+            className="lyric-find__open"
+            aria-label="Find in lyrics"
+            title="Find in lyrics (Ctrl+F)"
+            onClick={() => openSearch()}
+          >
+            <Search aria-hidden="true" />
+          </button>
         )}
       </div>
       {loadingLabel ? <LoadingStatus label={loadingLabel} /> : null}

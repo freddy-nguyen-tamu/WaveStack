@@ -126,7 +126,9 @@ export class AuthService {
     }
 
     const token = jwt.sign({ userId: userRow.id, email: userRow.email }, this.jwtSecret, {
-      expiresIn: "180d"
+      // WaveStack is a personal music library. Keep the app session durable across
+      // browser/laptop restarts while Google refresh credentials remain server-side.
+      expiresIn: "10y"
     });
 
     this.logger.log(`[Google OAuth] Login successful for ${email}`);
@@ -177,3 +179,4 @@ export class AuthService {
     }
   }
 }
+

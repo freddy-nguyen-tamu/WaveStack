@@ -14,6 +14,7 @@ import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongH
 import { SongListRow } from "../../components/SongListRow";
 import { matchesSongSearch } from "../../song-format";
 import { readSearchHistory, rememberSearch } from "../../search-history";
+import { SearchHistorySuggestions } from "../../components/SearchHistorySuggestions";
 
 const ALL_PAGE_SIZE = 60;
 
@@ -61,6 +62,7 @@ export function AllPage({
   const fastScrollThumbRef = useRef<HTMLButtonElement | null>(null);
   const [query, setQuery] = useState("");
   const [searchHistory, setSearchHistory] = useState<string[]>(readSearchHistory);
+  const [searchHistoryOpen, setSearchHistoryOpen] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("az");
   const [isDraggingFastScroll, setIsDraggingFastScroll] = useState(false);
@@ -237,19 +239,43 @@ export function AllPage({
       <section className="all-page__controls" aria-label="All songs controls">
         <label className="all-page__search">
           <Search aria-hidden="true" /> Search all songs
-          <input
-            value={query}
-            list="wavestack-search-history"
-            onChange={(event) => setQuery(event.target.value)}
-            onBlur={saveSearchHistory}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") saveSearchHistory();
-            }}
-            placeholder="Filename, song, artist, album, or lyrics"
-          />
-          <datalist id="wavestack-search-history">
-            {searchHistory.map((item) => <option key={item} value={item} />)}
-          </datalist>
+          <span className="search-history-field">
+            <input
+              value={query}
+              autoComplete="off"
+              onFocus={() => {
+                setSearchHistory(readSearchHistory());
+                setSearchHistoryOpen(true);
+              }}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setSearchHistoryOpen(true);
+              }}
+              onBlur={() => {
+                saveSearchHistory();
+                setSearchHistoryOpen(false);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  saveSearchHistory();
+                  setSearchHistoryOpen(false);
+                } else if (event.key === "Escape") {
+                  setSearchHistoryOpen(false);
+                }
+              }}
+              placeholder="Filename, song, artist, album, or lyrics"
+            />
+            <SearchHistorySuggestions
+              history={searchHistory}
+              query={query}
+              open={searchHistoryOpen}
+              onSelect={(value) => {
+                setQuery(value);
+                setSearchHistory(rememberSearch(value));
+                setSearchHistoryOpen(false);
+              }}
+            />
+          </span>
         </label>
 
         <label className="all-page__sort">
@@ -321,3 +347,4 @@ export function AllPage({
     </article>
   );
 }
+

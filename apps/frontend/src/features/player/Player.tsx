@@ -35,7 +35,7 @@ type PlayerProps = {
   onToggleShuffle: () => void;
   onCycleRepeatMode: () => void;
   onQueueChange: (songs: Song[]) => void;
-  onActiveSongChange: (song: Song) => void;
+  onRefreshStreamUrl: (song: Song) => Promise<Song>;
   onOpenDetails: (song: Song) => void;
   onPlaybackStateChange: (state: PlayerPlaybackState) => void;
   onNext: () => void;
@@ -56,7 +56,7 @@ export function Player({
   onToggleShuffle,
   onCycleRepeatMode,
   onQueueChange,
-  onActiveSongChange,
+  onRefreshStreamUrl,
   onOpenDetails,
   onPlaybackStateChange,
   onNext,
@@ -67,11 +67,16 @@ export function Player({
   const discAngleRef = useRef(0);
   const discTimestampRef = useRef<number | null>(null);
   const playRequestRef = useRef(0);
+  const playPromiseRef = useRef<Promise<void> | null>(null);
+  const pendingSeekRef = useRef<number | null>(null);
+  const desiredPlaybackRef = useRef(false);
+  const currentSourceSongIdRef = useRef(activeSong.id);
+  const sourcePlaySignalRef = useRef(playSignal);
+  const recoveryAttemptsRef = useRef(0);
   const pressedKeysRef = useRef<Set<string>>(new Set());
   const comboLockRef = useRef<"next" | "previous" | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [hasPlaybackHistory, setHasPlaybackHistory] = useState(false);
-  const [pendingAutoplay, setPendingAutoplay] = useState(false);
   const [volume, setVolume] = useState(0.7);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(activeSong.durationSeconds || 0);
@@ -116,20 +121,43 @@ export function Player({
 
     if (!audio) return;
 
-    playRequestRef.current += 1;
-    audio.pause();
-    audio.load();
-    setIsPlaying(false);
-    setCurrentTime(0);
-    setDuration(activeSong.durationSeconds || 0);
-    setPlayError("");
-    resetDiscRotation();
+    const songChanged = currentSourceSongIdRef.current !== activeSong.id;
+    const explicitPlayRequest = sourcePlaySignalRef.current !== playSignal;
+    const resetForNewPlay = songChanged || explicitPlayRequest;
+    const nextSource = resolveMediaUrl(activeSong.streamUrl);
+    const currentSource = audio.src ? resolveMediaUrl(audio.src) : "";
+    currentSourceSongIdRef.current = activeSong.id;
+    sourcePlaySignalRef.current = playSignal;
 
-    if (pendingAutoplay) {
-      void playCurrent();
-      setPendingAutoplay(false);
+    if (resetForNewPlay) {
+      recoveryAttemptsRef.current = 0;
+      playRequestRef.current += 1;
+      desiredPlaybackRef.current = false;
+      pendingSeekRef.current = null;
+      audio.pause();
+      try {
+        audio.currentTime = 0;
+      } catch {
+        // The fresh source may not have metadata yet; load() below starts at zero anyway.
+      }
+      setIsPlaying(false);
+      setCurrentTime(0);
+      setDuration(activeSong.durationSeconds || 0);
+      setPlayError("");
+      resetDiscRotation();
     }
-  }, [activeSong.id, activeSong.streamUrl]);
+
+    // Player-owned source assignment prevents React from interrupting an in-flight
+    // recovery when a refreshed signed URL is written back to activeSong.
+    if (currentSource !== nextSource) {
+      const resumeAt = resetForNewPlay ? 0 : audio.currentTime || currentTime;
+      pendingSeekRef.current = resumeAt > 0 ? resumeAt : null;
+      audio.pause();
+      audio.src = activeSong.streamUrl;
+      audio.load();
+      setIsPlaying(false);
+    }
+  }, [activeSong.id, activeSong.streamUrl, playSignal]);
 
   useEffect(() => {
     if (playSignal > 0) {
@@ -197,6 +225,18 @@ export function Player({
     }
   }
 
+  function resolveMediaUrl(url: string): string {
+    if (!url) {
+      return "";
+    }
+
+    try {
+      return new URL(url, window.location.href).href;
+    } catch {
+      return url;
+    }
+  }
+
   function signedStreamUrlExpired(url: string): boolean {
     if (!/\/(?:drive\/stream|api\/uploads)\//.test(url)) {
       return false;
@@ -210,40 +250,145 @@ export function Player({
     }
   }
 
-  async function playCurrent() {
+  function isRecoverablePlaybackError(error: unknown, audio: HTMLAudioElement): boolean {
+    if (error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "AbortError")) {
+      return false;
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+
+    if (/interrupted by a call to pause/i.test(message)) {
+      return false;
+    }
+
+    const source = audio.currentSrc || audio.src || activeSong.streamUrl;
+    return Boolean(audio.error) || /\/(?:drive\/stream|api\/uploads)\//.test(source);
+  }
+
+  function restorePendingSeek() {
+    const audio = audioRef.current;
+    const pendingSeek = pendingSeekRef.current;
+
+    if (!audio || pendingSeek === null) {
+      syncProgressFromAudio();
+      return;
+    }
+
+    try {
+      const maxTime = Number.isFinite(audio.duration) && audio.duration > 0
+        ? Math.max(0, audio.duration - 0.05)
+        : pendingSeek;
+      audio.currentTime = Math.min(pendingSeek, maxTime);
+      setCurrentTime(audio.currentTime || pendingSeek);
+      pendingSeekRef.current = null;
+    } catch {
+      // Some browsers do not allow seeking until a later readyState. Keep it pending.
+    }
+
+    syncProgressFromAudio();
+  }
+
+  async function refreshStreamForPlayback(audio: HTMLAudioElement): Promise<void> {
+    const resumeAt = Number.isFinite(audio.currentTime) ? audio.currentTime : currentTime;
+    const refreshed = await onRefreshStreamUrl(activeSong);
+
+    if (!refreshed.streamUrl) {
+      throw new Error("WaveStack did not return a fresh playback link.");
+    }
+
+    const currentSource = resolveMediaUrl(audio.currentSrc || audio.src);
+    const nextSource = resolveMediaUrl(refreshed.streamUrl);
+
+    if (currentSource !== nextSource) {
+      pendingSeekRef.current = resumeAt > 0 ? resumeAt : null;
+      audio.pause();
+      audio.src = refreshed.streamUrl;
+      audio.load();
+    }
+  }
+
+  async function playCurrent(forceRefresh = false) {
     const audio = audioRef.current;
 
     if (!audio) return;
 
+    desiredPlaybackRef.current = true;
+    setHasPlaybackHistory(true);
+
+    if (playPromiseRef.current) {
+      const inFlightPlay = playPromiseRef.current;
+      await inFlightPlay;
+
+      // A quick pause -> play sequence can invalidate the first request while its
+      // play() promise is still settling. Honor the latest intent instead of making
+      // the user click several times to get out of that stale in-flight request.
+      if (desiredPlaybackRef.current && audio.paused && !playPromiseRef.current) {
+        return playCurrent(forceRefresh);
+      }
+
+      return;
+    }
+
     const requestId = playRequestRef.current + 1;
     playRequestRef.current = requestId;
 
-    try {
-      setHasPlaybackHistory(true);
-      setPlayError("");
-      await audio.play();
+    const task = (async () => {
+      try {
+        setPlayError("");
 
-      if (playRequestRef.current === requestId) {
-        setIsPlaying(true);
-        setMessage(`Playing: ${displayName}`);
+        const currentSource = audio.currentSrc || audio.src || activeSong.streamUrl;
+        if (forceRefresh || signedStreamUrlExpired(currentSource)) {
+          await refreshStreamForPlayback(audio);
+        }
+
+        try {
+          await audio.play();
+        } catch (initialError) {
+          if (
+            !forceRefresh &&
+            recoveryAttemptsRef.current < 2 &&
+            isRecoverablePlaybackError(initialError, audio)
+          ) {
+            recoveryAttemptsRef.current += 1;
+            await refreshStreamForPlayback(audio);
+            await audio.play();
+          } else {
+            throw initialError;
+          }
+        }
+
+        if (playRequestRef.current === requestId && desiredPlaybackRef.current) {
+          setIsPlaying(true);
+          setMessage(`Playing: ${displayName}`);
+        }
+      } catch (error) {
+        if (playRequestRef.current !== requestId || !desiredPlaybackRef.current) {
+          return;
+        }
+
+        setIsPlaying(false);
+        const errorMessage = error instanceof Error ? error.message : "Browser blocked playback.";
+
+        if (/interrupted by a call to pause/i.test(errorMessage)) {
+          return;
+        }
+
+        // A failed play attempt is no longer "pending". Leaving this true makes
+        // the next click behave like Pause, which is why playback can feel stuck.
+        desiredPlaybackRef.current = false;
+        setPlayError(errorMessage);
+      } finally {
+        playPromiseRef.current = null;
       }
-    } catch (error) {
-      if (playRequestRef.current !== requestId) {
-        return;
-      }
+    })();
 
-      setIsPlaying(false);
-      const message = error instanceof Error ? error.message : "Browser blocked playback.";
-
-      if (message.includes("interrupted by a call to pause")) {
-        return;
-      }
-
-      setPlayError(message);
-    }
+    playPromiseRef.current = task;
+    return task;
   }
 
   function pauseCurrent(messageText: string) {
+    desiredPlaybackRef.current = false;
+    playRequestRef.current += 1;
     pauseDiscRotation();
     audioRef.current?.pause();
     setIsPlaying(false);
@@ -256,13 +401,8 @@ export function Player({
 
     setHasPlaybackHistory(true);
 
-    if (isPlaying) {
+    if (isPlaying || desiredPlaybackRef.current) {
       pauseCurrent(`Paused: ${displayName}`);
-      return;
-    }
-
-    if (signedStreamUrlExpired(activeSong.streamUrl)) {
-      onActiveSongChange(activeSong);
       return;
     }
 
@@ -384,7 +524,7 @@ export function Player({
 
       event.preventDefault();
 
-      if (isPlaying) {
+      if (isPlaying || desiredPlaybackRef.current) {
         pauseCurrent(`Paused: ${displayName}`);
         return;
       }
@@ -481,6 +621,41 @@ export function Player({
     setMessage(isFavorite ? `Removed favorite: ${displayName}` : `Added favorite: ${displayName}`);
   }
 
+  function resolveArtworkUrl(url: string): string {
+    if (/^(?:https?:|blob:|data:)/i.test(url)) {
+      return url;
+    }
+
+    if (url.startsWith("/drive/") || url.startsWith("/api/")) {
+      try {
+        return new URL(url, new URL(activeSong.streamUrl, window.location.href).origin).href;
+      } catch {
+        // Fall through to the WaveStack frontend origin.
+      }
+    }
+
+    return new URL(url, window.location.origin).href;
+  }
+
+  function getMediaSessionArtwork(): MediaImage[] {
+    const artworkSource = [
+      activeSong.localThumbnailUrl,
+      activeSong.thumbnailUrl,
+      activeSong.driveThumbnailUrl,
+      activeSong.embeddedArtworkUrl
+    ].find((candidate) => Boolean(candidate?.trim()));
+
+    if (artworkSource) {
+      return [{ src: resolveArtworkUrl(artworkSource) }];
+    }
+
+    return [{
+      src: new URL("/icon-512.png", window.location.origin).href,
+      sizes: "512x512",
+      type: "image/png"
+    }];
+  }
+
   useEffect(() => {
     if (!("mediaSession" in navigator) || !hasPlaybackHistory) return;
     const session = navigator.mediaSession;
@@ -489,7 +664,7 @@ export function Player({
         title: songTitle,
         artist: songArtist,
         album: activeSong.albumTitle,
-        artwork: [{ src: activeSong.localThumbnailUrl || activeSong.thumbnailUrl || activeSong.driveThumbnailUrl || "/favicon.ico" }]
+        artwork: getMediaSessionArtwork()
       });
     }
     session.playbackState = isPlaying ? "playing" : "paused";
@@ -535,6 +710,24 @@ export function Player({
     setVolume(nextVolume);
   }
 
+  function handleAudioError() {
+    const audio = audioRef.current;
+
+    if (!audio || !desiredPlaybackRef.current) {
+      return;
+    }
+
+    if (recoveryAttemptsRef.current >= 2) {
+      desiredPlaybackRef.current = false;
+      setIsPlaying(false);
+      setPlayError("Playback failed after WaveStack refreshed the stream link.");
+      return;
+    }
+
+    recoveryAttemptsRef.current += 1;
+    void playCurrent(true);
+  }
+
   return (
     <>
       <article className="player-card">
@@ -545,12 +738,17 @@ export function Player({
 
         <audio
           ref={audioRef}
-          src={activeSong.streamUrl}
           preload="metadata"
           controlsList="nodownload noplaybackrate noremoteplayback"
-          onLoadedMetadata={syncProgressFromAudio}
-          onTimeUpdate={syncProgressFromAudio}
-          onDurationChange={syncProgressFromAudio}
+          onLoadedMetadata={restorePendingSeek}
+          onTimeUpdate={() => {
+            syncProgressFromAudio();
+            if ((audioRef.current?.currentTime ?? 0) > 3) {
+              recoveryAttemptsRef.current = 0;
+            }
+          }}
+          onDurationChange={restorePendingSeek}
+          onError={handleAudioError}
           onPlay={() => {
             startDiscRotation();
             setHasPlaybackHistory(true);
@@ -562,6 +760,7 @@ export function Player({
             syncProgressFromAudio();
           }}
           onEnded={() => {
+            desiredPlaybackRef.current = false;
             pauseDiscRotation();
             setIsPlaying(false);
             onEnded();
@@ -762,3 +961,4 @@ export function Player({
     </>
   );
 }
+
