@@ -667,7 +667,6 @@ export function Player({
         artwork: getMediaSessionArtwork()
       });
     }
-    session.playbackState = isPlaying ? "playing" : "paused";
     const handlers: Partial<Record<MediaSessionAction, MediaSessionActionHandler>> = {
       play: () => { void playCurrent(); },
       pause: () => pauseCurrent(`Paused: ${displayName}`),
@@ -683,10 +682,21 @@ export function Player({
     }
     return () => {
       registered.forEach(action => session.setActionHandler(action, null));
-      session.playbackState = "none";
-      session.metadata = null;
     };
-  }, [activeSong, hasPlaybackHistory, isPlaying, onNext, onPrevious, resolvingNext]);
+  }, [activeSong, hasPlaybackHistory, onNext, onPrevious, resolvingNext]);
+
+  useEffect(() => {
+    if (!("mediaSession" in navigator) || !hasPlaybackHistory) return;
+    navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
+  }, [hasPlaybackHistory, isPlaying]);
+
+  useEffect(() => {
+    return () => {
+      if (!("mediaSession" in navigator)) return;
+      navigator.mediaSession.playbackState = "none";
+      navigator.mediaSession.metadata = null;
+    };
+  }, []);
 
   function handleSeek(value: string) {
     const nextTime = Number(value);
