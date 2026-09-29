@@ -8401,6 +8401,9 @@ button:not(:disabled):active {
   .app-nav {
     position: static !important;
     inset: auto !important;
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+    order: 0 !important;
     display: flex !important;
     width: 100% !important;
     height: 100% !important;
@@ -8447,6 +8450,9 @@ button:not(:disabled):active {
   .app-player-region {
     position: static !important;
     inset: auto !important;
+    grid-column: 1 !important;
+    grid-row: 2 !important;
+    order: 1 !important;
     display: block !important;
     width: 100% !important;
     height: 100% !important;
