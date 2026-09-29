@@ -6311,7 +6311,7 @@ article > h2,
   opacity: 1;
 }
 
-.app-header__search button {
+.app-header__search > button {
   width: 2.35rem;
   min-width: 2.35rem;
   min-height: 2.35rem;
@@ -6323,8 +6323,8 @@ article > h2,
   color: var(--color-muted);
 }
 
-.app-header__search button:hover,
-.app-header__search button:focus-visible {
+.app-header__search > button:hover,
+.app-header__search > button:focus-visible {
   background: transparent;
   color: var(--color-red);
 }
@@ -6637,7 +6637,7 @@ html[data-theme="dark"] .player-card .player-actions__button--favorite[aria-pres
     font-size: clamp(0.7rem, 0.85vw, 1rem);
   }
 
-  .app-header__search button {
+  .app-header__search > button {
     width: clamp(1.9rem, 2.2vw, 2.35rem);
     min-width: clamp(1.9rem, 2.2vw, 2.35rem);
     min-height: clamp(1.9rem, 2.2vw, 2.35rem);
@@ -7612,7 +7612,7 @@ button:not(:disabled):active {
     font-size: clamp(0.62rem, 0.78vw, 0.95rem) !important;
   }
 
-  .app-header__search button {
+  .app-header__search > button {
     width: clamp(1.6rem, 2vw, 2.25rem) !important;
     min-width: clamp(1.6rem, 2vw, 2.25rem) !important;
     min-height: clamp(1.6rem, 2vw, 2.25rem) !important;
@@ -7682,8 +7682,9 @@ button:not(:disabled):active {
     display: flex;
     width: 100% !important;
     height: auto !important;
-    max-height: clamp(6.3rem, 23dvh, 13.7rem) !important;
-    flex: 0 1 auto;
+    min-height: clamp(6.3rem, 18dvh, 13.7rem) !important;
+    max-height: none !important;
+    flex: 1 1 0;
     gap: clamp(0.16rem, 0.3vw, 0.34rem) !important;
     overflow-x: hidden;
     overflow-y: auto;
@@ -7723,33 +7724,38 @@ button:not(:disabled):active {
     width: 100% !important;
     height: auto !important;
     min-height: 0 !important;
-    max-height: none !important;
-    flex: 1 1 0;
+    max-height: calc(100dvh - var(--frontier-topbar-height) - (var(--frontier-shell-pad) * 2) - (var(--frontier-shell-gap) * 2) - clamp(6.3rem, 18dvh, 13.7rem)) !important;
+    flex: 0 1 auto;
     margin: 0 !important;
     padding: 0 !important;
     overflow: hidden;
-    container-type: size;
   }
 
   .app-player-region .player-card {
     display: flex !important;
     width: 100% !important;
-    height: 100% !important;
+    height: auto !important;
     min-height: 0 !important;
-    max-height: none !important;
+    max-height: 100% !important;
     margin: 0 !important;
     flex-direction: column !important;
-    gap: clamp(0.22rem, 0.5cqh, 0.55rem) !important;
+    gap: clamp(0.22rem, 0.42dvh, 0.55rem) !important;
     padding: clamp(0.38rem, 0.65vw, 0.82rem) !important;
     overflow: hidden !important;
   }
 
   .app-player-region .player-card__artwork-button {
     display: grid !important;
-    width: min(100%, 48cqh) !important;
+    width: min(
+      100%,
+      max(
+        4.5rem,
+        calc(100dvh - var(--frontier-topbar-height) - (var(--frontier-shell-pad) * 2) - (var(--frontier-shell-gap) * 2) - clamp(6.3rem, 18dvh, 13.7rem) - 7.4rem)
+      )
+    ) !important;
     height: auto !important;
     max-width: 100% !important;
-    max-height: 48cqh !important;
+    max-height: none !important;
     min-height: 0 !important;
     flex: 0 1 auto;
     align-self: center;
@@ -7809,14 +7815,14 @@ button:not(:disabled):active {
   .app-player-region .player-actions .player-actions__button--previous,
   .app-player-region .player-actions .player-actions__button--next,
   .app-player-region .player-actions .player-actions__button--favorite {
-    min-height: clamp(1.8rem, 3.5cqh, 2.55rem) !important;
+    min-height: clamp(1.8rem, 3dvh, 2.55rem) !important;
     padding: 0 !important;
     font-size: 0 !important;
   }
 
   .app-player-region .player-actions .player-actions__button--favorite {
-    width: clamp(1.8rem, 3.5cqh, 2.55rem) !important;
-    min-width: clamp(1.8rem, 3.5cqh, 2.55rem) !important;
+    width: clamp(1.8rem, 3dvh, 2.55rem) !important;
+    min-width: clamp(1.8rem, 3dvh, 2.55rem) !important;
   }
 
   .app-player-region .player-actions svg {
@@ -8082,5 +8088,98 @@ button:not(:disabled):active {
   .profile-insights-rail {
     position: static !important;
     max-height: none !important;
+  }
+}
+
+
+/* 2026-09-29 search responsiveness + dropdown identity visibility follow-up. */
+.global-search__recent-item,
+.global-search__result {
+  width: 100% !important;
+  min-width: 0 !important;
+  height: auto !important;
+  max-width: none !important;
+  border-left: 0 !important;
+  transform-origin: center;
+}
+
+.global-search__result {
+  min-height: clamp(3.4rem, 4.35vw, 4.55rem) !important;
+  padding: clamp(0.38rem, 0.55vw, 0.56rem) clamp(0.58rem, 0.82vw, 0.9rem) !important;
+}
+
+.global-search__art {
+  position: relative;
+  display: block !important;
+  flex: 0 0 auto;
+  overflow: hidden;
+  background: var(--frontier-surface-muted);
+}
+
+.global-search__art-placeholder,
+.global-search__art-image {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.global-search__art-placeholder {
+  z-index: 0;
+  padding: 21%;
+  object-fit: contain;
+  background: color-mix(in srgb, var(--frontier-surface-muted) 84%, var(--color-red) 16%);
+}
+
+.global-search__art-image {
+  z-index: 1;
+  object-fit: cover;
+}
+
+.global-search__copy {
+  display: grid !important;
+  min-width: 0 !important;
+  color: var(--color-ink) !important;
+  text-align: left;
+}
+
+.global-search__copy strong {
+  display: block;
+  color: var(--color-ink) !important;
+  font-size: clamp(0.74rem, 0.88vw, 0.98rem) !important;
+  line-height: 1.15;
+}
+
+.global-search__copy > span {
+  display: block;
+  color: var(--color-muted) !important;
+  font-size: clamp(0.64rem, 0.76vw, 0.84rem) !important;
+  line-height: 1.15;
+}
+
+.global-search__duration {
+  display: block;
+  color: var(--color-muted) !important;
+  font-size: clamp(0.62rem, 0.72vw, 0.8rem) !important;
+}
+
+/* Keep the bottom-player metadata readable while preserving the compact zoom layout. */
+@media (min-width: 520px) {
+  .mini-player__meta-button strong,
+  .mini-player__meta strong {
+    font-size: clamp(0.68rem, 0.84vw, 1rem) !important;
+    line-height: 1.12;
+  }
+
+  .mini-player__meta-button span,
+  .mini-player__meta span {
+    font-size: clamp(0.6rem, 0.74vw, 0.88rem) !important;
+    line-height: 1.12;
+  }
+
+  .mini-player__progress,
+  .mini-player__right {
+    font-size: clamp(0.54rem, 0.66vw, 0.8rem) !important;
   }
 }

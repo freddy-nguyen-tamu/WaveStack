@@ -2420,14 +2420,13 @@ export function App() {
           </div>
 
           <GlobalSearch
-            value={globalSearchQuery}
-            onChange={setGlobalSearchQuery}
+            initialValue={globalSearchQuery}
             onSubmit={submitGlobalSearch}
-            onOpenSong={(song) => openDetails(song, {
-              id: `global-search:${globalSearchQuery.trim() || "results"}`,
-              label: globalSearchQuery.trim() ? `Search: ${globalSearchQuery.trim()}` : "Search",
+            onOpenSong={(song, query) => openDetails(song, {
+              id: `global-search:${query || "results"}`,
+              label: query ? `Search: ${query}` : "Search",
               source: "search",
-              queryFilter: globalSearchQuery.trim() || null,
+              queryFilter: query || null,
               songs: allKnownSongs
             })}
           />

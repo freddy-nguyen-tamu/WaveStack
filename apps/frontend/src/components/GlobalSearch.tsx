@@ -4,32 +4,89 @@ import type { Song } from "../App";
 import { useSongPages } from "../hooks/useSongPages";
 import { formatSeconds, formatSongDisplayName } from "../song-format";
 import { readSearchHistory, rememberSearch } from "../search-history";
-import { SongArtwork } from "./SongArtwork";
 
 type GlobalSearchProps = {
-  value: string;
-  onChange: (value: string) => void;
+  initialValue?: string;
   onSubmit: (query: string) => void;
-  onOpenSong: (song: Song) => void;
+  onOpenSong: (song: Song, query: string) => void;
 };
 
 const LIVE_RESULT_LIMIT = 12;
 const RECENT_SEARCH_LIMIT = 10;
+const LIVE_SEARCH_DEBOUNCE_MS = 260;
 
-export function GlobalSearch({ value, onChange, onSubmit, onOpenSong }: GlobalSearchProps) {
+function SearchResultArtwork({ song }: { song: Song }) {
+  const sources = [
+    song.localThumbnailUrl,
+    song.thumbnailUrl,
+    song.driveThumbnailUrl,
+    song.embeddedArtworkUrl
+  ]
+    .map((source) => source?.trim())
+    .filter((source): source is string => Boolean(source))
+    .filter((source, index, items) => items.indexOf(source) === index);
+  const sourceKey = sources.join("|");
+  const [sourceIndex, setSourceIndex] = useState(0);
+
+  useEffect(() => {
+    setSourceIndex(0);
+  }, [song.id, sourceKey]);
+
+  const source = sources[sourceIndex];
+
+  return (
+    <span className="global-search__art" aria-hidden="true">
+      <img
+        className="global-search__art-placeholder"
+        src="/icon-512.png"
+        alt=""
+        draggable={false}
+        decoding="async"
+      />
+      {source ? (
+        <img
+          key={`${song.id}:${source}`}
+          className="global-search__art-image"
+          src={source}
+          alt=""
+          draggable={false}
+          loading="eager"
+          decoding="async"
+          fetchPriority="low"
+          onError={() => setSourceIndex((index) => index + 1)}
+        />
+      ) : null}
+    </span>
+  );
+}
+
+export function GlobalSearch({ initialValue = "", onSubmit, onOpenSong }: GlobalSearchProps) {
   const rootRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState(initialValue);
   const [open, setOpen] = useState(false);
   const [history, setHistory] = useState<string[]>(readSearchHistory);
-  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState(initialValue.trim());
+
+  // The input intentionally owns its text locally. Keeping every keystroke out of
+  // App.tsx prevents the whole player, route, navigation and listening rail from
+  // re-rendering just because the user typed one character.
+  useEffect(() => {
+    if (document.activeElement === inputRef.current) {
+      return;
+    }
+
+    setQuery(initialValue);
+    setDebouncedQuery(initialValue.trim());
+  }, [initialValue]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      setDebouncedQuery(value.trim());
-    }, 170);
+      setDebouncedQuery(query.trim());
+    }, LIVE_SEARCH_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timer);
-  }, [value]);
+  }, [query]);
 
   useEffect(() => {
     function closeFromOutside(event: PointerEvent) {
@@ -44,7 +101,7 @@ export function GlobalSearch({ value, onChange, onSubmit, onOpenSong }: GlobalSe
     return () => document.removeEventListener("pointerdown", closeFromOutside);
   }, []);
 
-  const trimmedQuery = value.trim();
+  const trimmedQuery = query.trim();
   const liveSearchEnabled = open && Boolean(debouncedQuery);
   const { page, loading, error } = useSongPages(
     debouncedQuery,
@@ -54,32 +111,33 @@ export function GlobalSearch({ value, onChange, onSubmit, onOpenSong }: GlobalSe
   );
   const liveResults = page?.nodes ?? [];
   const queryIsSettled = trimmedQuery === debouncedQuery;
+  const isUpdating = Boolean(trimmedQuery) && (!queryIsSettled || loading);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const query = value.trim();
+    const nextQuery = query.trim();
 
-    if (!query) {
+    if (!nextQuery) {
       setOpen(true);
       inputRef.current?.focus();
       return;
     }
 
-    setHistory(rememberSearch(query));
+    setHistory(rememberSearch(nextQuery));
     setOpen(false);
-    onSubmit(query);
+    onSubmit(nextQuery);
   }
 
-  function chooseRecent(query: string) {
-    onChange(query);
-    setHistory(rememberSearch(query));
+  function chooseRecent(nextQuery: string) {
+    setQuery(nextQuery);
+    setHistory(rememberSearch(nextQuery));
     setOpen(true);
     window.requestAnimationFrame(() => inputRef.current?.focus());
   }
 
   function chooseSong(song: Song) {
     setOpen(false);
-    onOpenSong(song);
+    onOpenSong(song, trimmedQuery || debouncedQuery);
   }
 
   return (
@@ -94,14 +152,14 @@ export function GlobalSearch({ value, onChange, onSubmit, onOpenSong }: GlobalSe
       <input
         ref={inputRef}
         type="search"
-        value={value}
+        value={query}
         placeholder="What do you want to play?"
         aria-label="What do you want to play?"
         autoComplete="off"
         aria-expanded={open}
         aria-controls="global-search-popover"
         onChange={(event) => {
-          onChange(event.target.value);
+          setQuery(event.target.value);
           setOpen(true);
         }}
         onFocus={() => {
@@ -115,7 +173,7 @@ export function GlobalSearch({ value, onChange, onSubmit, onOpenSong }: GlobalSe
           }
         }}
       />
-      <button type="submit" aria-label="Show all search results">
+      <button className="global-search__submit" type="submit" aria-label="Show all search results">
         <Search aria-hidden="true" />
       </button>
 
@@ -158,18 +216,12 @@ export function GlobalSearch({ value, onChange, onSubmit, onOpenSong }: GlobalSe
             <>
               <div className="global-search__heading">
                 <span>Search results</span>
-                {page ? <span>{page.totalCount.toLocaleString()} matches</span> : null}
+                <span>
+                  {isUpdating ? "Updating…" : page ? `${page.totalCount.toLocaleString()} matches` : ""}
+                </span>
               </div>
 
-              {!queryIsSettled || (loading && !liveResults.length) ? (
-                <p className="global-search__empty">Searching…</p>
-              ) : null}
-
-              {queryIsSettled && error ? (
-                <p className="global-search__empty" role="alert">Could not load search results.</p>
-              ) : null}
-
-              {queryIsSettled && !error && liveResults.length ? (
+              {liveResults.length ? (
                 <div className="global-search__results" role="listbox" aria-label="Matching songs">
                   {liveResults.map((song) => (
                     <button
@@ -181,13 +233,7 @@ export function GlobalSearch({ value, onChange, onSubmit, onOpenSong }: GlobalSe
                       title={`Open ${formatSongDisplayName(song)}`}
                       onClick={() => chooseSong(song)}
                     >
-                      <SongArtwork
-                        song={song}
-                        wrapClassName="global-search__art"
-                        fallbackClassName="global-search__art-fallback"
-                        imageClassName="global-search__art-image"
-                        disableNowPlayingStyle
-                      />
+                      <SearchResultArtwork song={song} />
                       <span className="global-search__copy">
                         <strong>{song.title?.trim() || song.fileName?.trim() || "Untitled Track"}</strong>
                         <span>{song.artistName?.trim() || "Unknown Artist"}</span>
@@ -196,6 +242,14 @@ export function GlobalSearch({ value, onChange, onSubmit, onOpenSong }: GlobalSe
                     </button>
                   ))}
                 </div>
+              ) : null}
+
+              {isUpdating && !liveResults.length ? (
+                <p className="global-search__empty">Searching…</p>
+              ) : null}
+
+              {queryIsSettled && error ? (
+                <p className="global-search__empty" role="alert">Could not load search results.</p>
               ) : null}
 
               {queryIsSettled && !loading && !error && !liveResults.length ? (
