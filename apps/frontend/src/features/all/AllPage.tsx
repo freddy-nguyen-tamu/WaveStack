@@ -60,6 +60,7 @@ export function AllPage({
   const listRef = useRef<HTMLUListElement | null>(null);
   const fastScrollTrackRef = useRef<HTMLDivElement | null>(null);
   const fastScrollThumbRef = useRef<HTMLButtonElement | null>(null);
+  const fastScrollFrameRef = useRef<number | null>(null);
   const [query, setQuery] = useState("");
   const [searchHistory, setSearchHistory] = useState<string[]>(readSearchHistory);
   const [searchHistoryOpen, setSearchHistoryOpen] = useState(false);
@@ -131,8 +132,24 @@ export function AllPage({
     const scrolledInsideList = clamp(window.scrollY - listTop, 0, viewportTravel);
     const ratio = viewportTravel <= 0 ? 0 : scrolledInsideList / viewportTravel;
 
-    if (fastScrollThumbRef.current) fastScrollThumbRef.current.style.transform = `translateY(${ratio * maxThumbTop}px)`;
+    if (fastScrollThumbRef.current) {
+      fastScrollThumbRef.current.style.transform = `translateY(${ratio * maxThumbTop}px)`;
+    }
   }, []);
+
+  const scheduleThumbFromWindowScroll = useCallback(() => {
+    // Native scroll events can fire much faster than the browser can paint. The
+    // fast-scroll thumb used to force two layout reads on every event. Coalesce
+    // those reads/writes to one per animation frame to keep long song routes fluid.
+    if (fastScrollFrameRef.current !== null) {
+      return;
+    }
+
+    fastScrollFrameRef.current = window.requestAnimationFrame(() => {
+      fastScrollFrameRef.current = null;
+      updateThumbFromWindowScroll();
+    });
+  }, [updateThumbFromWindowScroll]);
 
   const scrollToFastScrollRatio = useCallback((ratio: number) => {
     const list = listRef.current;
@@ -218,14 +235,19 @@ export function AllPage({
   useEffect(() => {
     updateThumbFromWindowScroll();
 
-    window.addEventListener("scroll", updateThumbFromWindowScroll, { passive: true });
-    window.addEventListener("resize", updateThumbFromWindowScroll);
+    window.addEventListener("scroll", scheduleThumbFromWindowScroll, { passive: true });
+    window.addEventListener("resize", scheduleThumbFromWindowScroll);
 
     return () => {
-      window.removeEventListener("scroll", updateThumbFromWindowScroll);
-      window.removeEventListener("resize", updateThumbFromWindowScroll);
+      window.removeEventListener("scroll", scheduleThumbFromWindowScroll);
+      window.removeEventListener("resize", scheduleThumbFromWindowScroll);
+
+      if (fastScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(fastScrollFrameRef.current);
+        fastScrollFrameRef.current = null;
+      }
     };
-  }, [updateThumbFromWindowScroll, visibleSongs.length]);
+  }, [scheduleThumbFromWindowScroll, updateThumbFromWindowScroll, visibleSongs.length]);
 
   return (
     <article ref={regionRef} className="all-page">
@@ -347,4 +369,3 @@ export function AllPage({
     </article>
   );
 }
-

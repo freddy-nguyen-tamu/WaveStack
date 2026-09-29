@@ -1,4 +1,3 @@
-
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ApolloQueryResult, useApolloClient, useMutation, useQuery } from "@apollo/client";
 import { Activity, Clock, Heart, ListMusic, Music2, RefreshCw, TrendingUp, Upload } from "lucide-react";
@@ -359,9 +358,19 @@ type ListeningHabitRailProps = {
 };
 
 function ListeningHabitRail({ habitSummaries, songs, onOpenDetails }: ListeningHabitRailProps) {
-  const periods = habitPeriodOrder
-    .map((period) => [period, habitSummaries[period] ?? []] as const)
-    .filter(([, entries]) => entries.length > 0);
+  // Resolving a representative artwork used to rescan the entire library for every
+  // habit row on every App render. Cache the resolved rows until the library or the
+  // habit summary actually changes so the persistent rail stays cheap to render.
+  const periods = useMemo(() => habitPeriodOrder
+    .map((period) => {
+      const entries = (habitSummaries[period] ?? []).slice(0, 4).map((entry, index) => ({
+        entry,
+        artworkSong: pickHabitArtworkSong(entry, songs, index)
+      }));
+
+      return [period, entries] as const;
+    })
+    .filter(([, entries]) => entries.length > 0), [habitSummaries, songs]);
 
   if (!periods.length) {
     return null;
@@ -378,38 +387,34 @@ function ListeningHabitRail({ habitSummaries, songs, onOpenDetails }: ListeningH
         <section key={period} className="listening-rail__period" aria-label={habitPeriodLabels[period] ?? period}>
           <h3>{habitPeriodLabels[period] ?? period}</h3>
           <div className="listening-rail__items">
-            {entries.slice(0, 4).map((entry, index) => {
-              const artworkSong = pickHabitArtworkSong(entry, songs, index);
-
-              return (
-                <button
-                  key={`${period}:${entry.label}`}
-                  type="button"
-                  className="listening-rail__item"
-                  onClick={() => {
-                    if (artworkSong) {
-                      onOpenDetails(artworkSong);
-                    }
-                  }}
-                  disabled={!artworkSong}
-                >
-                  {artworkSong ? (
-                    <SongArtwork
-                      song={artworkSong}
-                      wrapClassName="listening-rail__art"
-                      fallbackClassName="listening-rail__art-fallback"
-                      disableNowPlayingStyle
-                    />
-                  ) : (
-                    <span className="listening-rail__art listening-rail__art-fallback" aria-hidden="true" />
-                  )}
-                  <span className="listening-rail__copy">
-                    <strong>{entry.label}</strong>
-                    <span>{entry.count} play{entry.count === 1 ? "" : "s"}</span>
-                  </span>
-                </button>
-              );
-            })}
+            {entries.map(({ entry, artworkSong }) => (
+              <button
+                key={`${period}:${entry.label}`}
+                type="button"
+                className="listening-rail__item"
+                onClick={() => {
+                  if (artworkSong) {
+                    onOpenDetails(artworkSong);
+                  }
+                }}
+                disabled={!artworkSong}
+              >
+                {artworkSong ? (
+                  <SongArtwork
+                    song={artworkSong}
+                    wrapClassName="listening-rail__art"
+                    fallbackClassName="listening-rail__art-fallback"
+                    disableNowPlayingStyle
+                  />
+                ) : (
+                  <span className="listening-rail__art listening-rail__art-fallback" aria-hidden="true" />
+                )}
+                <span className="listening-rail__copy">
+                  <strong>{entry.label}</strong>
+                  <span>{entry.count} play{entry.count === 1 ? "" : "s"}</span>
+                </span>
+              </button>
+            ))}
           </div>
         </section>
       ))}
@@ -734,18 +739,18 @@ export function App() {
           }
 
           collected.push(...(pageData.nodes ?? []));
-
-          const unique = uniqueSongsById(collected);
-
-          if (!cancelled) {
-            setLibrarySongs(unique);
-          }
-
           after = pageData.pageInfo.hasNextPage ? pageData.pageInfo.endCursor ?? null : null;
         } while (after && !cancelled);
 
         if (!cancelled && collected.length) {
-          rememberSongObjects(uniqueSongsById(collected));
+          // This is a background warm-up, not the route's own paginated query. The
+          // old implementation published state after every 100-song page, forcing
+          // the entire App, current route, player chrome and listening rail to
+          // re-render repeatedly while the user was interacting. Publish the
+          // completed library once instead; React batches this with the cache update.
+          const unique = uniqueSongsById(collected);
+          setLibrarySongs(unique);
+          rememberSongObjects(unique);
         }
       } catch (error) {
         console.error("Failed to load full backend library", error);
