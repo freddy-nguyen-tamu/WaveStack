@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { useMutation } from "@apollo/client";
 import type { AuthUser, ClientPlaylist, HabitSummaryEntry, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../../App";
 import { EXPORT_LISTENING_HABITS_MUTATION, TEST_PRIVATE_DRIVE_WRITE_MUTATION } from "../../api";
-import { formatSeconds, formatSongDisplayName } from "../../song-format";
+import { formatSeconds } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
 import { SongActions } from "../../components/SongActions";
 import { SongIdentityButton } from "../../components/SongIdentityButton";
@@ -20,6 +20,7 @@ type DriveExportResult = {
 
 type ProfilePageProps = {
   user: AuthUser | null;
+  songs: Song[];
   favorites: Song[];
   recentlyPlayed: Song[];
   playlists: ClientPlaylist[];
@@ -41,8 +42,44 @@ const periodLabels: Record<string, string> = {
   YEAR: "This year"
 };
 
+const periodOrder = ["DAY", "WEEK", "MONTH", "YEAR"];
+
+function normalizeHabitLabel(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function hashHabitLabel(value: string) {
+  return Array.from(value).reduce((total, character) => total + character.charCodeAt(0), 0);
+}
+
+function pickHabitArtworkSong(entry: HabitSummaryEntry, songs: Song[], index: number): Song | null {
+  if (!songs.length) {
+    return null;
+  }
+
+  const label = normalizeHabitLabel(entry.label);
+  const matches = label && label !== "unknown"
+    ? songs.filter((song) => {
+        const searchable = [
+          song.artistName,
+          song.title,
+          song.albumTitle,
+          song.fileName,
+          ...song.genreNames
+        ].filter(Boolean).join(" ").toLowerCase();
+
+        return searchable.includes(label);
+      })
+    : [];
+  const candidates = matches.length ? matches : songs;
+  const pickIndex = Math.abs(hashHabitLabel(`${entry.label}:${index}`)) % candidates.length;
+
+  return candidates[pickIndex] ?? null;
+}
+
 export function ProfilePage({
   user,
+  songs,
   favorites,
   recentlyPlayed,
   playlists,
@@ -96,6 +133,10 @@ export function ProfilePage({
   const totalPlays = Object.values(habitSummaries)
     .flat()
     .reduce((total, entry) => total + entry.count, 0);
+  const artworkPool = songs.length ? songs : [...recentlyPlayed, ...favorites];
+  const habitPeriods = periodOrder
+    .map((period) => [period, habitSummaries[period] ?? []] as const)
+    .filter(([, entries]) => entries.length > 0);
 
   return (
     <article className="profile-page" aria-label="Profile">
@@ -119,94 +160,151 @@ export function ProfilePage({
         </div>
       </section>
 
-      <section className="profile-stats" aria-label="Profile stats">
-        <div>
-          <Heart aria-hidden="true" />
-          <strong>{favorites.length}</strong>
-          <span>Favorites</span>
-        </div>
+      <div className="profile-page__content">
+        <section className="profile-recent-panel" aria-label="Recently played">
+          <div className="profile-section-heading">
+            <p className="eyebrow">History</p>
+            <h3>Recently played</h3>
+          </div>
 
-        <div>
-          <Clock aria-hidden="true" />
-          <strong>{recentlyPlayed.length}</strong>
-          <span>Recent songs</span>
-        </div>
+          {recentlyPlayed.length ? (
+            <div className="profile-song-list">
+              {recentlyPlayed.slice(0, 8).map((song) => (
+                <div key={song.id} className="profile-song-list__item">
+                  <SongIdentityButton
+                    song={song}
+                    subtitle={song.artistName}
+                    className="song-identity-button profile-song-list__identity"
+                    artClassName="profile-song-list__art"
+                    fallbackClassName="profile-song-list__fallback"
+                    playbackContext={recentPlaybackContext}
+                    onOpenDetails={onOpenDetails}
+                  />
+                  <SongActions
+                    song={song}
+                    playlists={playlists}
+                    isFavorite={favoriteIds.includes(song.id)}
+                    playbackContext={recentPlaybackContext}
+                    onPlay={onPlay}
+                    onQueue={onQueue}
+                    onToggleFavorite={onToggleFavorite}
+                    onAddToPlaylist={onAddToPlaylist}
+                  />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p>No recent songs yet.</p>
+          )}
+        </section>
 
-        <div>
-          <ListMusic aria-hidden="true" />
-          <strong>{queueLength}</strong>
-          <span>Queued songs</span>
-        </div>
-
-        <div>
-          <CalendarDays aria-hidden="true" />
-          <strong>{totalPlays}</strong>
-          <span>Tracked plays</span>
-        </div>
-      </section>
-
-      <section>
-        <h3>Listening habits</h3>
-
-        {Object.keys(habitSummaries).length ? (
-          <div className="habit-grid">
-            {Object.entries(habitSummaries).map(([period, entries]) => (
-              <div key={period} className="habit-card">
-                <h3>{periodLabels[period] ?? period}</h3>
-
-                {entries.length ? (
-                  entries.slice(0, 8).map((entry) => (
-                    <div key={entry.label} className="habit-card__row">
-                      <span className="habit-card__label">{entry.label}</span>
-                      <span className="habit-card__count">
-                        {entry.count} play(s), {formatSeconds(entry.totalDurationSeconds)}
-                      </span>
-                    </div>
-                  ))
+        <aside className="profile-insights-rail" aria-label="Profile listening overview">
+          <section className="profile-visual-stats" aria-label="Profile stats">
+            <div className="profile-visual-stat">
+              <div className="profile-visual-stat__media" aria-hidden="true">
+                {favorites[0] ? (
+                  <SongArtwork
+                    song={favorites[0]}
+                    wrapClassName="profile-visual-stat__art"
+                    fallbackClassName="profile-visual-stat__art-fallback"
+                    disableNowPlayingStyle
+                  />
                 ) : (
-                  <p>No plays tracked for this period yet.</p>
+                  <span className="profile-visual-stat__art-fallback"><Heart /></span>
                 )}
+                <span className="profile-visual-stat__icon"><Heart /></span>
               </div>
-            ))}
-          </div>
-        ) : (
-          <p>No listening habits yet. Play songs while signed in to build this profile.</p>
-        )}
-      </section>
+              <strong>{favorites.length}</strong>
+              <span>Favorites</span>
+            </div>
 
-      <section>
-        <h3>Recently played</h3>
-
-        {recentlyPlayed.length ? (
-          <div className="profile-song-list">
-            {recentlyPlayed.slice(0, 8).map((song) => (
-              <div key={song.id} className="profile-song-list__item">
-                <SongIdentityButton
-                  song={song}
-                  subtitle={song.artistName}
-                  className="song-identity-button profile-song-list__identity"
-                  artClassName="profile-song-list__art"
-                  fallbackClassName="profile-song-list__fallback"
-                  playbackContext={recentPlaybackContext}
-                  onOpenDetails={onOpenDetails}
-                />
-                <SongActions
-                  song={song}
-                  playlists={playlists}
-                  isFavorite={favoriteIds.includes(song.id)}
-                  playbackContext={recentPlaybackContext}
-                  onPlay={onPlay}
-                  onQueue={onQueue}
-                  onToggleFavorite={onToggleFavorite}
-                  onAddToPlaylist={onAddToPlaylist}
-                />
+            <div className="profile-visual-stat">
+              <div className="profile-visual-stat__media" aria-hidden="true">
+                {recentlyPlayed[0] ? (
+                  <SongArtwork
+                    song={recentlyPlayed[0]}
+                    wrapClassName="profile-visual-stat__art"
+                    fallbackClassName="profile-visual-stat__art-fallback"
+                    disableNowPlayingStyle
+                  />
+                ) : (
+                  <span className="profile-visual-stat__art-fallback"><Clock /></span>
+                )}
+                <span className="profile-visual-stat__icon"><Clock /></span>
               </div>
-            ))}
-          </div>
-        ) : (
-          <p>No recent songs yet.</p>
-        )}
-      </section>
+              <strong>{recentlyPlayed.length}</strong>
+              <span>Recent songs</span>
+            </div>
+
+            <div className="profile-visual-stat">
+              <div className="profile-visual-stat__media profile-visual-stat__media--icon" aria-hidden="true">
+                <ListMusic />
+              </div>
+              <strong>{queueLength}</strong>
+              <span>Queued songs</span>
+            </div>
+
+            <div className="profile-visual-stat">
+              <div className="profile-visual-stat__media profile-visual-stat__media--icon" aria-hidden="true">
+                <CalendarDays />
+              </div>
+              <strong>{totalPlays}</strong>
+              <span>Tracked plays</span>
+            </div>
+          </section>
+
+          <section className="profile-habits-visual" aria-label="Listening habits">
+            <div className="profile-section-heading">
+              <p className="eyebrow">Listening habits</p>
+              <h3>Heavy rotation</h3>
+            </div>
+
+            {habitPeriods.length ? habitPeriods.map(([period, entries]) => (
+              <div key={period} className="profile-habits-visual__period">
+                <h4>{periodLabels[period] ?? period}</h4>
+
+                <div className="profile-habits-visual__items">
+                  {entries.slice(0, 8).map((entry, index) => {
+                    const artworkSong = pickHabitArtworkSong(entry, artworkPool, index);
+
+                    return (
+                      <button
+                        key={`${period}:${entry.label}`}
+                        type="button"
+                        className="profile-habits-visual__item"
+                        onClick={() => {
+                          if (artworkSong) {
+                            onOpenDetails(artworkSong);
+                          }
+                        }}
+                        disabled={!artworkSong}
+                      >
+                        {artworkSong ? (
+                          <SongArtwork
+                            song={artworkSong}
+                            wrapClassName="profile-habits-visual__art"
+                            fallbackClassName="profile-habits-visual__art-fallback"
+                            disableNowPlayingStyle
+                          />
+                        ) : (
+                          <span className="profile-habits-visual__art-fallback" aria-hidden="true" />
+                        )}
+
+                        <span className="profile-habits-visual__copy">
+                          <strong>{entry.label}</strong>
+                          <span>{entry.count} play(s), {formatSeconds(entry.totalDurationSeconds)}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )) : (
+              <p>No listening habits yet. Play songs while signed in to build this profile.</p>
+            )}
+          </section>
+        </aside>
+      </div>
 
       <section>
         <h3>Private Drive exports</h3>

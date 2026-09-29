@@ -1,3 +1,4 @@
+
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import type { AuthUser } from "../../App";
@@ -86,7 +87,6 @@ export function AuthPanel({ user, isDarkMode, onToggleDarkMode, onLogout }: Auth
               {initials}
             </span>
           )}
-          <span>View profile</span>
         </Link>
 
         <button type="button" onClick={onLogout}>

@@ -1,3 +1,4 @@
+
 @font-face {
   font-family: "SaolDisplay";
   src:
@@ -6568,5 +6569,665 @@ html[data-theme="dark"] .player-card .player-actions__button--favorite[aria-pres
 
   .mini-player {
     display: grid;
+  }
+}
+
+/* 2026-09-29 responsive desktop/zoom pass. Keep the desktop rails and top bar
+   intact through browser zoom while sizing them from the viewport instead of a
+   fixed 1560/1720px canvas. */
+:root {
+  --frontier-shell-pad: clamp(8px, 0.85vw, 14px);
+  --frontier-shell-gap: clamp(8px, 0.85vw, 16px);
+  --frontier-topbar-height: clamp(3.9rem, 4.9vw, 4.8rem);
+  --frontier-left-rail: clamp(170px, 19vw, 32rem);
+  --frontier-listening-rail: clamp(190px, 18vw, 25rem);
+  --frontier-nav-height: clamp(7.4rem, 23dvh, 15.2rem);
+}
+
+.app-shell {
+  width: 100%;
+  max-width: none;
+  padding: var(--frontier-shell-pad);
+}
+
+/* The header always remains one horizontal toolbar on desktop, including when
+   browser zoom reduces the CSS viewport width. */
+@media (min-width: 640px) {
+  .app-header {
+    top: var(--frontier-shell-pad);
+    grid-template-columns: max-content minmax(8rem, 1fr) max-content;
+    gap: clamp(0.35rem, 0.75vw, 1rem);
+    min-height: var(--frontier-topbar-height);
+    padding: clamp(0.38rem, 0.55vw, 0.65rem);
+  }
+
+  .app-header__top {
+    display: flex;
+    min-width: 0;
+    justify-content: flex-start;
+  }
+
+  .app-header__brand {
+    font-size: clamp(1rem, 1.6vw, 2.35rem);
+    white-space: nowrap;
+  }
+
+  .app-header__brand::before {
+    width: clamp(1.55rem, 2vw, 2rem);
+    height: clamp(1.55rem, 2vw, 2rem);
+    margin-right: clamp(0.3rem, 0.45vw, 0.48rem);
+    font-size: clamp(0.65rem, 0.75vw, 0.85rem);
+  }
+
+  .app-header__brand + p {
+    display: none;
+  }
+
+  .app-header__search {
+    grid-column: 2;
+    grid-row: 1;
+    width: 100%;
+    min-width: 0;
+    min-height: clamp(2rem, 2.55vw, 2.9rem);
+    padding-left: clamp(0.55rem, 0.8vw, 0.9rem);
+  }
+
+  .app-header__search input {
+    min-width: 0;
+    font-size: clamp(0.7rem, 0.85vw, 1rem);
+  }
+
+  .app-header__search button {
+    width: clamp(1.9rem, 2.2vw, 2.35rem);
+    min-width: clamp(1.9rem, 2.2vw, 2.35rem);
+    min-height: clamp(1.9rem, 2.2vw, 2.35rem);
+  }
+
+  header .auth-panel {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: end;
+    width: auto;
+  }
+
+  .auth-panel,
+  .auth-panel--signed-in {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: clamp(0.28rem, 0.55vw, 0.6rem);
+    width: auto;
+    min-width: 0;
+  }
+
+  .auth-panel__profile-link {
+    width: auto;
+    min-width: 0;
+    min-height: clamp(2rem, 2.35vw, 2.45rem);
+    justify-content: center;
+    padding: 0.2rem;
+  }
+
+  .auth-panel__avatar {
+    width: clamp(1.7rem, 2.1vw, 2.25rem);
+    height: clamp(1.7rem, 2.1vw, 2.25rem);
+  }
+
+  .auth-panel--signed-in > button,
+  .auth-panel__google {
+    min-height: clamp(2rem, 2.35vw, 2.45rem);
+    padding: 0.45rem clamp(0.55rem, 0.8vw, 0.9rem);
+    font-size: clamp(0.66rem, 0.78vw, 0.9rem);
+    white-space: nowrap;
+  }
+
+  .label-dark,
+  .label-light {
+    min-width: clamp(1.65rem, 2vw, 2.25rem);
+    padding-inline: clamp(0.18rem, 0.35vw, 0.45rem);
+    font-size: clamp(0.52rem, 0.6vw, 0.68rem);
+  }
+
+  .app-nav {
+    position: fixed;
+    top: calc(var(--frontier-shell-pad) + var(--frontier-topbar-height) + var(--frontier-shell-gap));
+    bottom: auto;
+    left: var(--frontier-shell-pad);
+    width: var(--frontier-left-rail);
+    height: var(--frontier-nav-height);
+    max-height: var(--frontier-nav-height);
+    align-items: stretch;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: clamp(0.38rem, 0.6vw, 0.7rem);
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-red) transparent;
+  }
+
+  .app-nav::-webkit-scrollbar {
+    display: block;
+    width: 7px;
+  }
+
+  .app-nav a,
+  .app-nav button {
+    width: 100%;
+    min-width: 0;
+    min-height: clamp(1.68rem, 3.25dvh, 1.96rem);
+    justify-content: flex-start;
+    gap: clamp(0.4rem, 0.6vw, 0.72rem);
+    padding: clamp(0.28rem, 0.42vw, 0.42rem) clamp(0.42rem, 0.65vw, 0.8rem);
+    font-size: clamp(0.62rem, 0.7vw, 0.82rem);
+  }
+
+  .app-nav a svg,
+  .app-nav button svg {
+    width: clamp(0.82rem, 0.95vw, 1.05rem);
+    height: clamp(0.82rem, 0.95vw, 1.05rem);
+  }
+
+  .app-main {
+    display: block;
+    padding: 0 0 calc(8rem + env(safe-area-inset-bottom, 0px)) calc(var(--frontier-left-rail) + var(--frontier-shell-gap));
+  }
+
+  .route-content,
+  .route-content--with-rail {
+    width: 100%;
+    max-width: none;
+  }
+
+  .route-content--with-rail {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--frontier-listening-rail);
+    gap: var(--frontier-shell-gap);
+    align-items: start;
+  }
+
+  .route-content--with-rail > :not(.listening-rail) {
+    min-width: 0;
+  }
+
+  .listening-rail {
+    position: sticky;
+    top: calc(var(--frontier-shell-pad) + var(--frontier-topbar-height) + var(--frontier-shell-gap));
+    display: grid;
+    width: 100%;
+    max-height: calc(100dvh - var(--frontier-topbar-height) - (var(--frontier-shell-pad) * 2) - var(--frontier-shell-gap));
+    gap: clamp(0.55rem, 0.8vw, 1rem);
+    overflow: auto;
+    padding: clamp(0.55rem, 0.8vw, 1rem);
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-red) transparent;
+  }
+
+  .listening-rail__header h2 {
+    font-size: clamp(1.45rem, 2.2vw, 3.7rem);
+  }
+
+  .listening-rail__items {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: clamp(0.34rem, 0.48vw, 0.55rem);
+  }
+
+  .listening-rail__item {
+    grid-template-columns: clamp(2.7rem, 3.5vw, 4.3rem) minmax(0, 1fr);
+    min-height: clamp(3rem, 4.25vw, 4.75rem);
+    gap: clamp(0.45rem, 0.6vw, 0.75rem);
+    padding: clamp(0.2rem, 0.28vw, 0.35rem);
+  }
+
+  .listening-rail__art,
+  .listening-rail__art img,
+  .listening-rail__art-fallback {
+    width: clamp(2.7rem, 3.5vw, 4.3rem);
+    height: clamp(2.7rem, 3.5vw, 4.3rem);
+  }
+
+  .listening-rail__copy strong {
+    font-size: clamp(0.68rem, 0.78vw, 1rem);
+  }
+
+  .listening-rail__copy span {
+    font-size: clamp(0.62rem, 0.7vw, 0.88rem);
+  }
+
+  /* The All-song fast scrollbar stays beside the song column. The listening
+     rail keeps its own native scrollbar on the rail's right edge. */
+  .route-content--with-rail .all-page__fast-scroll {
+    right: calc(var(--frontier-shell-pad) + var(--frontier-listening-rail) + var(--frontier-shell-gap) + 2px);
+  }
+
+  main > section[aria-label="Player"] {
+    position: fixed;
+    top: calc(var(--frontier-shell-pad) + var(--frontier-topbar-height) + var(--frontier-shell-gap) + var(--frontier-nav-height) + var(--frontier-shell-gap));
+    bottom: var(--frontier-shell-pad);
+    left: var(--frontier-shell-pad);
+    z-index: 86;
+    width: var(--frontier-left-rail);
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  main > section[aria-label="Player"] .player-card {
+    display: flex;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    margin: 0;
+    flex-direction: column;
+    gap: clamp(0.35rem, 0.75dvh, 0.72rem);
+    padding: clamp(0.52rem, 0.7vw, 1rem);
+    overflow: hidden;
+  }
+
+  .player-card__artwork-button {
+    flex: 0 1 auto;
+    width: min(
+      100%,
+      max(
+        4.5rem,
+        calc(100dvh - var(--frontier-topbar-height) - var(--frontier-nav-height) - (var(--frontier-shell-pad) * 2) - (var(--frontier-shell-gap) * 2) - 10.75rem)
+      )
+    );
+    max-width: 100%;
+    min-height: 0;
+    align-self: center;
+    aspect-ratio: 1;
+  }
+
+  .player-card__artwork,
+  .player-card__artwork-fallback {
+    width: 100%;
+    height: 100%;
+    aspect-ratio: 1;
+  }
+
+  .player-card__identity {
+    flex: 0 0 auto;
+  }
+
+  .player-card h2 {
+    font-size: clamp(1rem, 1.3vw, 1.65rem);
+  }
+
+  .player-card__identity p {
+    font-size: clamp(0.68rem, 0.75vw, 0.95rem);
+  }
+
+  .player-actions {
+    flex: 0 0 auto;
+    gap: clamp(0.25rem, 0.4vw, 0.45rem);
+  }
+
+  .player-actions .player-actions__button--play,
+  .player-actions .player-actions__button--previous,
+  .player-actions .player-actions__button--next,
+  .player-actions .player-actions__button--favorite {
+    min-height: clamp(2.1rem, 3dvh, 2.75rem);
+  }
+
+  .player-card__progress-wrap {
+    flex: 0 0 auto;
+    margin-top: 0;
+    grid-template-columns: clamp(2.2rem, 2.6vw, 2.7rem) minmax(0, 1fr) clamp(2.2rem, 2.6vw, 2.7rem);
+    font-size: clamp(0.62rem, 0.68vw, 0.78rem);
+  }
+
+  .mini-player {
+    left: calc(var(--frontier-shell-pad) + var(--frontier-left-rail) + var(--frontier-shell-gap));
+    right: var(--frontier-shell-pad);
+    bottom: var(--frontier-shell-pad);
+  }
+}
+
+/* Make the large player seek bar show a filled red trail in Chromium as well as
+   Firefox instead of only moving a red thumb over an unfilled track. */
+.player-card__progress {
+  background: linear-gradient(
+    to right,
+    var(--color-red) 0%,
+    var(--color-red) var(--progress, 0%),
+    var(--color-box-range-track) var(--progress, 0%),
+    var(--color-box-range-track) 100%
+  ) !important;
+}
+
+.player-card__progress::-webkit-slider-runnable-track {
+  height: 0.3rem;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(
+    to right,
+    var(--color-red) 0%,
+    var(--color-red) var(--progress, 0%),
+    var(--color-box-range-track) var(--progress, 0%),
+    var(--color-box-range-track) 100%
+  );
+}
+
+.player-card__progress::-moz-range-track {
+  height: 0.3rem;
+  border-radius: var(--radius-pill);
+  background: var(--color-box-range-track);
+}
+
+.player-card__progress::-moz-range-progress {
+  height: 0.3rem;
+  border-radius: var(--radius-pill);
+  background: var(--color-red);
+}
+
+/* Dashboard tiles use the same visible grey active state as the song rows in
+   dark mode, keeping the metadata legible while hovering or playing. */
+html[data-theme="dark"] article.dashboard-page .song-tile:hover,
+html[data-theme="dark"] article.dashboard-page .song-tile:focus-within,
+html[data-theme="dark"] article.dashboard-page .song-tile:has(.song-artwork--now-playing) {
+  background: var(--color-box-hover-bg);
+  color: var(--color-box-hover-fg);
+}
+
+html[data-theme="dark"] article.dashboard-page .song-tile:hover .song-tile__open,
+html[data-theme="dark"] article.dashboard-page .song-tile:focus-within .song-tile__open,
+html[data-theme="dark"] article.dashboard-page .song-tile:has(.song-artwork--now-playing) .song-tile__open,
+html[data-theme="dark"] article.dashboard-page .song-tile:hover .song-tile__overlay,
+html[data-theme="dark"] article.dashboard-page .song-tile:focus-within .song-tile__overlay,
+html[data-theme="dark"] article.dashboard-page .song-tile:has(.song-artwork--now-playing) .song-tile__overlay,
+html[data-theme="dark"] article.dashboard-page .song-tile:hover .song-tile__overlay strong,
+html[data-theme="dark"] article.dashboard-page .song-tile:hover .song-tile__overlay small,
+html[data-theme="dark"] article.dashboard-page .song-tile:hover .song-tile__duration,
+html[data-theme="dark"] article.dashboard-page .song-tile:focus-within .song-tile__overlay strong,
+html[data-theme="dark"] article.dashboard-page .song-tile:focus-within .song-tile__overlay small,
+html[data-theme="dark"] article.dashboard-page .song-tile:focus-within .song-tile__duration,
+html[data-theme="dark"] article.dashboard-page .song-tile:has(.song-artwork--now-playing) .song-tile__overlay strong,
+html[data-theme="dark"] article.dashboard-page .song-tile:has(.song-artwork--now-playing) .song-tile__overlay small,
+html[data-theme="dark"] article.dashboard-page .song-tile:has(.song-artwork--now-playing) .song-tile__duration {
+  color: var(--color-box-hover-fg);
+}
+
+/* Profile: recently played remains the main column; the detailed visual summary
+   lives in a dedicated right rail with artwork instead of a text-only table. */
+.profile-page__content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--frontier-listening-rail);
+  gap: var(--frontier-shell-gap);
+  align-items: start;
+}
+
+.profile-recent-panel,
+.profile-insights-rail,
+.profile-visual-stats,
+.profile-habits-visual {
+  min-width: 0;
+}
+
+.profile-recent-panel {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.profile-section-heading {
+  margin-bottom: 0.85rem;
+}
+
+.profile-section-heading h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 3.2vw, 3.7rem);
+  font-weight: 400;
+  line-height: 0.96;
+}
+
+.profile-insights-rail {
+  position: sticky;
+  top: calc(var(--frontier-shell-pad) + var(--frontier-topbar-height) + var(--frontier-shell-gap));
+  display: grid;
+  gap: 0.9rem;
+  max-height: calc(100dvh - var(--frontier-topbar-height) - (var(--frontier-shell-pad) * 2) - var(--frontier-shell-gap));
+  overflow: auto;
+  border: 1px solid var(--frontier-border);
+  border-radius: var(--frontier-radius-lg);
+  padding: clamp(0.6rem, 0.85vw, 1rem);
+  background: var(--frontier-rail);
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-red) transparent;
+}
+
+.profile-insights-rail::-webkit-scrollbar {
+  width: 7px;
+}
+
+.profile-insights-rail::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--color-red);
+}
+
+.profile-visual-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.profile-visual-stat {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.28rem;
+  min-width: 0;
+  border: 1px solid var(--frontier-border);
+  border-radius: var(--frontier-radius-sm);
+  padding: 0.45rem;
+  background: var(--frontier-surface-strong);
+}
+
+.profile-visual-stat__media,
+.profile-visual-stat__art,
+.profile-visual-stat__art img,
+.profile-visual-stat__art-fallback {
+  width: 100%;
+  aspect-ratio: 1.4 / 1;
+  overflow: hidden;
+  border-radius: var(--frontier-radius-sm);
+}
+
+.profile-visual-stat__media {
+  position: relative;
+  display: grid;
+  place-items: center;
+  background: var(--frontier-surface-muted);
+}
+
+.profile-visual-stat__art img,
+.profile-visual-stat__art > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.profile-visual-stat__art-fallback,
+.profile-visual-stat__media--icon {
+  display: grid;
+  place-items: center;
+  background: var(--color-box-hover-bg);
+  color: var(--color-box-hover-fg);
+}
+
+.profile-visual-stat__media--icon > svg,
+.profile-visual-stat__art-fallback > svg {
+  width: clamp(1.5rem, 2.2vw, 2.5rem);
+  height: clamp(1.5rem, 2.2vw, 2.5rem);
+}
+
+.profile-visual-stat__icon {
+  position: absolute;
+  right: 0.32rem;
+  bottom: 0.32rem;
+  display: grid;
+  width: 1.55rem;
+  height: 1.55rem;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--color-red);
+  color: #ffffff;
+}
+
+.profile-visual-stat__icon svg {
+  width: 0.82rem;
+  height: 0.82rem;
+}
+
+.profile-visual-stat > strong {
+  overflow: hidden;
+  font-size: clamp(1.2rem, 1.7vw, 1.8rem);
+  line-height: 1;
+  text-overflow: ellipsis;
+}
+
+.profile-visual-stat > span:last-child {
+  color: var(--color-muted);
+  font-size: clamp(0.62rem, 0.72vw, 0.82rem);
+}
+
+.profile-habits-visual {
+  display: grid;
+  gap: 0.85rem;
+  border-top: 1px solid var(--frontier-border);
+  padding-top: 0.85rem;
+}
+
+.profile-habits-visual__period {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.profile-habits-visual__period h4 {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.profile-habits-visual__items {
+  display: grid;
+  gap: 0.38rem;
+}
+
+.profile-habits-visual__item {
+  display: grid;
+  grid-template-columns: clamp(2.65rem, 3.2vw, 3.65rem) minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  border-radius: var(--frontier-radius-sm);
+  padding: 0.28rem;
+  background: transparent;
+  color: var(--color-ink);
+  text-align: left;
+}
+
+.profile-habits-visual__item:hover:not(:disabled),
+.profile-habits-visual__item:focus-visible {
+  background: var(--frontier-surface-muted);
+  color: var(--color-ink);
+  transform: none;
+}
+
+.profile-habits-visual__item:disabled {
+  opacity: 1;
+}
+
+.profile-habits-visual__art,
+.profile-habits-visual__art img,
+.profile-habits-visual__art-fallback {
+  width: clamp(2.65rem, 3.2vw, 3.65rem);
+  height: clamp(2.65rem, 3.2vw, 3.65rem);
+  border-radius: var(--frontier-radius-sm);
+  overflow: hidden;
+}
+
+.profile-habits-visual__art img,
+.profile-habits-visual__art > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.profile-habits-visual__art-fallback {
+  display: block;
+  background: var(--frontier-surface-muted);
+}
+
+.profile-habits-visual__copy {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.profile-habits-visual__copy strong,
+.profile-habits-visual__copy span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-habits-visual__copy strong {
+  font-size: clamp(0.68rem, 0.78vw, 0.92rem);
+}
+
+.profile-habits-visual__copy span {
+  color: var(--color-muted);
+  font-size: clamp(0.58rem, 0.66vw, 0.78rem);
+}
+
+/* The song modal always consumes a predictable fraction of the viewport with
+   equal outer margins, so zooming changes it together with the screen. */
+.song-modal-backdrop {
+  --song-modal-margin: clamp(12px, 2.2vw, 34px);
+  padding: var(--song-modal-margin);
+}
+
+.song-modal {
+  width: calc(100dvw - (var(--song-modal-margin) * 2));
+  height: calc(100dvh - (var(--song-modal-margin) * 2));
+  max-width: none;
+  max-height: none;
+  margin: 0;
+}
+
+.song-modal__body,
+.song-modal__content {
+  min-height: 100%;
+  align-content: start;
+  padding: clamp(1rem, 2.2vw, 2.4rem);
+}
+
+.song-modal__content h2 {
+  font-size: clamp(2rem, 4.4vw, 5.2rem);
+}
+
+.song-modal__hero,
+.song-modal__fallback {
+  height: clamp(12rem, 42dvh, 34rem);
+  aspect-ratio: auto;
+}
+
+@media (max-width: 639px) {
+  .profile-page__content {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .profile-insights-rail {
+    position: static;
+    max-height: none;
+  }
+
+  .profile-visual-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

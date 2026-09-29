@@ -1,3 +1,4 @@
+
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ApolloQueryResult, useApolloClient, useMutation, useQuery } from "@apollo/client";
 import { Activity, Clock, Heart, ListMusic, Music2, RefreshCw, Search, TrendingUp, Upload } from "lucide-react";
@@ -2401,7 +2402,6 @@ export function App() {
             >
               WaveStack
             </NavLink>
-            <p id="app-description">Cloud-native music streaming platform</p>
           </div>
 
           <form
@@ -2482,7 +2482,6 @@ export function App() {
         <main
           id="main-content"
           className="app-main"
-          aria-describedby="app-description"
         >
         <h1 className="sr-only">WaveStack music library</h1>
 
@@ -2703,6 +2702,7 @@ export function App() {
           element={
               <ProfilePage
                 user={authUser}
+                songs={allKnownSongs}
                 favorites={favoriteSongs}
                 recentlyPlayed={recentSongs}
                 playlists={playlists}
