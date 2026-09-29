@@ -7231,3 +7231,856 @@ html[data-theme="dark"] article.dashboard-page .song-tile:has(.song-artwork--now
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* 2026-09-29 integrated search + compact desktop zoom + interaction/performance pass. */
+:root {
+  --frontier-shell-pad: clamp(6px, 0.7vw, 14px);
+  --frontier-shell-gap: clamp(6px, 0.7vw, 14px);
+  --frontier-topbar-height: clamp(3.25rem, 4.4vw, 4.6rem);
+  --frontier-left-rail: clamp(132px, 18vw, 300px);
+  --frontier-listening-rail: clamp(145px, 18vw, 320px);
+}
+
+/* Search now owns its dropdown instead of borrowing/navigating to the Search route. */
+.global-search {
+  position: relative;
+  z-index: 5;
+  overflow: visible;
+}
+
+.global-search__popover {
+  position: absolute;
+  top: calc(100% + clamp(5px, 0.55vw, 9px));
+  right: 0;
+  left: 0;
+  z-index: 260;
+  max-height: min(64dvh, 34rem);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--frontier-border-strong);
+  border-radius: var(--frontier-radius-md);
+  background: var(--frontier-surface-strong);
+  color: var(--color-ink);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.26);
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-red) transparent;
+  contain: layout paint style;
+}
+
+.global-search__popover::-webkit-scrollbar {
+  width: 7px;
+}
+
+.global-search__popover::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--color-red);
+}
+
+.global-search__heading,
+.global-search__footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: clamp(0.52rem, 0.7vw, 0.72rem) clamp(0.68rem, 0.9vw, 0.95rem);
+  color: var(--color-muted);
+  font-size: clamp(0.62rem, 0.72vw, 0.78rem);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.global-search__heading {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  border-bottom: 1px solid var(--frontier-border);
+  background: var(--frontier-surface-strong);
+}
+
+.global-search__footer {
+  position: sticky;
+  bottom: 0;
+  justify-content: flex-end;
+  border-top: 1px solid var(--frontier-border);
+  background: var(--frontier-surface-strong);
+  text-transform: none;
+}
+
+.global-search__recent,
+.global-search__results {
+  display: grid;
+}
+
+.global-search__recent-item,
+.global-search__result {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--frontier-border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-ink);
+  text-align: left;
+}
+
+.global-search__recent-item {
+  min-height: clamp(2.25rem, 3vw, 3.1rem);
+  justify-content: flex-start;
+  padding: 0.55rem 0.9rem;
+  font-size: clamp(0.72rem, 0.9vw, 1rem);
+}
+
+.global-search__result {
+  display: grid;
+  grid-template-columns: clamp(2.35rem, 3.1vw, 3.4rem) minmax(0, 1fr) max-content;
+  gap: clamp(0.48rem, 0.7vw, 0.72rem);
+  align-items: center;
+  min-height: clamp(3.25rem, 4.1vw, 4.2rem);
+  padding: clamp(0.35rem, 0.5vw, 0.5rem) clamp(0.55rem, 0.8vw, 0.85rem);
+}
+
+.global-search__recent-item:hover,
+.global-search__recent-item:focus-visible,
+.global-search__result:hover,
+.global-search__result:focus-visible {
+  background: var(--frontier-surface-muted);
+  color: var(--color-ink);
+  outline: none;
+}
+
+.global-search__art,
+.global-search__art-fallback,
+.global-search__art-image {
+  display: block;
+  width: clamp(2.35rem, 3.1vw, 3.4rem);
+  height: clamp(2.35rem, 3.1vw, 3.4rem);
+  overflow: hidden;
+  border-radius: var(--frontier-radius-sm);
+}
+
+.global-search__art-image {
+  object-fit: cover;
+}
+
+.global-search__copy {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.global-search__copy strong,
+.global-search__copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.global-search__copy strong {
+  font-size: clamp(0.7rem, 0.82vw, 0.92rem);
+}
+
+.global-search__copy span,
+.global-search__duration {
+  color: var(--color-muted);
+  font-size: clamp(0.6rem, 0.7vw, 0.78rem);
+}
+
+.global-search__duration {
+  white-space: nowrap;
+}
+
+.global-search__empty {
+  margin: 0;
+  padding: 0.95rem;
+  color: var(--color-muted);
+  font-size: 0.82rem;
+}
+
+.search-panel--results-only {
+  scroll-margin-top: calc(var(--frontier-shell-pad) + var(--frontier-topbar-height) + var(--frontier-shell-gap));
+  padding-top: clamp(0.72rem, 1vw, 1.1rem);
+}
+
+.search-panel--results-only > p:first-of-type {
+  margin-top: 0;
+}
+
+/* The largest bundled WaveStack icon stays visible while artwork is absent or loading. */
+.song-artwork {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.song-artwork__placeholder {
+  position: absolute !important;
+  inset: 0;
+  z-index: 0;
+  display: grid !important;
+  width: 100% !important;
+  height: 100% !important;
+  place-items: center;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: color-mix(in srgb, var(--frontier-surface-muted) 82%, var(--color-red) 18%) !important;
+  opacity: 1;
+  transition: opacity 120ms ease;
+}
+
+.song-artwork__placeholder-logo {
+  width: min(62%, 11rem) !important;
+  height: min(62%, 11rem) !important;
+  max-width: 62% !important;
+  max-height: 62% !important;
+  object-fit: contain !important;
+  opacity: 0.88;
+}
+
+.song-artwork > img:not(.song-artwork__placeholder-logo) {
+  position: relative;
+  z-index: 1;
+}
+
+.song-artwork[data-artwork-loaded="true"] > .song-artwork__placeholder {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.song-artwork__loading {
+  z-index: 2;
+}
+
+/* Every real button gets tactile visual feedback without changing layout or making sound. */
+button:not(:disabled) {
+  transition:
+    transform 75ms ease,
+    background-color 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease,
+    opacity 120ms ease;
+}
+
+button:not(:disabled):active {
+  transform: translateY(1px) scale(0.955) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button:not(:disabled) {
+    transition: none;
+  }
+
+  button:not(:disabled):active {
+    transform: none !important;
+  }
+}
+
+/* Long result grids are not painted until they approach the viewport. This keeps
+   the single modern UI layer responsive without changing the rendered content. */
+.song-list-row,
+.song-tile,
+.profile-song-list__item,
+.recent-list__item,
+.ranking-list__item,
+.add-song-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 96px;
+}
+
+/* The seek thumb is centered on the same track that paints the played red trail. */
+.player-card__progress,
+.mini-player__progress input[type="range"] {
+  --seek-track-height: 4px;
+  --seek-thumb-size: 14px;
+  height: var(--seek-thumb-size) !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+.player-card__progress::-webkit-slider-runnable-track,
+.mini-player__progress input[type="range"]::-webkit-slider-runnable-track {
+  height: var(--seek-track-height);
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--color-red) 0%,
+    var(--color-red) var(--progress, 0%),
+    var(--color-box-range-track-strong) var(--progress, 0%),
+    var(--color-box-range-track-strong) 100%
+  );
+}
+
+.player-card__progress::-webkit-slider-thumb,
+.mini-player__progress input[type="range"]::-webkit-slider-thumb {
+  width: var(--seek-thumb-size);
+  height: var(--seek-thumb-size);
+  margin-top: calc((var(--seek-track-height) - var(--seek-thumb-size)) / 2);
+  appearance: none;
+  border: 0;
+  border-radius: 50%;
+  background: var(--color-red);
+}
+
+.player-card__progress::-moz-range-track,
+.mini-player__progress input[type="range"]::-moz-range-track {
+  height: var(--seek-track-height);
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-box-range-track-strong);
+}
+
+.player-card__progress::-moz-range-progress,
+.mini-player__progress input[type="range"]::-moz-range-progress {
+  height: var(--seek-track-height);
+  border-radius: 999px;
+  background: var(--color-red);
+}
+
+.player-card__progress::-moz-range-thumb,
+.mini-player__progress input[type="range"]::-moz-range-thumb {
+  width: var(--seek-thumb-size);
+  height: var(--seek-thumb-size);
+  border: 0;
+  border-radius: 50%;
+  background: var(--color-red);
+}
+
+/* Desktop layout remains desktop-shaped through browser zoom. The left side is
+   one flex rail, so navigation and the large player share every available pixel
+   instead of leaving a dead black band between two independently positioned boxes. */
+@media (min-width: 520px) {
+  .app-shell {
+    display: grid !important;
+    grid-template-columns: var(--frontier-left-rail) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: var(--frontier-shell-gap);
+    width: 100% !important;
+    max-width: none !important;
+    min-height: 100dvh;
+    padding: var(--frontier-shell-pad) !important;
+  }
+
+  .app-header {
+    position: sticky;
+    top: var(--frontier-shell-pad);
+    z-index: 150;
+    grid-column: 1 / -1;
+    grid-row: 1;
+    grid-template-columns: max-content minmax(5rem, 1fr) max-content !important;
+    gap: clamp(0.25rem, 0.6vw, 0.8rem) !important;
+    min-width: 0;
+    height: var(--frontier-topbar-height);
+    min-height: var(--frontier-topbar-height);
+    max-height: var(--frontier-topbar-height);
+    margin: 0;
+    padding: clamp(0.32rem, 0.48vw, 0.58rem) !important;
+  }
+
+  .app-header__top,
+  .app-header__search,
+  header .auth-panel {
+    min-width: 0;
+  }
+
+  .app-header__brand {
+    font-size: clamp(0.92rem, 1.45vw, 2.2rem) !important;
+    white-space: nowrap;
+  }
+
+  .app-header__brand::before {
+    width: clamp(1.35rem, 1.75vw, 2rem);
+    height: clamp(1.35rem, 1.75vw, 2rem);
+    margin-right: clamp(0.2rem, 0.38vw, 0.46rem);
+    font-size: clamp(0.56rem, 0.7vw, 0.82rem);
+  }
+
+  .app-header__search {
+    grid-column: 2 !important;
+    grid-row: 1 !important;
+    width: 100% !important;
+    min-height: clamp(1.85rem, 2.4vw, 2.8rem) !important;
+    padding: 0 clamp(0.3rem, 0.5vw, 0.5rem) 0 clamp(0.48rem, 0.7vw, 0.8rem) !important;
+  }
+
+  .app-header__search > svg {
+    width: clamp(0.82rem, 1vw, 1.1rem);
+    height: clamp(0.82rem, 1vw, 1.1rem);
+  }
+
+  .app-header__search input {
+    min-width: 0;
+    font-size: clamp(0.62rem, 0.78vw, 0.95rem) !important;
+  }
+
+  .app-header__search button {
+    width: clamp(1.6rem, 2vw, 2.25rem) !important;
+    min-width: clamp(1.6rem, 2vw, 2.25rem) !important;
+    min-height: clamp(1.6rem, 2vw, 2.25rem) !important;
+    padding-left: clamp(0.28rem, 0.42vw, 0.5rem) !important;
+  }
+
+  header .auth-panel {
+    grid-column: 3 !important;
+    grid-row: 1 !important;
+    justify-self: end;
+    width: auto !important;
+    flex-wrap: nowrap !important;
+    gap: clamp(0.18rem, 0.42vw, 0.52rem) !important;
+  }
+
+  .auth-panel__theme-mode {
+    flex: 0 0 auto;
+    min-width: 0;
+  }
+
+  .auth-panel__profile-link {
+    width: auto !important;
+    min-width: 0 !important;
+    min-height: clamp(1.75rem, 2.1vw, 2.35rem) !important;
+    padding: 0.15rem !important;
+  }
+
+  .auth-panel__avatar {
+    width: clamp(1.45rem, 1.85vw, 2.2rem) !important;
+    height: clamp(1.45rem, 1.85vw, 2.2rem) !important;
+  }
+
+  .auth-panel--signed-in > button,
+  .auth-panel__google {
+    min-height: clamp(1.75rem, 2.1vw, 2.35rem) !important;
+    padding: 0.35rem clamp(0.42rem, 0.7vw, 0.82rem) !important;
+    font-size: clamp(0.58rem, 0.7vw, 0.84rem) !important;
+    white-space: nowrap;
+  }
+
+  .label-dark,
+  .label-light {
+    min-width: 0 !important;
+    padding-inline: clamp(0.12rem, 0.25vw, 0.32rem) !important;
+    font-size: clamp(0.48rem, 0.56vw, 0.64rem) !important;
+  }
+
+  .app-left-column {
+    position: sticky;
+    top: calc(var(--frontier-shell-pad) + var(--frontier-topbar-height) + var(--frontier-shell-gap));
+    z-index: 88;
+    display: flex;
+    grid-column: 1;
+    grid-row: 2;
+    flex-direction: column;
+    gap: var(--frontier-shell-gap);
+    width: 100%;
+    height: calc(100dvh - var(--frontier-topbar-height) - (var(--frontier-shell-pad) * 2) - var(--frontier-shell-gap));
+    min-height: 0;
+    align-self: start;
+  }
+
+  .app-nav {
+    position: static !important;
+    inset: auto !important;
+    z-index: auto;
+    display: flex;
+    width: 100% !important;
+    height: auto !important;
+    max-height: clamp(6.3rem, 23dvh, 13.7rem) !important;
+    flex: 0 1 auto;
+    gap: clamp(0.16rem, 0.3vw, 0.34rem) !important;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: clamp(0.32rem, 0.48vw, 0.62rem) !important;
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-red) transparent;
+  }
+
+  .app-nav::-webkit-scrollbar {
+    display: block !important;
+    width: 6px !important;
+  }
+
+  .app-nav a,
+  .app-nav button {
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: clamp(1.42rem, 2.7dvh, 1.9rem) !important;
+    justify-content: flex-start !important;
+    gap: clamp(0.28rem, 0.48vw, 0.6rem) !important;
+    padding: clamp(0.2rem, 0.34vw, 0.36rem) clamp(0.3rem, 0.5vw, 0.64rem) !important;
+    font-size: clamp(0.5rem, 0.66vw, 0.78rem) !important;
+    line-height: 1 !important;
+  }
+
+  .app-nav a svg,
+  .app-nav button svg {
+    width: clamp(0.7rem, 0.82vw, 1rem) !important;
+    height: clamp(0.7rem, 0.82vw, 1rem) !important;
+  }
+
+  .app-player-region {
+    position: static !important;
+    inset: auto !important;
+    z-index: auto;
+    display: block;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    flex: 1 1 0;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden;
+    container-type: size;
+  }
+
+  .app-player-region .player-card {
+    display: flex !important;
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    margin: 0 !important;
+    flex-direction: column !important;
+    gap: clamp(0.22rem, 0.5cqh, 0.55rem) !important;
+    padding: clamp(0.38rem, 0.65vw, 0.82rem) !important;
+    overflow: hidden !important;
+  }
+
+  .app-player-region .player-card__artwork-button {
+    display: grid !important;
+    width: min(100%, 48cqh) !important;
+    height: auto !important;
+    max-width: 100% !important;
+    max-height: 48cqh !important;
+    min-height: 0 !important;
+    flex: 0 1 auto;
+    align-self: center;
+    aspect-ratio: 1;
+    overflow: hidden;
+  }
+
+  .app-player-region .player-card__artwork,
+  .app-player-region .player-card__artwork-fallback {
+    width: 100% !important;
+    height: 100% !important;
+    aspect-ratio: 1;
+  }
+
+  .app-player-region .player-card__artwork img,
+  .app-player-region .player-card__artwork > img {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important;
+  }
+
+  .app-player-region .player-card__identity {
+    min-height: 0 !important;
+    flex: 0 0 auto;
+    gap: 0.12rem !important;
+  }
+
+  .app-player-region .player-card h2 {
+    min-height: 0 !important;
+    margin: 0 !important;
+    font-size: clamp(0.78rem, 1.18vw, 1.55rem) !important;
+    line-height: 1.02 !important;
+    -webkit-line-clamp: 2;
+  }
+
+  .app-player-region .player-card__identity p {
+    min-height: 0 !important;
+    margin: 0 !important;
+    font-size: clamp(0.56rem, 0.7vw, 0.86rem) !important;
+    line-height: 1.12 !important;
+  }
+
+  .app-player-region .player-actions {
+    display: grid !important;
+    grid-template-columns: 1fr 1.25fr 1fr auto !important;
+    gap: clamp(0.18rem, 0.34vw, 0.38rem) !important;
+    flex: 0 0 auto;
+  }
+
+  .app-player-region .player-actions__button--shuffle,
+  .app-player-region .player-actions__button--repeat,
+  .app-player-region .player-actions__volume {
+    display: none !important;
+  }
+
+  .app-player-region .player-actions .player-actions__button--play,
+  .app-player-region .player-actions .player-actions__button--previous,
+  .app-player-region .player-actions .player-actions__button--next,
+  .app-player-region .player-actions .player-actions__button--favorite {
+    min-height: clamp(1.8rem, 3.5cqh, 2.55rem) !important;
+    padding: 0 !important;
+    font-size: 0 !important;
+  }
+
+  .app-player-region .player-actions .player-actions__button--favorite {
+    width: clamp(1.8rem, 3.5cqh, 2.55rem) !important;
+    min-width: clamp(1.8rem, 3.5cqh, 2.55rem) !important;
+  }
+
+  .app-player-region .player-actions svg {
+    width: clamp(0.82rem, 1.1vw, 1.22rem) !important;
+    height: clamp(0.82rem, 1.1vw, 1.22rem) !important;
+  }
+
+  .app-player-region .player-card__progress-wrap {
+    position: static !important;
+    display: grid !important;
+    grid-template-columns: clamp(1.8rem, 2.4vw, 2.5rem) minmax(0, 1fr) clamp(1.8rem, 2.4vw, 2.5rem) !important;
+    gap: clamp(0.25rem, 0.45vw, 0.5rem) !important;
+    flex: 0 0 auto;
+    margin: 0 !important;
+    font-size: clamp(0.5rem, 0.62vw, 0.72rem) !important;
+  }
+
+  .app-player-region .player-card__shortcuts,
+  .app-player-region .player-card > [role="alert"] {
+    display: none !important;
+  }
+
+  .app-main {
+    grid-column: 2;
+    grid-row: 2;
+    width: 100%;
+    min-width: 0;
+    padding: 0 0 calc(clamp(5.25rem, 10dvh, 7.5rem) + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  .route-content,
+  .route-content--with-rail {
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0;
+    margin: 0 !important;
+  }
+
+  .route-content--with-rail {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) var(--frontier-listening-rail) !important;
+    gap: var(--frontier-shell-gap) !important;
+    align-items: start;
+  }
+
+  .route-content--with-rail > :not(.listening-rail) {
+    min-width: 0;
+  }
+
+  .listening-rail {
+    position: sticky !important;
+    top: calc(var(--frontier-shell-pad) + var(--frontier-topbar-height) + var(--frontier-shell-gap)) !important;
+    display: grid !important;
+    width: 100% !important;
+    max-height: calc(100dvh - var(--frontier-topbar-height) - (var(--frontier-shell-pad) * 2) - var(--frontier-shell-gap)) !important;
+    gap: clamp(0.35rem, 0.65vw, 0.8rem) !important;
+    overflow: auto !important;
+    padding: clamp(0.38rem, 0.65vw, 0.8rem) !important;
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-red) transparent;
+  }
+
+  .listening-rail__header h2 {
+    font-size: clamp(1rem, 2vw, 2.75rem) !important;
+    line-height: 0.96;
+  }
+
+  .listening-rail__period {
+    gap: clamp(0.3rem, 0.5vw, 0.55rem) !important;
+  }
+
+  .listening-rail__period h3 {
+    font-size: clamp(0.5rem, 0.62vw, 0.7rem) !important;
+  }
+
+  .listening-rail__items {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: clamp(0.22rem, 0.42vw, 0.48rem) !important;
+  }
+
+  .listening-rail__item {
+    grid-template-columns: clamp(2.1rem, 3vw, 3.8rem) minmax(0, 1fr) !important;
+    min-height: clamp(2.35rem, 3.6vw, 4.1rem) !important;
+    gap: clamp(0.28rem, 0.5vw, 0.62rem) !important;
+    padding: clamp(0.12rem, 0.22vw, 0.26rem) !important;
+  }
+
+  .listening-rail__art,
+  .listening-rail__art img,
+  .listening-rail__art-fallback {
+    width: clamp(2.1rem, 3vw, 3.8rem) !important;
+    height: clamp(2.1rem, 3vw, 3.8rem) !important;
+  }
+
+  .listening-rail__copy strong {
+    font-size: clamp(0.56rem, 0.72vw, 0.9rem) !important;
+  }
+
+  .listening-rail__copy span {
+    font-size: clamp(0.5rem, 0.62vw, 0.76rem) !important;
+  }
+
+  /* Song-list fast scrollbar remains immediately beside the song column. The
+     listening rail keeps its own scrollbar on its outside/right edge. */
+  .route-content--with-rail .all-page__fast-scroll {
+    right: calc(var(--frontier-shell-pad) + var(--frontier-listening-rail) + var(--frontier-shell-gap) + 2px) !important;
+  }
+
+  .profile-page__content {
+    grid-template-columns: minmax(0, 1fr) var(--frontier-listening-rail) !important;
+    gap: var(--frontier-shell-gap) !important;
+  }
+
+  .profile-insights-rail {
+    position: sticky !important;
+    top: calc(var(--frontier-shell-pad) + var(--frontier-topbar-height) + var(--frontier-shell-gap)) !important;
+    max-height: calc(100dvh - var(--frontier-topbar-height) - (var(--frontier-shell-pad) * 2) - var(--frontier-shell-gap)) !important;
+    padding: clamp(0.38rem, 0.65vw, 0.8rem) !important;
+  }
+
+  .profile-section-heading h3 {
+    font-size: clamp(1.25rem, 2.4vw, 3rem) !important;
+  }
+
+  article > h2,
+  .add-songs-page > h2,
+  .all-page__header-row h2,
+  .stats-page__hero h2,
+  .profile-hero h2 {
+    font-size: clamp(1.8rem, 5vw, 5rem) !important;
+  }
+
+  .mini-player {
+    left: calc(var(--frontier-shell-pad) + var(--frontier-left-rail) + var(--frontier-shell-gap)) !important;
+    right: var(--frontier-shell-pad) !important;
+    bottom: var(--frontier-shell-pad) !important;
+    grid-template-columns: minmax(7.5rem, 1fr) minmax(10rem, 1.1fr) minmax(5.5rem, 0.55fr) !important;
+    gap: clamp(0.28rem, 0.65vw, 0.8rem) !important;
+    min-height: clamp(3.45rem, 8dvh, 5.75rem) !important;
+    padding: clamp(0.34rem, 0.6vw, 0.72rem) clamp(0.42rem, 0.75vw, 0.85rem) !important;
+  }
+
+  .mini-player__track {
+    grid-template-columns: clamp(2.2rem, 3.2vw, 3.8rem) minmax(0, 1fr) auto !important;
+    gap: clamp(0.3rem, 0.55vw, 0.72rem) !important;
+  }
+
+  .mini-player__cover-button,
+  .mini-player__cover {
+    width: clamp(2.2rem, 3.2vw, 3.8rem) !important;
+    height: clamp(2.2rem, 3.2vw, 3.8rem) !important;
+  }
+
+  .mini-player__meta-button strong {
+    font-size: clamp(0.58rem, 0.72vw, 0.88rem) !important;
+  }
+
+  .mini-player__meta-button span,
+  .mini-player__progress,
+  .mini-player__right {
+    font-size: clamp(0.5rem, 0.62vw, 0.76rem) !important;
+  }
+
+  .mini-player__controls {
+    gap: clamp(0.18rem, 0.4vw, 0.48rem) !important;
+  }
+
+  .mini-player__controls button,
+  .mini-player__icon-button,
+  .mini-player__mode-button {
+    width: clamp(1.55rem, 2.2vw, 2.15rem) !important;
+    height: clamp(1.55rem, 2.2vw, 2.15rem) !important;
+  }
+
+  .mini-player__play {
+    width: clamp(2.7rem, 4.3vw, 4.1rem) !important;
+    height: clamp(2rem, 3vw, 2.75rem) !important;
+  }
+
+  .mini-player__progress {
+    grid-template-columns: clamp(1.65rem, 2.2vw, 2.7rem) minmax(0, 1fr) clamp(1.65rem, 2.2vw, 2.7rem) !important;
+    gap: clamp(0.2rem, 0.42vw, 0.52rem) !important;
+  }
+
+  .mini-player__right {
+    grid-template-columns: auto auto minmax(3.5rem, 6rem) !important;
+    gap: clamp(0.2rem, 0.42vw, 0.5rem) !important;
+  }
+}
+
+@media (min-width: 520px) and (max-width: 960px) {
+  /* At high desktop browser zoom, reserve the header row for actual controls:
+     the favicon remains, while the redundant brand word and Dark/Light labels shrink away. */
+  .app-header__brand {
+    width: clamp(1.5rem, 3.4vw, 2rem);
+    overflow: visible;
+    font-size: 0 !important;
+  }
+
+  .app-header__brand::before {
+    margin-right: 0;
+  }
+
+  .label-dark,
+  .label-light {
+    display: none !important;
+  }
+
+  .auth-panel__theme-mode {
+    gap: 0 !important;
+  }
+
+  .route-content--with-rail {
+    grid-template-columns: minmax(0, 1fr) clamp(132px, 18vw, 172px) !important;
+  }
+
+  .profile-page__content {
+    grid-template-columns: minmax(0, 1fr) clamp(132px, 18vw, 172px) !important;
+  }
+
+  .mini-player {
+    grid-template-columns: minmax(7rem, 1fr) minmax(9.5rem, 1fr) !important;
+  }
+
+  .mini-player__right {
+    display: none !important;
+  }
+}
+
+@media (max-width: 519px) {
+  .app-left-column {
+    display: grid;
+    gap: var(--frontier-shell-gap);
+  }
+
+  .app-nav {
+    position: static !important;
+    inset: auto !important;
+    display: flex;
+    width: 100% !important;
+    max-height: 9rem;
+    overflow-y: auto;
+  }
+
+  .app-player-region {
+    width: calc(100% - (var(--space-page) * 2));
+    margin: 0 auto var(--space-page);
+  }
+
+  .app-player-region .player-card__artwork-button {
+    display: grid !important;
+    width: min(100%, 18rem) !important;
+    margin-inline: auto;
+  }
+
+  .route-content--with-rail,
+  .profile-page__content {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .listening-rail,
+  .profile-insights-rail {
+    position: static !important;
+    max-height: none !important;
+  }
+}

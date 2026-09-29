@@ -1,3 +1,4 @@
+
 import { Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useSongPages } from "../../hooks/useSongPages";
@@ -21,6 +22,7 @@ type SearchPanelProps = {
   emptyMessage?: string;
   backendSearch?: boolean;
   initialQuery?: string;
+  resultsOnly?: boolean;
   onAddToPlaylist: (playlistId: string, song: Song) => void;
   onPlay: PlaySongHandler;
   onQueue: (song: Song) => void;
@@ -39,6 +41,7 @@ export function SearchPanel({
   emptyMessage = "No songs found.",
   backendSearch = false,
   initialQuery = "",
+  resultsOnly = false,
   onAddToPlaylist,
   onPlay,
   onQueue,
@@ -154,47 +157,51 @@ export function SearchPanel({
   }
 
   return (
-    <article ref={regionRef}>
-      <h2>{title}</h2>
-      <label>
-        <Search aria-hidden="true" /> Filename, song, artist, album, or lyrics
-        <span className="search-history-field">
-          <input
-            value={query}
-            autoComplete="off"
-            onFocus={() => {
-              setSearchHistory(readSearchHistory());
-              setSearchHistoryOpen(true);
-            }}
-            onChange={(event) => {
-              setQuery(event.target.value);
-              setSearchHistoryOpen(true);
-            }}
-            onBlur={() => {
-              saveSearchHistory();
-              setSearchHistoryOpen(false);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                saveSearchHistory();
-                setSearchHistoryOpen(false);
-              } else if (event.key === "Escape") {
-                setSearchHistoryOpen(false);
-              }
-            }}
-          />
-          <SearchHistorySuggestions
-            history={searchHistory}
-            query={query}
-            open={searchHistoryOpen}
-            onSelect={(value) => {
-              setQuery(value);
-              setSearchHistory(rememberSearch(value));
-              setSearchHistoryOpen(false);
-            }}
-          />
-        </span>
-      </label>
+    <article ref={regionRef} className={resultsOnly ? "search-panel search-panel--results-only" : "search-panel"}>
+      {!resultsOnly ? (
+        <>
+          <h2>{title}</h2>
+          <label>
+            <Search aria-hidden="true" /> Filename, song, artist, album, or lyrics
+            <span className="search-history-field">
+              <input
+                value={query}
+                autoComplete="off"
+                onFocus={() => {
+                  setSearchHistory(readSearchHistory());
+                  setSearchHistoryOpen(true);
+                }}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setSearchHistoryOpen(true);
+                }}
+                onBlur={() => {
+                  saveSearchHistory();
+                  setSearchHistoryOpen(false);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    saveSearchHistory();
+                    setSearchHistoryOpen(false);
+                  } else if (event.key === "Escape") {
+                    setSearchHistoryOpen(false);
+                  }
+                }}
+              />
+              <SearchHistorySuggestions
+                history={searchHistory}
+                query={query}
+                open={searchHistoryOpen}
+                onSelect={(value) => {
+                  setQuery(value);
+                  setSearchHistory(rememberSearch(value));
+                  setSearchHistoryOpen(false);
+                }}
+              />
+            </span>
+          </label>
+        </>
+      ) : null}
       {message ? (
         <ToastNotice onDismiss={() => setMessage("")}>
           {message}
@@ -206,7 +213,7 @@ export function SearchPanel({
         ) : (
           <>Showing {displayedResults.length} of {totalMatchingCount} matching song(s).</>
         )}
-        {backendSearch && debouncedQuery ? ` (DB search: "${debouncedQuery}")` : ""}
+        {backendSearch && debouncedQuery && !resultsOnly ? ` (DB search: "${debouncedQuery}")` : ""}
         {backendSearch && loading ? " — searching..." : ""}
         {!backendSearch && pageCount > 1 ? ` Page ${currentPage} of ${pageCount}.` : ""}
       </p>

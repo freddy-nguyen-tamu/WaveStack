@@ -1,3 +1,4 @@
+
 import { Check, Heart, ListMusic, ListPlus, Play } from "lucide-react";
 import { useId, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
@@ -87,10 +88,15 @@ export function SongActions({
     if (pendingRef.current) return;
     pendingRef.current = true;
     setPending(true);
+
+    // A playlist click completes the picker interaction immediately. Persist the
+    // change in the background instead of leaving the menu hanging open while a
+    // network-backed playlist mutation finishes.
+    setPlaylistPickerOpen(false);
+    triggerRef.current?.focus({ preventScroll: true });
+
     try {
       await onAddToPlaylist(playlistId, song);
-      setPlaylistPickerOpen(false);
-      triggerRef.current?.focus({ preventScroll: true });
     } finally {
       pendingRef.current = false;
       setPending(false);

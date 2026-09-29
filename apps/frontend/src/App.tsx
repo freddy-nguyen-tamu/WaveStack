@@ -1,7 +1,7 @@
 
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ApolloQueryResult, useApolloClient, useMutation, useQuery } from "@apollo/client";
-import { Activity, Clock, Heart, ListMusic, Music2, RefreshCw, Search, TrendingUp, Upload } from "lucide-react";
+import { Activity, Clock, Heart, ListMusic, Music2, RefreshCw, TrendingUp, Upload } from "lucide-react";
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import {
     LISTENING_HABIT_SUMMARY_QUERY,
@@ -38,7 +38,7 @@ import { formatSongDisplayName } from "./song-format";
 import { NowPlayingProvider, type NowPlayingState } from "./components/NowPlayingContext";
 import { ToastNotice } from "./components/ToastNotice";
 import { SongArtwork } from "./components/SongArtwork";
-import { rememberSearch } from "./search-history";
+import { GlobalSearch } from "./components/GlobalSearch";
 
 export type Song = {
   id: string;
@@ -161,7 +161,6 @@ const fallbackSongs: Song[] = [
 const NAV_SCROLL_PATHS = new Set([
   "/all",
   "/dashboard",
-  "/search",
   "/favorites",
   "/recent",
   "/stats",
@@ -460,7 +459,7 @@ export function App() {
   const [playlists, setPlaylists] = useState<ClientPlaylist[]>(readPlaylists);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState("");
   const [notice, setNotice] = useState("");
-  const [globalSearchQuery, setGlobalSearchQuery] = useState("");
+  const [globalSearchQuery, setGlobalSearchQuery] = useState(() => window.sessionStorage.getItem("wavestack:active-search") ?? "");
   const [isDarkMode, setIsDarkMode] = useState(() => {
     return window.localStorage.getItem("wavestack:theme") === "dark";
   });
@@ -583,18 +582,32 @@ export function App() {
     }
   }
 
-  function submitGlobalSearch(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function submitGlobalSearch(query: string) {
+    const nextQuery = query.trim();
 
-    const nextQuery = globalSearchQuery.trim();
-
-    if (nextQuery) {
-      rememberSearch(nextQuery);
+    if (!nextQuery) {
+      return;
     }
 
-    requestNavScroll("/search");
+    setGlobalSearchQuery(nextQuery);
+    window.sessionStorage.setItem("wavestack:active-search", nextQuery);
     navigate("/search");
+    window.requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(".search-panel--results-only")?.scrollIntoView({
+        block: "start",
+        behavior: "smooth"
+      });
+    });
   }
+
+  useEffect(() => {
+    if (location.pathname !== "/search") {
+      return;
+    }
+
+    const storedQuery = window.sessionStorage.getItem("wavestack:active-search") ?? "";
+    setGlobalSearchQuery((current) => current || storedQuery);
+  }, [location.pathname]);
 
   useEffect(() => {
     if (!pendingNavScrollRef.current) {
@@ -2384,6 +2397,7 @@ export function App() {
           onToggleFavorite={toggleFavorite}
           onOpenDetails={openDetails}
           initialQuery={title === "Search" ? globalSearchQuery : ""}
+          resultsOnly={title === "Search"}
         />
       </section>
     );
@@ -2391,6 +2405,7 @@ export function App() {
 
   return (
     <>
+      <NowPlayingProvider value={nowPlaying}>
       <div className="app-shell">
         <header className="app-header">
           <div className="app-header__top">
@@ -2404,30 +2419,18 @@ export function App() {
             </NavLink>
           </div>
 
-          <form
-            className="app-header__search"
-            role="search"
+          <GlobalSearch
+            value={globalSearchQuery}
+            onChange={setGlobalSearchQuery}
             onSubmit={submitGlobalSearch}
-            aria-label="Search WaveStack"
-          >
-            <Search aria-hidden="true" />
-            <input
-              type="search"
-              value={globalSearchQuery}
-              placeholder="What do you want to play?"
-              aria-label="What do you want to play?"
-              onChange={(event) => setGlobalSearchQuery(event.target.value)}
-              onFocus={() => {
-                if (location.pathname !== "/search") {
-                  requestNavScroll("/search");
-                  navigate("/search");
-                }
-              }}
-            />
-            <button type="submit" aria-label="Search">
-              <Search aria-hidden="true" />
-            </button>
-          </form>
+            onOpenSong={(song) => openDetails(song, {
+              id: `global-search:${globalSearchQuery.trim() || "results"}`,
+              label: globalSearchQuery.trim() ? `Search: ${globalSearchQuery.trim()}` : "Search",
+              source: "search",
+              queryFilter: globalSearchQuery.trim() || null,
+              songs: allKnownSongs
+            })}
+          />
 
           <AuthPanel
             user={authUser}
@@ -2437,6 +2440,7 @@ export function App() {
           />
         </header>
 
+        <aside className="app-left-column" aria-label="Navigation and player">
         <nav className="app-nav" aria-label="Primary navigation">
           <a className="skip-link" href="#main-content">
             Skip to main content
@@ -2446,9 +2450,6 @@ export function App() {
           </NavLink>
           <NavLink to="/dashboard" onClick={() => requestNavScroll("/dashboard")}>
             <Activity aria-hidden="true" /> Dashboard
-          </NavLink>
-          <NavLink to="/search" onClick={() => requestNavScroll("/search")}>
-            <Search aria-hidden="true" /> Search
           </NavLink>
           <NavLink to="/add-songs" onClick={() => requestNavScroll("/add-songs")}>
             <Upload aria-hidden="true" /> Add Songs
@@ -2479,25 +2480,7 @@ export function App() {
           </NavLink>
         </nav>
 
-        <main
-          id="main-content"
-          className="app-main"
-        >
-        <h1 className="sr-only">WaveStack music library</h1>
-
-      {notice ? (
-        <ToastNotice onDismiss={dismissNotice}>
-          {notice}
-        </ToastNotice>
-      ) : null}
-      {error ? (
-        <p className="app-banner app-banner--error" role="alert">
-          Could not load music library: {error.message}
-        </p>
-      ) : null}
-
-      <NowPlayingProvider value={nowPlaying}>
-      <section aria-label="Player">
+        <section className="app-player-region" aria-label="Player">
           <Player
             activeSong={currentSong}
             queue={queue}
@@ -2525,7 +2508,26 @@ export function App() {
             onPrevious={playPreviousFromHistory}
             onEnded={() => { void playNextFromPolicy("ended"); }}
         />
-      </section>
+        </section>
+        </aside>
+
+        <main
+          id="main-content"
+          className="app-main"
+        >
+        <h1 className="sr-only">WaveStack music library</h1>
+
+      {notice ? (
+        <ToastNotice onDismiss={dismissNotice}>
+          {notice}
+        </ToastNotice>
+      ) : null}
+      {error ? (
+        <p className="app-banner app-banner--error" role="alert">
+          Could not load music library: {error.message}
+        </p>
+      ) : null}
+
 
       <div
         className={showListeningRail ? "route-content route-content--with-rail" : "route-content"}
@@ -2780,11 +2782,10 @@ export function App() {
         }}
       />
 
-      </NowPlayingProvider>
-
         <div className="bottom-player-spacer" aria-hidden="true" />
         </main>
       </div>
+      </NowPlayingProvider>
     </>
   );
 }

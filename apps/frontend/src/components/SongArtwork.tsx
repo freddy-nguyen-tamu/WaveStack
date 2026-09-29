@@ -1,3 +1,4 @@
+
 import { memo, type SyntheticEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Song } from "../App";
 import { LoaderCircle } from "lucide-react";
@@ -384,6 +385,15 @@ export const SongArtwork = memo(function SongArtwork({
       data-now-playing={shouldApplyNowPlayingStyle ? "true" : undefined}
       data-playback-state={shouldApplyNowPlayingStyle ? (nowPlaying.isPlaying ? "playing" : "paused") : undefined}
     >
+      <span className={`${fallbackClassName} song-artwork__placeholder`} aria-hidden="true">
+        <img
+          className="song-artwork__placeholder-logo"
+          src="/icon-512.png"
+          alt=""
+          draggable={false}
+          decoding="async"
+        />
+      </span>
       {displaySrc ? (
         <img
           ref={imageRef}
@@ -402,13 +412,11 @@ export const SongArtwork = memo(function SongArtwork({
               imageStatus.set(src, "failed");
             }
 
+            setLoadedSrc(undefined);
             setSourceIndex((index) => index + 1);
           }}
         />
-      ) : (
-        <span className={fallbackClassName} aria-hidden="true">
-        </span>
-      )}
+      ) : null}
       {src && loadedSrc !== displaySrc && isNearViewport ? <LoaderCircle className="song-artwork__loading" aria-hidden="true" /> : null}
     </span>
   );
