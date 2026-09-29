@@ -1,6 +1,6 @@
-import { Activity, Clock, Flame, Heart, Shuffle, TrendingUp } from "lucide-react";
+import { Shuffle } from "lucide-react";
 import { useMemo } from "react";
-import type { HabitSummaryEntry, OpenSongDetailsHandler, RecommendResult, Song } from "../../App";
+import type { OpenSongDetailsHandler, RecommendResult, Song } from "../../App";
 import type { ClientPlaylist } from "../../App";
 import { formatSeconds, getSongCardSize } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
@@ -10,11 +10,7 @@ import { SongActions } from "../../components/SongActions";
 
 type DashboardProps = {
   loading: boolean;
-  songs: Song[];
-  favorites: Song[];
-  recentlyPlayed: Song[];
   recommendations?: RecommendResult[];
-  habitSummaries: Record<string, HabitSummaryEntry[]>;
   playlists: ClientPlaylist[];
   favoriteIds: string[];
   onPlay: (song: Song) => void;
@@ -32,11 +28,7 @@ type DashboardProps = {
 
 export function Dashboard({
   loading,
-  songs,
-  favorites,
-  recentlyPlayed,
   recommendations = [],
-  habitSummaries,
   playlists,
   favoriteIds,
   onPlay,
@@ -75,81 +67,24 @@ export function Dashboard({
     rootMargin: "250px"
   });
 
-  const periodLabels: Record<string, string> = {
-    DAY: "Today",
-    WEEK: "This week",
-    MONTH: "This month",
-    YEAR: "This year"
-  };
-
-  const periodIcons: Record<string, React.ReactNode> = {
-    DAY: <Clock aria-hidden="true" />,
-    WEEK: <Activity aria-hidden="true" />,
-    MONTH: <Flame aria-hidden="true" />,
-    YEAR: <TrendingUp aria-hidden="true" />
-  };
-
   return (
     <article className="dashboard-page">
-      <div className="dashboard-page__header">
-        <div>
-          <p className="eyebrow">{userName ? "Random discovery" : "Public discovery"}</p>
-          <h2>{userName ? `Random picks for ${userName}` : "Random songs"}</h2>
-          <p>
-            Suggestions are intentionally random because this library has messy filenames and incomplete metadata.
-            Shuffle anytime to discover a different set of tracks.
-          </p>
-        </div>
+      <h2 className="sr-only">{userName ? `Dashboard for ${userName}` : "Dashboard"}</h2>
 
-        <div className="dashboard-page__actions">
-          {onShuffleRecommendations ? (
-            <button
-              type="button"
-              onClick={() => onShuffleRecommendations()}
-              disabled={Boolean(shufflingRecommendations)}
-            >
-              <Shuffle aria-hidden="true" />
-              {shufflingRecommendations ? "Shuffling..." : "Shuffle suggestions"}
-            </button>
-          ) : null}
+      <div className="dashboard-page__toolbar">
+        {loading ? <LoadingStatus label="Loading music data..." /> : <span aria-hidden="true" />}
 
-          {loading ? <LoadingStatus label="Loading music data..." /> : null}
-        </div>
+        {onShuffleRecommendations ? (
+          <button
+            type="button"
+            onClick={() => onShuffleRecommendations()}
+            disabled={Boolean(shufflingRecommendations)}
+          >
+            <Shuffle aria-hidden="true" />
+            {shufflingRecommendations ? "Shuffling..." : "Shuffle suggestions"}
+          </button>
+        ) : null}
       </div>
-
-      <section className="dashboard-stats" aria-label="Library summary">
-        <div>
-          <TrendingUp aria-hidden="true" />
-          <strong>{songs.length}</strong>
-          <span>Total songs</span>
-        </div>
-        <div>
-          <Heart aria-hidden="true" />
-          <strong>{favorites.length}</strong>
-          <span>Favorites</span>
-        </div>
-        <div>
-          <Activity aria-hidden="true" />
-          <strong>{recentlyPlayed.length}</strong>
-          <span>Recently played</span>
-        </div>
-      </section>
-
-      {(Object.keys(habitSummaries).length > 0) ? (
-        <section className="habit-grid" aria-label="Listening habits">
-          {Object.entries(habitSummaries).filter(([, entries]) => entries.length > 0).map(([period, entries]) => (
-            <div key={period} className="habit-card">
-              <h3>{periodIcons[period] ?? null} {periodLabels[period] ?? period}</h3>
-              {entries.slice(0, 5).map((entry) => (
-                <div key={entry.label} className="habit-card__row">
-                  <span className="habit-card__label">{entry.label}</span>
-                  <span className="habit-card__count">{entry.count} play(s)</span>
-                </div>
-              ))}
-            </div>
-          ))}
-        </section>
-      ) : null}
 
       {suggestions.length ? (
         <section className="song-masonry" aria-label="Suggested songs">
@@ -218,4 +153,3 @@ export function Dashboard({
     </article>
   );
 }
-

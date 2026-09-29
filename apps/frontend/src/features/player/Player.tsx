@@ -797,7 +797,7 @@ export function Player({
           }}
         />
 
-        {message ? <p className="player-card__message" role="status" title={message}>{message}</p> : null}
+        {message ? <p className="sr-only" role="status">{message}</p> : null}
         {playError ? <p role="alert">Playback error: {playError}</p> : null}
 
         <div className="player-actions">

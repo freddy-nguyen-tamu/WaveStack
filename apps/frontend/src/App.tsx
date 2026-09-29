@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ApolloQueryResult, useApolloClient, useMutation, useQuery } from "@apollo/client";
 import { Activity, Clock, Heart, ListMusic, Music2, RefreshCw, Search, TrendingUp, Upload } from "lucide-react";
-import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import {
     LISTENING_HABIT_SUMMARY_QUERY,
     ME_QUERY,
@@ -36,6 +36,8 @@ import { refreshWaveStackLibraryCache } from "./library-refresh";
 import { formatSongDisplayName } from "./song-format";
 import { NowPlayingProvider, type NowPlayingState } from "./components/NowPlayingContext";
 import { ToastNotice } from "./components/ToastNotice";
+import { SongArtwork } from "./components/SongArtwork";
+import { rememberSearch } from "./search-history";
 
 export type Song = {
   id: string;
@@ -308,6 +310,113 @@ function writeLocalJson(key: string, value: unknown) {
   }
 }
 
+const habitPeriodLabels: Record<string, string> = {
+  DAY: "Today",
+  WEEK: "This week",
+  MONTH: "This month",
+  YEAR: "This year"
+};
+
+const habitPeriodOrder = ["DAY", "WEEK", "MONTH", "YEAR"];
+
+function normalizeHabitLabel(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function hashHabitLabel(value: string) {
+  return Array.from(value).reduce((total, character) => total + character.charCodeAt(0), 0);
+}
+
+function pickHabitArtworkSong(entry: HabitSummaryEntry, songs: Song[], index: number): Song | null {
+  if (!songs.length) {
+    return null;
+  }
+
+  const label = normalizeHabitLabel(entry.label);
+  const matches = label && label !== "unknown"
+    ? songs.filter((song) => {
+        const searchable = [
+          song.artistName,
+          song.title,
+          song.albumTitle,
+          song.fileName,
+          ...song.genreNames
+        ].filter(Boolean).join(" ").toLowerCase();
+
+        return searchable.includes(label);
+      })
+    : [];
+  const candidates = matches.length ? matches : songs;
+  const pickIndex = Math.abs(hashHabitLabel(`${entry.label}:${index}`)) % candidates.length;
+
+  return candidates[pickIndex] ?? null;
+}
+
+type ListeningHabitRailProps = {
+  habitSummaries: Record<string, HabitSummaryEntry[]>;
+  songs: Song[];
+  onOpenDetails: OpenSongDetailsHandler;
+};
+
+function ListeningHabitRail({ habitSummaries, songs, onOpenDetails }: ListeningHabitRailProps) {
+  const periods = habitPeriodOrder
+    .map((period) => [period, habitSummaries[period] ?? []] as const)
+    .filter(([, entries]) => entries.length > 0);
+
+  if (!periods.length) {
+    return null;
+  }
+
+  return (
+    <aside className="listening-rail" aria-label="Listening habit highlights">
+      <div className="listening-rail__header">
+        <p className="eyebrow">Listening habits</p>
+        <h2>Heavy rotation</h2>
+      </div>
+
+      {periods.map(([period, entries]) => (
+        <section key={period} className="listening-rail__period" aria-label={habitPeriodLabels[period] ?? period}>
+          <h3>{habitPeriodLabels[period] ?? period}</h3>
+          <div className="listening-rail__items">
+            {entries.slice(0, 4).map((entry, index) => {
+              const artworkSong = pickHabitArtworkSong(entry, songs, index);
+
+              return (
+                <button
+                  key={`${period}:${entry.label}`}
+                  type="button"
+                  className="listening-rail__item"
+                  onClick={() => {
+                    if (artworkSong) {
+                      onOpenDetails(artworkSong);
+                    }
+                  }}
+                  disabled={!artworkSong}
+                >
+                  {artworkSong ? (
+                    <SongArtwork
+                      song={artworkSong}
+                      wrapClassName="listening-rail__art"
+                      fallbackClassName="listening-rail__art-fallback"
+                      disableNowPlayingStyle
+                    />
+                  ) : (
+                    <span className="listening-rail__art listening-rail__art-fallback" aria-hidden="true" />
+                  )}
+                  <span className="listening-rail__copy">
+                    <strong>{entry.label}</strong>
+                    <span>{entry.count} play{entry.count === 1 ? "" : "s"}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      ))}
+    </aside>
+  );
+}
+
 function isUnauthenticatedGraphqlError(error: unknown): boolean {
   const graphQLErrors =
     (error as { graphQLErrors?: Array<{ message?: string; extensions?: { code?: string } }> })
@@ -324,6 +433,7 @@ function isUnauthenticatedGraphqlError(error: unknown): boolean {
 
 export function App() {
   const location = useLocation();
+  const navigate = useNavigate();
 
   useEffect(() => {
     const metadata = ROUTE_META[location.pathname] ?? ROUTE_META["/"];
@@ -349,6 +459,7 @@ export function App() {
   const [playlists, setPlaylists] = useState<ClientPlaylist[]>(readPlaylists);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState("");
   const [notice, setNotice] = useState("");
+  const [globalSearchQuery, setGlobalSearchQuery] = useState("");
   const [isDarkMode, setIsDarkMode] = useState(() => {
     return window.localStorage.getItem("wavestack:theme") === "dark";
   });
@@ -469,6 +580,19 @@ export function App() {
       pendingNavScrollRef.current = false;
       scrollRouteContentIntoView();
     }
+  }
+
+  function submitGlobalSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const nextQuery = globalSearchQuery.trim();
+
+    if (nextQuery) {
+      rememberSearch(nextQuery);
+    }
+
+    requestNavScroll("/search");
+    navigate("/search");
   }
 
   useEffect(() => {
@@ -2233,6 +2357,8 @@ export function App() {
     }
   }
 
+  const showListeningRail = !["/dashboard", "/stats", "/profile", "/oauth-callback"].includes(location.pathname);
+
   function renderSongsPage(
     title: string,
     pageSongs: Song[],
@@ -2256,6 +2382,7 @@ export function App() {
           onQueue={queueSong}
           onToggleFavorite={toggleFavorite}
           onOpenDetails={openDetails}
+          initialQuery={title === "Search" ? globalSearchQuery : ""}
         />
       </section>
     );
@@ -2277,15 +2404,30 @@ export function App() {
             <p id="app-description">Cloud-native music streaming platform</p>
           </div>
 
-          <NavLink
+          <form
             className="app-header__search"
-            to="/search"
-            onClick={() => requestNavScroll("/search")}
-            aria-label="Open WaveStack search"
+            role="search"
+            onSubmit={submitGlobalSearch}
+            aria-label="Search WaveStack"
           >
             <Search aria-hidden="true" />
-            <span>What do you want to play?</span>
-          </NavLink>
+            <input
+              type="search"
+              value={globalSearchQuery}
+              placeholder="What do you want to play?"
+              aria-label="What do you want to play?"
+              onChange={(event) => setGlobalSearchQuery(event.target.value)}
+              onFocus={() => {
+                if (location.pathname !== "/search") {
+                  requestNavScroll("/search");
+                  navigate("/search");
+                }
+              }}
+            />
+            <button type="submit" aria-label="Search">
+              <Search aria-hidden="true" />
+            </button>
+          </form>
 
           <AuthPanel
             user={authUser}
@@ -2386,7 +2528,10 @@ export function App() {
         />
       </section>
 
-      <div className="route-content" data-route-content>
+      <div
+        className={showListeningRail ? "route-content route-content--with-rail" : "route-content"}
+        data-route-content
+      >
       <Routes>
         <Route path="/" element={<Navigate to="/all" replace />} />
         <Route
@@ -2420,11 +2565,7 @@ export function App() {
             <section aria-label="Dashboard">
               <Dashboard
                 loading={loading}
-                songs={songs}
-                favorites={favoriteSongs}
-                recentlyPlayed={recentSongs}
                 recommendations={visibleRecommendations}
-                habitSummaries={habitSummaries}
                 playlists={playlists}
                 favoriteIds={favoriteIds}
                 onPlay={(song: Song) =>
@@ -2590,6 +2731,13 @@ export function App() {
         />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
+      {showListeningRail ? (
+        <ListeningHabitRail
+          habitSummaries={habitSummaries}
+          songs={allKnownSongs}
+          onOpenDetails={openDetails}
+        />
+      ) : null}
       </div>
 
       {detailsSong ? (

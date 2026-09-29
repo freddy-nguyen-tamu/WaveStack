@@ -20,6 +20,7 @@ type SearchPanelProps = {
   favoriteIds: string[];
   emptyMessage?: string;
   backendSearch?: boolean;
+  initialQuery?: string;
   onAddToPlaylist: (playlistId: string, song: Song) => void;
   onPlay: PlaySongHandler;
   onQueue: (song: Song) => void;
@@ -37,13 +38,14 @@ export function SearchPanel({
   favoriteIds,
   emptyMessage = "No songs found.",
   backendSearch = false,
+  initialQuery = "",
   onAddToPlaylist,
   onPlay,
   onQueue,
   onToggleFavorite,
   onOpenDetails
 }: SearchPanelProps) {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [searchHistory, setSearchHistory] = useState<string[]>(readSearchHistory);
   const [searchHistoryOpen, setSearchHistoryOpen] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -103,11 +105,12 @@ export function SearchPanel({
   }), [backendSearch, debouncedQuery, pageKey, playbackSource, query, results, title]);
 
   useEffect(() => {
-    setQuery("");
-    setDebouncedQuery("");
+    const nextQuery = initialQuery.trim();
+    setQuery(initialQuery);
+    setDebouncedQuery(nextQuery);
     setMessage("");
     setPage(1);
-  }, [pageKey]);
+  }, [initialQuery, pageKey]);
 
   useEffect(() => {
     setPage(1);
@@ -247,4 +250,3 @@ export function SearchPanel({
     </article>
   );
 }
-
