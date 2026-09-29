@@ -741,6 +741,26 @@ export function Player({
   return (
     <>
       <article className="player-card">
+        <button
+          type="button"
+          className="player-card__artwork-button"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onOpenDetails(activeSong);
+          }}
+          aria-label={`Open details for ${displayName}`}
+          title={`Open details for ${displayName}`}
+        >
+          <SongArtwork
+            song={activeSong}
+            wrapClassName="player-card__artwork"
+            fallbackClassName="player-card__artwork-fallback"
+            loading="eager"
+            eager
+          />
+        </button>
+
         <div className="player-card__identity">
           <h2 title={songTitle}>{songTitle}</h2>
           <p title={songArtist}>{songArtist}</p>
@@ -781,32 +801,32 @@ export function Player({
         {playError ? <p role="alert">Playback error: {playError}</p> : null}
 
         <div className="player-actions">
-          <button type="button" onClick={togglePlay} aria-label={isPlaying ? "Pause" : "Play"}>
+          <button type="button" className="player-actions__button player-actions__button--play" onClick={togglePlay} aria-label={isPlaying ? "Pause" : "Play"}>
             {isPlaying ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
             {isPlaying ? " Pause" : " Play"}
           </button>
 
-          <button type="button" onClick={previous} aria-label="Restart current song or go to previous song">
+          <button type="button" className="player-actions__button player-actions__button--previous" onClick={previous} aria-label="Restart current song or go to previous song">
             <SkipBack aria-hidden="true" /> Previous
           </button>
 
-          <button type="button" onClick={skip} aria-label="Next song" aria-busy={resolvingNext} disabled={resolvingNext}>
+          <button type="button" className="player-actions__button player-actions__button--next" onClick={skip} aria-label="Next song" aria-busy={resolvingNext} disabled={resolvingNext}>
             <SkipForward aria-hidden="true" /> Next
           </button>
 
-          <button type="button" onClick={onToggleShuffle} aria-pressed={shuffleEnabled} aria-label="Toggle shuffle">
+          <button type="button" className="player-actions__button player-actions__button--shuffle" onClick={onToggleShuffle} aria-pressed={shuffleEnabled} aria-label="Toggle shuffle">
             <Shuffle aria-hidden="true" /> Shuffle
           </button>
 
-          <button type="button" onClick={onCycleRepeatMode} aria-pressed={repeatMode !== "none"} aria-label={repeatLabel}>
+          <button type="button" className="player-actions__button player-actions__button--repeat" onClick={onCycleRepeatMode} aria-pressed={repeatMode !== "none"} aria-label={repeatLabel}>
             <RepeatIcon aria-hidden="true" /> {repeatLabel}
           </button>
 
-          <button type="button" onClick={favorite} aria-pressed={isFavorite}>
+          <button type="button" className="player-actions__button player-actions__button--favorite" onClick={favorite} aria-pressed={isFavorite}>
             <Heart aria-hidden="true" /> {isFavorite ? "Unfavorite" : "Favorite"}
           </button>
 
-          <label>
+          <label className="player-actions__volume">
             <Volume2 aria-hidden="true" /> Volume
             <input
               aria-label="Volume"
@@ -971,4 +991,3 @@ export function Player({
     </>
   );
 }
-

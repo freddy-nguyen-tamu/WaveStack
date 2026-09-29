@@ -2263,74 +2263,85 @@ export function App() {
 
   return (
     <>
-      <header className="app-header">
-        <div className="app-header__top">
+      <div className="app-shell">
+        <header className="app-header">
+          <div className="app-header__top">
+            <NavLink
+              className="app-header__brand"
+              to="/all"
+              aria-label="WaveStack home"
+              onClick={() => requestNavScroll("/all")}
+            >
+              WaveStack
+            </NavLink>
+            <p id="app-description">Cloud-native music streaming platform</p>
+          </div>
+
           <NavLink
-            className="app-header__brand"
-            to="/all"
-            aria-label="WaveStack home"
-            onClick={() => requestNavScroll("/all")}
+            className="app-header__search"
+            to="/search"
+            onClick={() => requestNavScroll("/search")}
+            aria-label="Open WaveStack search"
           >
-            WaveStack
+            <Search aria-hidden="true" />
+            <span>What do you want to play?</span>
           </NavLink>
-          <p id="app-description">Cloud-native music streaming platform</p>
-        </div>
 
-        <AuthPanel
-          user={authUser}
-          isDarkMode={isDarkMode}
-          onToggleDarkMode={() => setIsDarkMode((current) => !current)}
-          onLogout={logout}
-        />
-      </header>
+          <AuthPanel
+            user={authUser}
+            isDarkMode={isDarkMode}
+            onToggleDarkMode={() => setIsDarkMode((current) => !current)}
+            onLogout={logout}
+          />
+        </header>
 
-      <nav className="app-nav" aria-label="Primary navigation">
-        <a className="skip-link" href="#main-content">
-          Skip to main content
-        </a>
-        <NavLink to="/all" onClick={() => requestNavScroll("/all")}>
-          <Music2 aria-hidden="true" /> All
-        </NavLink>
-        <NavLink to="/dashboard" onClick={() => requestNavScroll("/dashboard")}>
-          <Activity aria-hidden="true" /> Dashboard
-        </NavLink>
-        <NavLink to="/search" onClick={() => requestNavScroll("/search")}>
-          <Search aria-hidden="true" /> Search
-        </NavLink>
-        <NavLink to="/add-songs" onClick={() => requestNavScroll("/add-songs")}>
-          <Upload aria-hidden="true" /> Add Songs
-        </NavLink>
-        <NavLink to="/favorites" onClick={() => requestNavScroll("/favorites")}>
-          <Heart aria-hidden="true" /> Favorites ({favoriteSongs.length})
-        </NavLink>
-        <NavLink to="/recent" onClick={() => requestNavScroll("/recent")}>
-          <Clock aria-hidden="true" /> Recent ({recentSongs.length})
-        </NavLink>
-        <button type="button" onClick={() => setQueueDrawerOpen(true)}>
-          <ListMusic aria-hidden="true" /> Queue ({queue.length})
-        </button>
-        <button
-          type="button"
-          onClick={() => void handleRefreshLibraryCache()}
-          disabled={isRefreshingLibrary}
-          title="Scan Drive, clear local music cache, and reload the latest library"
+        <nav className="app-nav" aria-label="Primary navigation">
+          <a className="skip-link" href="#main-content">
+            Skip to main content
+          </a>
+          <NavLink to="/all" onClick={() => requestNavScroll("/all")}>
+            <Music2 aria-hidden="true" /> All
+          </NavLink>
+          <NavLink to="/dashboard" onClick={() => requestNavScroll("/dashboard")}>
+            <Activity aria-hidden="true" /> Dashboard
+          </NavLink>
+          <NavLink to="/search" onClick={() => requestNavScroll("/search")}>
+            <Search aria-hidden="true" /> Search
+          </NavLink>
+          <NavLink to="/add-songs" onClick={() => requestNavScroll("/add-songs")}>
+            <Upload aria-hidden="true" /> Add Songs
+          </NavLink>
+          <NavLink to="/favorites" onClick={() => requestNavScroll("/favorites")}>
+            <Heart aria-hidden="true" /> Favorites ({favoriteSongs.length})
+          </NavLink>
+          <NavLink to="/recent" onClick={() => requestNavScroll("/recent")}>
+            <Clock aria-hidden="true" /> Recent ({recentSongs.length})
+          </NavLink>
+          <button type="button" onClick={() => setQueueDrawerOpen(true)}>
+            <ListMusic aria-hidden="true" /> Queue ({queue.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleRefreshLibraryCache()}
+            disabled={isRefreshingLibrary}
+            title="Scan Drive, clear local music cache, and reload the latest library"
+          >
+            <RefreshCw aria-hidden="true" />
+            {isRefreshingLibrary ? "Syncing..." : "Sync Library"}
+          </button>
+          <NavLink to="/stats" onClick={() => requestNavScroll("/stats")}>
+            <TrendingUp aria-hidden="true" /> Stats
+          </NavLink>
+          <NavLink to="/playlists" onClick={() => requestNavScroll("/playlists")}>
+            Playlists ({playlists.length})
+          </NavLink>
+        </nav>
+
+        <main
+          id="main-content"
+          className="app-main"
+          aria-describedby="app-description"
         >
-          <RefreshCw aria-hidden="true" />
-          {isRefreshingLibrary ? "Syncing..." : "Sync Library"}
-        </button>
-        <NavLink to="/stats" onClick={() => requestNavScroll("/stats")}>
-          <TrendingUp aria-hidden="true" /> Stats
-        </NavLink>
-        <NavLink to="/playlists" onClick={() => requestNavScroll("/playlists")}>
-          Playlists ({playlists.length})
-        </NavLink>
-      </nav>
-
-      <main
-        id="main-content"
-        className="app-main"
-        aria-describedby="app-description"
-      >
         <h1 className="sr-only">WaveStack music library</h1>
 
       {notice ? (
@@ -2624,8 +2635,8 @@ export function App() {
       </NowPlayingProvider>
 
         <div className="bottom-player-spacer" aria-hidden="true" />
-      </main>
+        </main>
+      </div>
     </>
   );
 }
-
