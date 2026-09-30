@@ -5,6 +5,7 @@ import { formatSongDisplayName } from "../../song-format";
 import { SongActions } from "../../components/SongActions";
 import { SongIdentityButton } from "../../components/SongIdentityButton";
 import { containDialogTab } from "../../hooks/containDialogTab";
+import { isPointerInput } from "../../hooks/pointerFocus";
 
 type QueueDrawerProps = {
   open: boolean;
@@ -53,6 +54,8 @@ export function QueueDrawer({
     if (!open) return;
 
     const previousFocus = document.activeElement;
+    // Capture the opener's modality before Escape changes keyboard state.
+    const openedByPointer = isPointerInput();
     const backdrop = backdropRef.current;
     const drawer = drawerRef.current;
 
@@ -74,15 +77,23 @@ export function QueueDrawer({
     backdrop?.addEventListener("wheel", containBackgroundScroll, { passive: false });
     backdrop?.addEventListener("touchmove", containBackgroundScroll, { passive: false });
     window.addEventListener("keydown", handleKeyDown);
-    drawer?.querySelector<HTMLButtonElement>(".queue-drawer__close")?.focus({ preventScroll: true });
+    if (openedByPointer) {
+      drawer?.focus({ preventScroll: true });
+    } else {
+      drawer?.querySelector<HTMLButtonElement>(".queue-drawer__close")?.focus({ preventScroll: true });
+    }
 
     return () => {
       backdrop?.removeEventListener("wheel", containBackgroundScroll);
       backdrop?.removeEventListener("touchmove", containBackgroundScroll);
       window.removeEventListener("keydown", handleKeyDown);
+      // Only restore a button after a keyboard dismissal. Pointer focus
+      // restoration otherwise leaves a highlighted control after closing.
       if (!document.querySelector(".song-modal-backdrop") &&
-          previousFocus instanceof HTMLElement && previousFocus.isConnected) {
+          !openedByPointer && previousFocus instanceof HTMLElement && previousFocus.isConnected) {
         previousFocus.focus({ preventScroll: true });
+      } else if (drawer?.contains(document.activeElement)) {
+        (document.activeElement as HTMLElement).blur();
       }
     };
   }, [open]);
@@ -104,6 +115,7 @@ export function QueueDrawer({
             ref={drawerRef}
             className="queue-drawer"
             role="dialog"
+            tabIndex={-1}
             aria-modal="true"
             aria-label="Play queue"
             onClick={(event) => event.stopPropagation()}
