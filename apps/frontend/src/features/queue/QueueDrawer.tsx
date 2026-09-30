@@ -1,9 +1,10 @@
-import { useEffect, useMemo } from "react";
+import { useLayoutEffect, useMemo, useRef } from "react";
 import { X, Trash2 } from "lucide-react";
 import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../../App";
 import { formatSongDisplayName } from "../../song-format";
 import { SongActions } from "../../components/SongActions";
 import { SongIdentityButton } from "../../components/SongIdentityButton";
+import { containDialogTab } from "../../hooks/containDialogTab";
 
 type QueueDrawerProps = {
   open: boolean;
@@ -36,6 +37,11 @@ export function QueueDrawer({
   onClear,
   onOpenDetails
 }: QueueDrawerProps) {
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const drawerRef = useRef<HTMLElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   const queuePlaybackContext = useMemo<PlaybackContext>(() => ({
     id: "queue",
     label: "Queue",
@@ -43,23 +49,49 @@ export function QueueDrawer({
     songs: queue
   }), [queue]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
 
+    const previousFocus = document.activeElement;
+    const backdrop = backdropRef.current;
+    const drawer = drawerRef.current;
+
+    const containBackgroundScroll = (event: WheelEvent | TouchEvent) => {
+      if (drawer && event.target instanceof Node && !drawer.contains(event.target)) {
+        event.preventDefault();
+      }
+    };
+
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        onClose();
+      if (event.key === "Escape" && !event.defaultPrevented) {
+        event.preventDefault();
+        onCloseRef.current();
+      } else {
+        containDialogTab(event, drawer);
       }
     }
 
+    backdrop?.addEventListener("wheel", containBackgroundScroll, { passive: false });
+    backdrop?.addEventListener("touchmove", containBackgroundScroll, { passive: false });
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open, onClose]);
+    drawer?.querySelector<HTMLButtonElement>(".queue-drawer__close")?.focus({ preventScroll: true });
+
+    return () => {
+      backdrop?.removeEventListener("wheel", containBackgroundScroll);
+      backdrop?.removeEventListener("touchmove", containBackgroundScroll);
+      window.removeEventListener("keydown", handleKeyDown);
+      if (!document.querySelector(".song-modal-backdrop") &&
+          previousFocus instanceof HTMLElement && previousFocus.isConnected) {
+        previousFocus.focus({ preventScroll: true });
+      }
+    };
+  }, [open]);
 
   return (
     <>
       {open ? (
         <div
+          ref={backdropRef}
           className="queue-backdrop"
           role="presentation"
           onClick={(event) => {
@@ -69,6 +101,7 @@ export function QueueDrawer({
           }}
         >
           <aside
+            ref={drawerRef}
             className="queue-drawer"
             role="dialog"
             aria-modal="true"

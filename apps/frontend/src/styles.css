@@ -137,9 +137,6 @@ body {
   font-family: var(--font-sans);
   line-height: 1.18;
 }
-body.modal-open {
-  overflow: hidden;
-}
 ::selection {
   background: var(--color-red);
   color: var(--color-paper);
@@ -1386,12 +1383,16 @@ html[data-theme="dark"] .song-list-row:focus-within {
   z-index: 1000;
   display: grid;
   place-items: center;
+  overflow: hidden;
+  overscroll-behavior: contain;
 }
 .queue-backdrop {
   position: fixed;
   inset: 0;
   place-items: center;
   padding: 1.5rem;
+  overflow: hidden;
+  overscroll-behavior: contain;
 }
 .song-modal {
   position: relative;
@@ -1399,6 +1400,9 @@ html[data-theme="dark"] .song-list-row:focus-within {
   display: grid;
   overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  -webkit-overflow-scrolling: touch;
   color: var(--color-ink);
 }
 .song-modal__body,
@@ -2031,6 +2035,7 @@ html:not([data-theme="dark"]) .label-light {
 }
 .queue-drawer__list {
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .queue-drawer__item {
   display: grid;
@@ -3836,7 +3841,6 @@ article > label:first-of-type input {
 .song-modal-backdrop,
 .queue-backdrop {
   background: rgba(0, 0, 0, 0.58);
-  backdrop-filter: blur(12px);
 }
 .song-modal {
   border: 1px solid var(--frontier-border);
@@ -3856,7 +3860,6 @@ article > label:first-of-type input {
   border-radius: var(--frontier-radius-md);
   padding: 0.56rem;
   background: color-mix(in srgb, var(--frontier-surface-strong) 94%, transparent);
-  backdrop-filter: blur(14px);
 }
 .song-modal__lyrics-text {
   border-radius: var(--frontier-radius-md);

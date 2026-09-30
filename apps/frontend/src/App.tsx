@@ -24,7 +24,7 @@ import { PlaylistPanel } from "./features/playlists/PlaylistPanel";
 import { SearchPanel } from "./features/search/SearchPanel";
 import { Dashboard } from "./features/dashboard/Dashboard";
 import { AllPage } from "./features/all/AllPage";
-import { SongMetadataModal } from "./features/dashboard/SongMetadataModal";
+import { createSongDetailsStore, SongDetailsLayer } from "./components/SongDetailsLayer";
 import { AuthPanel } from "./features/auth/AuthPanel";
 import { OAuthCallbackPage } from "./features/auth/OAuthCallbackPage";
 import { ProfilePage } from "./features/profile/ProfilePage";
@@ -502,8 +502,7 @@ export function App() {
   }, [isDarkMode]);
 
   const [queueDrawerOpen, setQueueDrawerOpen] = useState(false);
-  const [detailsSong, setDetailsSong] = useState<Song | null>(null);
-  const [detailsPlaybackContext, setDetailsPlaybackContext] = useState<PlaybackContext | null>(null);
+  const [songDetailsStore] = useState(createSongDetailsStore);
   const pendingNavScrollRef = useRef(false);
 
   const [playbackContext, setPlaybackContext] = useState<PlaybackContext>(() => ({
@@ -873,8 +872,7 @@ export function App() {
       ...queue,
       ...playHistory,
       ...playlists.flatMap((playlist) => playlist.songs ?? []),
-      ...(activeSong ? [activeSong] : []),
-      ...(detailsSong ? [detailsSong] : [])
+      ...(activeSong ? [activeSong] : [])
     ]);
   }, [
     localTracks,
@@ -887,8 +885,7 @@ export function App() {
     queue,
     playHistory,
     playlists,
-    activeSong,
-    detailsSong
+    activeSong
   ]);
 
   const startupAllSongs = useMemo<Song[]>(() => {
@@ -938,30 +935,6 @@ export function App() {
   useEffect(() => {
     rememberSongObjects(visibleRecommendations.map((item) => item.song));
   }, [visibleRecommendations]);
-
-  useEffect(() => {
-    if (!detailsSong) {
-      document.body.classList.remove("modal-open");
-      setDetailsPlaybackContext(null);
-      return;
-    }
-
-    document.body.classList.add("modal-open");
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setDetailsSong(null);
-        setDetailsPlaybackContext(null);
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      document.body.classList.remove("modal-open");
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [detailsSong]);
 
   useEffect(() => {
     writeLocalJson("wavestack:playlists", playlists);
@@ -1282,7 +1255,7 @@ export function App() {
     const previousSong = currentSongRef.current;
     const shouldFollowPlaybackInDetails =
       Boolean(previousSong) &&
-      detailsSong?.id === previousSong?.id &&
+      songDetailsStore.getSnapshot()?.song.id === previousSong?.id &&
       nowPlayingStore.getState().isPlaying;
 
     // Commit the user's play request immediately. Do not wait for a network refresh here:
@@ -1302,10 +1275,7 @@ export function App() {
       previousSong &&
       song.id !== previousSong.id
     ) {
-      setDetailsSong((openSong) =>
-        openSong?.id === previousSong.id ? song : openSong
-      );
-      setDetailsPlaybackContext(playbackContextRef.current);
+      songDetailsStore.followPlayback(previousSong.id, song, playbackContextRef.current);
     }
 
     setPlaySignal((value) => value + 1);
@@ -1649,16 +1619,13 @@ export function App() {
   }
 
   function openDetails(song: Song, context?: PlaybackContext) {
-    setDetailsSong(song);
-    setDetailsPlaybackContext(context ?? null);
+    // A queue backdrop left underneath the song dialog intercepts scrolling
+    // after closing the dialog; only one overlay should be active at a time.
+    if (queueDrawerOpen) setQueueDrawerOpen(false);
+    songDetailsStore.open(song, context ?? null);
   }
 
-  function closeDetails() {
-    setDetailsSong(null);
-    setDetailsPlaybackContext(null);
-  }
-
-  function playDetailsSong(song: Song) {
+  function playDetailsSong(song: Song, detailsPlaybackContext: PlaybackContext | null) {
     if (detailsPlaybackContext?.songs.some((item) => item.id === song.id)) {
       playSongFromContext(song, detailsPlaybackContext);
       return;
@@ -2753,18 +2720,15 @@ export function App() {
       ) : null}
       </div>
 
-      {detailsSong ? (
-        <SongMetadataModal
-          song={detailsSong}
-          onPlay={() => playDetailsSong(detailsSong)}
-          onQueue={() => queueSong(detailsSong)}
-          isFavorite={favoriteIds.includes(detailsSong.id)}
+      <SongDetailsLayer
+          store={songDetailsStore}
+          onPlay={playDetailsSong}
+          onQueue={queueSong}
+          favoriteIds={favoriteIds}
           playlists={playlists}
-          onToggleFavorite={() => toggleFavorite(detailsSong)}
-          onAddToPlaylist={(playlistId) => addToPlaylist(playlistId, detailsSong)}
-          onClose={closeDetails}
-        />
-      ) : null}
+          onToggleFavorite={toggleFavorite}
+          onAddToPlaylist={addToPlaylist}
+      />
 
       <QueueDrawer
         open={queueDrawerOpen}
