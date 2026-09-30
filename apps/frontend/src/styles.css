@@ -1405,6 +1405,21 @@ html[data-theme="dark"] .song-list-row:focus-within {
   -webkit-overflow-scrolling: touch;
   color: var(--color-ink);
 }
+/* A dismissed dialog keeps its original scroll node connected through the
+   physical mouse-wheel transaction, but is immediately invisible and cannot
+   intercept new pointer hits. The next wheel events are handed to the page. */
+.song-modal-backdrop--released {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: none !important;
+}
+.song-modal-backdrop--released * {
+  pointer-events: none !important;
+}
+.song-modal__released-spacer {
+  min-height: 200dvh;
+}
+
 .song-modal__body,
 .song-modal__content {
   display: grid;
@@ -6689,4 +6704,13 @@ button:not(:disabled):active {
 }
 .song-tile__media img {
   filter: none !important;
+}
+
+/* Fixed rails may scroll internally, but must chain wheel input to the page
+   once their own scrollbar is at an edge rather than trapping that gesture. */
+.app-nav,
+.app-player-region .player-card,
+.listening-rail,
+.profile-insights-rail {
+  overscroll-behavior-y: auto !important;
 }

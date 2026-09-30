@@ -12,8 +12,10 @@ import { formatSongDisplayName } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
 import { SongActions } from "../../components/SongActions";
 import { containDialogTab } from "../../hooks/containDialogTab";
+import { cancelWheelHandoff, handOffWheelToDocument } from "../../hooks/wheelHandoff";
 
 type SongMetadataModalProps = {
+  open: boolean;
   song: Song;
   onPlay: () => void;
   onQueue: () => void;
@@ -47,6 +49,7 @@ type LyricsRepairMutationVariables = {
 };
 
 export function SongMetadataModal({
+  open,
   song,
   onPlay,
   onQueue,
@@ -64,20 +67,24 @@ export function SongMetadataModal({
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
+  const closeDialog = () => {
+    if (!open) return;
+    // Install the handoff before removing focus or changing the scroll target.
+    handOffWheelToDocument();
+    onCloseRef.current();
+  };
+  const closeDialogRef = useRef(closeDialog);
+  closeDialogRef.current = closeDialog;
+
   useLayoutEffect(() => {
+    if (!open) return;
+    cancelWheelHandoff();
     const previousFocus = document.activeElement;
     const backdrop = backdropRef.current;
     const dialog = dialogRef.current;
-    const applicationRoot = document.getElementById("root");
-    const wasInert = applicationRoot?.inert ?? false;
-
-    // The portal lives outside #root, so the background can become inert
-    // without disabling the dialog itself or changing page overflow.
-    if (applicationRoot) applicationRoot.inert = true;
-
-    // Keep the document's scrolling element intact. Repeatedly toggling body
-    // overflow while Chromium is dispatching a wheel gesture can leave that
-    // gesture latched to the disappearing modal until the pointer moves.
+    // Keep the page scroll container and application root unchanged. A fixed
+    // overlay and Tab containment provide modal input isolation without inert
+    // toggling the scroll-tree target in the middle of a wheel gesture.
     const containBackgroundScroll = (event: WheelEvent | TouchEvent) => {
       if (dialog && event.target instanceof Node && !dialog.contains(event.target)) {
         event.preventDefault();
@@ -87,7 +94,7 @@ export function SongMetadataModal({
     const handleDialogKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !event.defaultPrevented) {
         event.preventDefault();
-        onCloseRef.current();
+        closeDialogRef.current();
       } else {
         containDialogTab(event, dialog);
       }
@@ -102,12 +109,11 @@ export function SongMetadataModal({
       backdrop?.removeEventListener("wheel", containBackgroundScroll);
       backdrop?.removeEventListener("touchmove", containBackgroundScroll);
       window.removeEventListener("keydown", handleDialogKeyDown);
-      if (applicationRoot) applicationRoot.inert = wasInert;
       if (previousFocus instanceof HTMLElement && previousFocus.isConnected) {
         previousFocus.focus({ preventScroll: true });
       }
     };
-  }, []);
+  }, [open]);
 
   const { data, loading, refetch } = useQuery<SongDetailsQueryData, SongDetailsQueryVariables>(
     SONG_DETAILS_QUERY,
@@ -116,7 +122,8 @@ export function SongMetadataModal({
       // Cached details open immediately; manual lyric repair still calls refetch.
       // Reissuing the full metadata query on every modal opening generated
       // duplicate loading/paint cycles even when nothing had changed.
-      fetchPolicy: "cache-first"
+      fetchPolicy: "cache-first",
+      skip: !open
     }
   );
 
@@ -162,7 +169,7 @@ export function SongMetadataModal({
   useEffect(() => {
     const hasLyrics = Boolean(lyrics);
 
-    if (hasLyrics || loading || repairingLyrics) {
+    if (!open || hasLyrics || loading || repairingLyrics) {
       return;
     }
 
@@ -172,22 +179,24 @@ export function SongMetadataModal({
 
     attemptedAutoRepairRef.current = details.id;
     void extractLyricsForThisSong(false);
-  }, [details.id, lyrics, loading, repairingLyrics]);
+  }, [open, details.id, lyrics, loading, repairingLyrics]);
 
   const modal = (
     <div
       ref={backdropRef}
-      className="song-modal-backdrop"
-      role="dialog"
-      aria-modal="true"
+      className={`song-modal-backdrop${open ? "" : " song-modal-backdrop--released"}`}
+      role={open ? "dialog" : undefined}
+      aria-modal={open ? "true" : undefined}
+      aria-hidden={open ? undefined : true}
       aria-label={`Details for ${formatSongDisplayName(details)}`}
       onClick={(event) => {
         if (event.target === event.currentTarget) {
-          onClose();
+          closeDialog();
         }
       }}
     >
       <div ref={dialogRef} className="song-modal" onClick={(event) => event.stopPropagation()}>
+        {open ? (<>
         <div className="song-modal__body song-modal__content">
           <h2>{details.title}</h2>
           <p className="song-modal__artist">{details.artistName}</p>
@@ -241,11 +250,12 @@ export function SongMetadataModal({
           ref={closeButtonRef}
           type="button"
           className="song-modal__close"
-          onClick={onClose}
+          onClick={closeDialog}
           aria-label="Close modal"
         >
           <X aria-hidden="true" />
         </button>
+        </>) : <div aria-hidden="true" className="song-modal__released-spacer" />}
       </div>
     </div>
   );

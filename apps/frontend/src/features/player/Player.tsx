@@ -425,18 +425,6 @@ export function Player({
       );
     }
 
-    function blurActiveButtonLikeElement() {
-      const activeElement = document.activeElement;
-
-      if (!(activeElement instanceof HTMLElement)) {
-        return;
-      }
-
-      if (activeElement.closest("button, [role='button']")) {
-        activeElement.blur();
-      }
-    }
-
     function restartCurrentSong(): boolean {
       const audio = audioRef.current;
 
@@ -485,10 +473,13 @@ export function Player({
         return;
       }
 
+      // Modal/queue keystrokes belong to their own focus and shortcut handlers.
+      if (document.querySelector(
+        '.song-modal-backdrop:not(.song-modal-backdrop--released), .queue-backdrop'
+      )) return;
+
       const key = normalizeKey(event);
       pressedKeysRef.current.add(key);
-
-      blurActiveButtonLikeElement();
 
       const isSpace = key === "Space";
       const wantsNext =
@@ -563,36 +554,6 @@ export function Player({
       window.removeEventListener("keyup", handleKeyUp);
     };
   }, [isPlaying, activeSong.id, displayName, onNext, onPrevious]);
-
-  useEffect(() => {
-    function blurActivatedControl(event: Event) {
-      const target = event.target;
-
-      if (!(target instanceof HTMLElement)) {
-        return;
-      }
-
-      const control = target.closest("button, [role='button']");
-
-      if (!(control instanceof HTMLElement)) {
-        return;
-      }
-
-      window.setTimeout(() => {
-        if (document.activeElement === control || control.contains(document.activeElement)) {
-          control.blur();
-        }
-      }, 0);
-    }
-
-    document.addEventListener("click", blurActivatedControl, true);
-    document.addEventListener("pointerup", blurActivatedControl, true);
-
-    return () => {
-      document.removeEventListener("click", blurActivatedControl, true);
-      document.removeEventListener("pointerup", blurActivatedControl, true);
-    };
-  }, []);
 
   function skip() {
     onNext();
