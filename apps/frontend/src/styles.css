@@ -206,6 +206,10 @@ p {
   line-height: 1.28;
 }
 button {
+  /* Buttons are actions, not selectable text. This also prevents accidental
+     red ::selection painting across mini-player metadata on a mouse click. */
+  user-select: none;
+  -webkit-user-select: none;
   display: inline-flex;
   min-height: 2.35rem;
   align-items: center;
@@ -570,18 +574,25 @@ article li small,
   grid-template-rows: minmax(0, 1fr) auto;
   gap: 1.5rem;
   align-items: end;
+  justify-items: center;
+  text-align: center;
   color: var(--color-box-fg);
   overflow: hidden;
 }
 .player-card__identity {
   display: grid;
+  width: 100%;
+  justify-items: center;
   align-self: start;
   gap: 0.9rem;
   min-height: 15.6rem;
+  text-align: center;
 }
 .player-card h2 {
   display: -webkit-box;
+  max-width: 100%;
   margin: 0;
+  text-align: center;
   overflow: hidden;
   color: var(--color-box-fg);
   text-overflow: ellipsis;
@@ -595,6 +606,7 @@ article li small,
   color: var(--color-box-muted);
   font-size: 1.4rem;
   line-height: 1.2;
+  text-align: center;
   text-overflow: ellipsis;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 1;
@@ -603,8 +615,13 @@ article li small,
   grid-column: 2;
   grid-row: 1 / span 2;
   display: flex;
+  width: 100%;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: center;
+  justify-items: center;
+  margin-inline: auto;
+  text-align: center;
 }
 .player-actions button:hover:not(:disabled),
 .player-actions button[aria-pressed="true"] {
@@ -615,6 +632,8 @@ article li small,
 .player-actions label {
   min-width: 12rem;
   margin: 0;
+  justify-items: center;
+  text-align: center;
 }
 .player-actions input[type="range"] {
   background: linear-gradient(
@@ -628,11 +647,14 @@ article li small,
 .player-card__progress-wrap {
   position: absolute;
   display: grid;
+  width: 100%;
   grid-template-columns: 3.4rem minmax(0, 1fr) 3.4rem;
   gap: 0.8rem;
   align-items: center;
+  margin-inline: auto;
   color: var(--color-box-muted);
   font-size: 0.82rem;
+  text-align: center;
 }
 .player-card__progress {
   width: 100%;
@@ -648,10 +670,13 @@ article li small,
 }
 .player-card__shortcuts {
   display: flex;
+  width: 100%;
   flex-wrap: wrap;
   gap: 0.35rem;
   align-items: center;
+  justify-content: center;
   margin: 0.75rem 0 0;
+  text-align: center;
   color: var(--color-box-muted);
   font-size: 0.82rem;
   text-transform: uppercase;
@@ -738,6 +763,32 @@ article li small,
   justify-content: stretch;
   padding: 0;
   text-transform: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* The generic Frontier button-hover/focus rule paints a red pill. Song
+   identity is a transparent text action in EVERY pointer state; it must not
+   turn solid red simply because the details modal opened or closed. */
+.mini-player .mini-player__meta-button,
+.mini-player .mini-player__meta-button:hover,
+.mini-player .mini-player__meta-button:focus,
+.mini-player .mini-player__meta-button:active {
+  border-color: transparent !important;
+  background: transparent !important;
+  color: var(--color-box-fg) !important;
+  box-shadow: none !important;
+}
+.mini-player .mini-player__meta-button:focus:not(:focus-visible) {
+  outline: none !important;
+}
+.mini-player .mini-player__meta-button:focus-visible {
+  outline: 2px solid var(--color-red);
+  outline-offset: 2px;
+}
+.mini-player__meta-button strong,
+.mini-player__meta-button span {
+  user-select: none;
+  -webkit-user-select: none;
 }
 .mini-player__meta-button strong,
 .mini-player__meta-button span,
@@ -1376,6 +1427,12 @@ html[data-theme="dark"] .song-list-row:focus-within {
   gap: 0.45rem;
   cursor: pointer;
   text-transform: uppercase;
+}
+.song-modal-backdrop:focus,
+.queue-drawer:focus {
+  /* A dialog container receives pointer-open focus for accessibility, but it
+     is not an interactive control and should not draw a focus outline. */
+  outline: none;
 }
 .song-modal-backdrop {
   position: fixed;
@@ -4416,8 +4473,12 @@ article > div:has(select) {
     color: rgba(255, 255, 255, 0.72);
   }
     .player-actions {
-    grid-template-columns: 1fr 1.35fr 1fr auto;
+    grid-template-columns: minmax(0, 1fr) auto auto auto minmax(0, 1fr);
     align-items: center;
+    justify-items: center;
+    justify-content: center;
+    width: 100%;
+    margin-inline: auto;
   }
     .player-actions__button--shuffle,
   .player-actions__button--repeat,
@@ -4425,11 +4486,11 @@ article > div:has(select) {
     display: none;
   }
     .player-actions__button--previous {
-    grid-column: 1;
+    grid-column: 2;
     grid-row: 1;
   }
     .player-actions__button--play {
-    grid-column: 2;
+    grid-column: 3;
     grid-row: 1;
     min-height: 3.35rem;
     border-radius: 50%;
@@ -4443,12 +4504,13 @@ article > div:has(select) {
     height: 1.45rem;
   }
     .player-actions__button--next {
-    grid-column: 3;
+    grid-column: 4;
     grid-row: 1;
   }
     .player-actions__button--favorite {
-    grid-column: 4;
+    grid-column: 5;
     grid-row: 1;
+    justify-self: end;
     width: 2.45rem;
     min-width: 2.45rem;
     padding: 0;
@@ -5888,8 +5950,11 @@ button:not(:disabled):active {
     object-fit: cover !important;
   }
     .app-player-region .player-card__identity {
+    width: 100% !important;
     min-height: 0 !important;
     flex: 0 0 auto;
+    justify-items: center !important;
+    text-align: center !important;
     gap: 0.12rem !important;
   }
     .app-player-region .player-card h2 {
@@ -5907,8 +5972,10 @@ button:not(:disabled):active {
   }
     .app-player-region .player-actions {
     display: grid !important;
-    grid-template-columns: 1fr 1.25fr 1fr auto !important;
+    grid-template-columns: minmax(0, 1fr) auto auto auto minmax(0, 1fr) !important;
     gap: clamp(0.18rem, 0.34vw, 0.38rem) !important;
+    width: 100% !important;
+    justify-items: center !important;
     flex: 0 0 auto;
   }
     .app-player-region .player-actions__button--shuffle,
@@ -6469,7 +6536,8 @@ button:not(:disabled):active {
     min-height: 0 !important;
     max-height: none !important;
     flex-direction: column !important;
-    align-items: stretch !important;
+    align-items: center !important;
+    text-align: center !important;
     gap: 0.34dvw !important;
     margin: 0 !important;
     padding: 0.58dvw !important;
@@ -6508,7 +6576,10 @@ button:not(:disabled):active {
     object-fit: cover !important;
   }
     .app-player-region .player-card__identity {
+    width: 100% !important;
     flex: 0 0 auto !important;
+    justify-items: center !important;
+    text-align: center !important;
     gap: 0.1dvw !important;
   }
     .app-player-region .player-card h2 {
@@ -6522,9 +6593,30 @@ button:not(:disabled):active {
     line-height: 1.12 !important;
   }
     .app-player-region .player-actions {
-    grid-template-columns: 1fr 1.18fr 1fr auto !important;
+    grid-template-columns: minmax(0, 1fr) auto auto auto minmax(0, 1fr) !important;
     gap: 0.28dvw !important;
+    width: 100% !important;
+    justify-items: center !important;
     flex: 0 0 auto !important;
+  }
+    /* The large player has one consistent three-control center across zoom
+       levels. Explicit placement also fixes the <=1180px desktop fallback. */
+    .app-player-region .player-actions__button--previous {
+    grid-column: 2 !important;
+    grid-row: 1 !important;
+  }
+    .app-player-region .player-actions__button--play {
+    grid-column: 3 !important;
+    grid-row: 1 !important;
+  }
+    .app-player-region .player-actions__button--next {
+    grid-column: 4 !important;
+    grid-row: 1 !important;
+  }
+    .app-player-region .player-actions__button--favorite {
+    grid-column: 5 !important;
+    grid-row: 1 !important;
+    justify-self: end !important;
   }
     .app-player-region .player-actions .player-actions__button--play,
   .app-player-region .player-actions .player-actions__button--previous,

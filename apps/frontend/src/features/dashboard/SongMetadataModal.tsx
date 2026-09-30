@@ -13,6 +13,7 @@ import { SongArtwork } from "../../components/SongArtwork";
 import { SongActions } from "../../components/SongActions";
 import { containDialogTab } from "../../hooks/containDialogTab";
 import { cancelWheelHandoff, handOffWheelToDocument } from "../../hooks/wheelHandoff";
+import { isPointerInput } from "../../hooks/pointerFocus";
 
 type SongMetadataModalProps = {
   open: boolean;
@@ -80,6 +81,10 @@ export function SongMetadataModal({
     if (!open) return;
     cancelWheelHandoff();
     const previousFocus = document.activeElement;
+    // Capture the OPENING modality once. Checking isPointerInput() during
+    // cleanup is incorrect: pressing Escape changes it to keyboard mode and
+    // would re-focus a title that was originally clicked with the mouse.
+    const openedByPointer = isPointerInput();
     const backdrop = backdropRef.current;
     const dialog = dialogRef.current;
     // Keep the page scroll container and application root unchanged. A fixed
@@ -103,14 +108,26 @@ export function SongMetadataModal({
     backdrop?.addEventListener("wheel", containBackgroundScroll, { passive: false });
     backdrop?.addEventListener("touchmove", containBackgroundScroll, { passive: false });
     window.addEventListener("keydown", handleDialogKeyDown);
-    closeButtonRef.current?.focus({ preventScroll: true });
+    // Pointer-opened dialogs focus the dialog itself, not their close button:
+    // native/programmatic button focus persists as an unwanted filled-red pill.
+    // Keyboard-opened dialogs keep close-button focus and normal Tab behavior.
+    if (openedByPointer) {
+      backdrop?.focus({ preventScroll: true });
+    } else {
+      closeButtonRef.current?.focus({ preventScroll: true });
+    }
 
     return () => {
       backdrop?.removeEventListener("wheel", containBackgroundScroll);
       backdrop?.removeEventListener("touchmove", containBackgroundScroll);
       window.removeEventListener("keydown", handleDialogKeyDown);
-      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) {
+      // Restore only a keyboard-opened control to the keyboard user. A mouse-
+      // opened dialog must not resurrect focus on the mini-player title after
+      // Escape, which was the source of the persistent highlighted title.
+      if (!openedByPointer && previousFocus instanceof HTMLElement && previousFocus.isConnected) {
         previousFocus.focus({ preventScroll: true });
+      } else if (backdrop?.contains(document.activeElement)) {
+        (document.activeElement as HTMLElement).blur();
       }
     };
   }, [open]);
@@ -186,6 +203,7 @@ export function SongMetadataModal({
       ref={backdropRef}
       className={`song-modal-backdrop${open ? "" : " song-modal-backdrop--released"}`}
       role={open ? "dialog" : undefined}
+      tabIndex={open ? -1 : undefined}
       aria-modal={open ? "true" : undefined}
       aria-hidden={open ? undefined : true}
       aria-label={`Details for ${formatSongDisplayName(details)}`}

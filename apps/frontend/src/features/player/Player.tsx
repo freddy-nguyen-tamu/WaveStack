@@ -857,6 +857,10 @@ export function Player({
                 <button
                   type="button"
                   className="mini-player__meta-button"
+                  // Mouse activation must not give the title native focus before
+                  // the modal replaces its scroll/focus layer. Click still fires;
+                  // Tab/Enter activation remains keyboard accessible.
+                  onMouseDown={(event) => event.preventDefault()}
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
