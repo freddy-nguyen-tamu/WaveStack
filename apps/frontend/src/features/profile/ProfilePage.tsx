@@ -8,6 +8,7 @@ import { SongArtwork } from "../../components/SongArtwork";
 import { SongActions } from "../../components/SongActions";
 import { SongIdentityButton } from "../../components/SongIdentityButton";
 import { ListeningArchivePanel } from "./ListeningArchivePanel";
+import { pickHabitArtworkSong } from "../../habit-artwork";
 
 type DriveExportResult = {
   ok: boolean;
@@ -44,39 +45,6 @@ const periodLabels: Record<string, string> = {
 
 const periodOrder = ["DAY", "WEEK", "MONTH", "YEAR"];
 
-function normalizeHabitLabel(value: string) {
-  return value.trim().toLowerCase();
-}
-
-function hashHabitLabel(value: string) {
-  return Array.from(value).reduce((total, character) => total + character.charCodeAt(0), 0);
-}
-
-function pickHabitArtworkSong(entry: HabitSummaryEntry, songs: Song[], index: number): Song | null {
-  if (!songs.length) {
-    return null;
-  }
-
-  const label = normalizeHabitLabel(entry.label);
-  const matches = label && label !== "unknown"
-    ? songs.filter((song) => {
-        const searchable = [
-          song.artistName,
-          song.title,
-          song.albumTitle,
-          song.fileName,
-          ...song.genreNames
-        ].filter(Boolean).join(" ").toLowerCase();
-
-        return searchable.includes(label);
-      })
-    : [];
-  const candidates = matches.length ? matches : songs;
-  const pickIndex = Math.abs(hashHabitLabel(`${entry.label}:${index}`)) % candidates.length;
-
-  return candidates[pickIndex] ?? null;
-}
-
 export function ProfilePage({
   user,
   songs,
@@ -105,6 +73,14 @@ export function ProfilePage({
     exportResult.data?.exportListeningHabits ??
     testResult.data?.testPrivateDriveWrite ??
     null;
+  const artworkPool = useMemo(() =>
+    songs.length ? songs : [...recentlyPlayed, ...favorites],
+    [songs, recentlyPlayed, favorites]);
+  const habitPeriods = useMemo(() => periodOrder
+    .map(period => [period, (habitSummaries[period] ?? []).slice(0, 8)
+      .map((entry, index) => ({ entry, artworkSong: pickHabitArtworkSong(entry, artworkPool, index) }))] as const)
+    .filter(([, entries]) => entries.length > 0), [habitSummaries, artworkPool]);
+
   const recentPlaybackContext = useMemo<PlaybackContext>(() => ({
     id: "profile:recent",
     label: "Profile recently played",
@@ -133,10 +109,6 @@ export function ProfilePage({
   const totalPlays = Object.values(habitSummaries)
     .flat()
     .reduce((total, entry) => total + entry.count, 0);
-  const artworkPool = songs.length ? songs : [...recentlyPlayed, ...favorites];
-  const habitPeriods = periodOrder
-    .map((period) => [period, habitSummaries[period] ?? []] as const)
-    .filter(([, entries]) => entries.length > 0);
 
   return (
     <article className="profile-page" aria-label="Profile">
@@ -264,10 +236,7 @@ export function ProfilePage({
                 <h4>{periodLabels[period] ?? period}</h4>
 
                 <div className="profile-habits-visual__items">
-                  {entries.slice(0, 8).map((entry, index) => {
-                    const artworkSong = pickHabitArtworkSong(entry, artworkPool, index);
-
-                    return (
+                  {entries.map(({ entry, artworkSong }) => (
                       <button
                         key={`${period}:${entry.label}`}
                         type="button"
@@ -295,8 +264,7 @@ export function ProfilePage({
                           <span>{entry.count} play(s), {formatSeconds(entry.totalDurationSeconds)}</span>
                         </span>
                       </button>
-                    );
-                  })}
+                  ))}
                 </div>
               </div>
             )) : (

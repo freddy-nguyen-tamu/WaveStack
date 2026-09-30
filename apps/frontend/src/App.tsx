@@ -34,10 +34,11 @@ import { AddSongsPage } from "./features/add-songs/AddSongsPage";
 import { uploadTrack } from "./api";
 import { refreshWaveStackLibraryCache } from "./library-refresh";
 import { formatSongDisplayName } from "./song-format";
-import { NowPlayingProvider, type NowPlayingState } from "./components/NowPlayingContext";
+import { NowPlayingProvider, createNowPlayingStore } from "./components/NowPlayingContext";
 import { ToastNotice } from "./components/ToastNotice";
 import { SongArtwork } from "./components/SongArtwork";
 import { GlobalSearch } from "./components/GlobalSearch";
+import { pickHabitArtworkSong } from "./habit-artwork";
 
 export type Song = {
   id: string;
@@ -282,6 +283,27 @@ function uniqueSongsById(songs: Song[]): Song[] {
   );
 }
 
+// Avoid publishing a brand-new 10,000-item library when a newly played track
+// contains the same catalog metadata as its cached copy.
+function sameCachedSong(a: Song, b: Song): boolean {
+  if (a === b) return true;
+  const oldGenres = a.genreNames ?? [];
+  const nextGenres = b.genreNames ?? [];
+  return a.id === b.id && a.streamUrl === b.streamUrl &&
+    a.title === b.title && a.artistName === b.artistName &&
+    a.albumTitle === b.albumTitle && a.fileName === b.fileName &&
+    a.durationSeconds === b.durationSeconds && a.thumbnailUrl === b.thumbnailUrl &&
+    a.localThumbnailUrl === b.localThumbnailUrl &&
+    a.driveThumbnailUrl === b.driveThumbnailUrl &&
+    a.embeddedArtworkUrl === b.embeddedArtworkUrl && a.lyrics === b.lyrics &&
+    a.searchMetadata === b.searchMetadata && a.score === b.score &&
+    a.webViewLink === b.webViewLink && a.mimeType === b.mimeType &&
+    a.modifiedTime === b.modifiedTime && a.addedAt === b.addedAt &&
+    a.sizeBytes === b.sizeBytes && a.sourceRootFolderId === b.sourceRootFolderId &&
+    oldGenres.length === nextGenres.length &&
+    oldGenres.every((genre, index) => genre === nextGenres[index]);
+}
+
 function readSongCache(): Song[] {
   try {
     const value = window.localStorage.getItem("wavestack:song-cache");
@@ -317,39 +339,6 @@ const habitPeriodLabels: Record<string, string> = {
 };
 
 const habitPeriodOrder = ["DAY", "WEEK", "MONTH", "YEAR"];
-
-function normalizeHabitLabel(value: string) {
-  return value.trim().toLowerCase();
-}
-
-function hashHabitLabel(value: string) {
-  return Array.from(value).reduce((total, character) => total + character.charCodeAt(0), 0);
-}
-
-function pickHabitArtworkSong(entry: HabitSummaryEntry, songs: Song[], index: number): Song | null {
-  if (!songs.length) {
-    return null;
-  }
-
-  const label = normalizeHabitLabel(entry.label);
-  const matches = label && label !== "unknown"
-    ? songs.filter((song) => {
-        const searchable = [
-          song.artistName,
-          song.title,
-          song.albumTitle,
-          song.fileName,
-          ...song.genreNames
-        ].filter(Boolean).join(" ").toLowerCase();
-
-        return searchable.includes(label);
-      })
-    : [];
-  const candidates = matches.length ? matches : songs;
-  const pickIndex = Math.abs(hashHabitLabel(`${entry.label}:${index}`)) % candidates.length;
-
-  return candidates[pickIndex] ?? null;
-}
 
 type ListeningHabitRailProps = {
   habitSummaries: Record<string, HabitSummaryEntry[]>;
@@ -451,14 +440,7 @@ export function App() {
   const [activeSong, setActiveSong] = useState<Song | null>(readLastPlayedSong);
   const [queue, setQueue] = useState<Song[]>([]);
   const [playSignal, setPlaySignal] = useState(0);
-  const [nowPlayingState, setNowPlayingState] = useState<
-    Pick<NowPlayingState, "isPlaying" | "hasPlaybackHistory" | "discBaseAngleDeg" | "discStartedAtMs">
-  >({
-    isPlaying: false,
-    hasPlaybackHistory: false,
-    discBaseAngleDeg: 0,
-    discStartedAtMs: null
-  });
+  const [nowPlayingStore] = useState(createNowPlayingStore);
   const [favoriteIds, setFavoriteIds] = useState<string[]>(() => readStringArray("wavestack:favorites"));
   const [recentSongIds, setRecentSongIds] = useState<string[]>(() => readStringArray("wavestack:recent"));
   const [playlists, setPlaylists] = useState<ClientPlaylist[]>(readPlaylists);
@@ -555,6 +537,29 @@ export function App() {
 
   const [cachedSongs, setCachedSongs] = useState<Song[]>(readSongCache);
   const [librarySongs, setLibrarySongs] = useState<Song[]>([]);
+  const lastPersistedCacheRef = useRef(cachedSongs);
+
+  // Cache changes are durable, but large JSON serialization must never block
+  // a click, a React state updater, or audio controls on the main thread.
+  useEffect(() => {
+    if (lastPersistedCacheRef.current === cachedSongs) return;
+    let pending = true;
+    const persist = () => {
+      if (!pending) return;
+      pending = false;
+      writeLocalJson("wavestack:song-cache", cachedSongs);
+      lastPersistedCacheRef.current = cachedSongs;
+    };
+    const idleId = window.requestIdleCallback?.(persist, { timeout: 4000 });
+    const timer = idleId === undefined ? window.setTimeout(persist, 1200) : null;
+    window.addEventListener("pagehide", persist);
+    return () => {
+      if (idleId !== undefined) window.cancelIdleCallback(idleId);
+      if (timer !== null) window.clearTimeout(timer);
+      window.removeEventListener("pagehide", persist);
+      pending = false;
+    };
+  }, [cachedSongs]);
 
   const scrollRouteContentIntoView = useCallback(() => {
     window.requestAnimationFrame(() => {
@@ -1084,19 +1089,9 @@ export function App() {
   }, [authToken, libraryStateData]);
 
   const currentSong = activeSong ?? startupAllSongs[0] ?? songs[0] ?? fallbackSongs[0];
-  const nowPlaying = useMemo<NowPlayingState>(() => ({
-    activeSongId: nowPlayingState.hasPlaybackHistory ? currentSong.id : null,
-    isPlaying: nowPlayingState.isPlaying,
-    hasPlaybackHistory: nowPlayingState.hasPlaybackHistory,
-    discBaseAngleDeg: nowPlayingState.discBaseAngleDeg,
-    discStartedAtMs: nowPlayingState.discStartedAtMs
-  }), [
-    currentSong.id,
-    nowPlayingState.discBaseAngleDeg,
-    nowPlayingState.discStartedAtMs,
-    nowPlayingState.hasPlaybackHistory,
-    nowPlayingState.isPlaying
-  ]);
+  useEffect(() => {
+    nowPlayingStore.setActiveSongId(currentSong.id);
+  }, [nowPlayingStore, currentSong.id]);
 
   function dismissNotice() {
     if (noticeTimerRef.current) {
@@ -1149,10 +1144,17 @@ export function App() {
   }
 
   function rememberSongObjects(songsToRemember: Song[]) {
-    setCachedSongs((items) => {
-      const next = uniqueSongsById([...songsToRemember, ...items]).slice(0, FULL_LIBRARY_REMEMBER_LIMIT);
-      writeLocalJson("wavestack:song-cache", next);
-      return next;
+    if (!songsToRemember.length) return;
+    setCachedSongs(items => {
+      const existing = new Map(items.map(song => [song.id, song]));
+      const changed = uniqueSongsById(songsToRemember).filter(song => {
+        const previous = existing.get(song.id);
+        return !previous || !sameCachedSong(previous, song);
+      });
+      if (!changed.length) return items;
+      const updatedIds = new Set(changed.map(song => song.id));
+      return [...changed, ...items.filter(song => !updatedIds.has(song.id))]
+        .slice(0, FULL_LIBRARY_REMEMBER_LIMIT);
     });
   }
 
@@ -1281,7 +1283,7 @@ export function App() {
     const shouldFollowPlaybackInDetails =
       Boolean(previousSong) &&
       detailsSong?.id === previousSong?.id &&
-      nowPlayingState.isPlaying;
+      nowPlayingStore.getState().isPlaying;
 
     // Commit the user's play request immediately. Do not wait for a network refresh here:
     // delaying the state change makes rapid song clicks race each other and can outlive
@@ -1289,6 +1291,7 @@ export function App() {
     // signed URL on demand and retries failed signed streams without lengthening the URL TTL.
     playRequestIdRef.current += 1;
     currentSongRef.current = song;
+    nowPlayingStore.setActiveSongId(song.id);
     lastPlayedSongIdRef.current = song.id;
     window.localStorage.setItem("wavestack:last-song-id", song.id);
     writeLocalJson("wavestack:last-song", song);
@@ -1611,13 +1614,17 @@ export function App() {
   }
 
   function playSongFromContext(song: Song, context: PlaybackContext) {
-    rememberSongObjects([song, ...context.songs]);
+    // The context remains in memory for Next/Previous; only the selected song
+    // belongs in durable recent-song storage (handled by rememberRecent below).
 
+    const seenContextSongIds = new Set<string>();
     const deduplicatedContext = {
       ...context,
-      songs: context.songs.filter(
-        (item, index, list) => list.findIndex((other) => other.id === item.id) === index
-      )
+      songs: context.songs.filter(item => {
+        if (seenContextSongIds.has(item.id)) return false;
+        seenContextSongIds.add(item.id);
+        return true;
+      })
     };
 
     playbackContextRef.current = deduplicatedContext;
@@ -2410,7 +2417,7 @@ export function App() {
 
   return (
     <>
-      <NowPlayingProvider value={nowPlaying}>
+      <NowPlayingProvider store={nowPlayingStore}>
       <div className="app-shell">
         <header className="app-header">
           <div className="app-header__top">
@@ -2506,7 +2513,7 @@ export function App() {
             }}
             onRefreshStreamUrl={refreshSongStreamUrl}
             onOpenDetails={openDetails}
-            onPlaybackStateChange={setNowPlayingState}
+            onPlaybackStateChange={nowPlayingStore.setPlaybackState}
             resolvingNext={isResolvingNextSong}
             onNext={() => { void playNextFromPolicy("manual"); }}
             onPrevious={playPreviousFromHistory}
