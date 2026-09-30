@@ -71,12 +71,19 @@ export function SongDetailsLayer({
       window.clearTimeout(timer);
       timer = window.setTimeout(() => setRetained(null), WHEEL_GHOST_MS);
     };
-    // A continuous wheel transaction can outlast a fixed close animation.
-    // Release the ghost only when the wheel has actually been quiet.
-    window.addEventListener("wheel", scheduleRelease, { capture: true, passive: true });
+    // Only stale wheel events belonging to the dismissed modal can extend its
+    // lifetime. Normal scrolling in the page or Listening Habit rail must not
+    // keep an invisible modal mounted indefinitely.
+    const keepWhileLatched = (event: WheelEvent) => {
+      const target = event.target instanceof Element
+        ? event.target
+        : event.target instanceof Node ? event.target.parentElement : null;
+      if (target?.closest(".song-modal-backdrop--released")) scheduleRelease();
+    };
+    window.addEventListener("wheel", keepWhileLatched, { capture: true, passive: true });
     scheduleRelease();
     return () => {
-      window.removeEventListener("wheel", scheduleRelease, true);
+      window.removeEventListener("wheel", keepWhileLatched, true);
       window.clearTimeout(timer);
     };
   }, [current]);
