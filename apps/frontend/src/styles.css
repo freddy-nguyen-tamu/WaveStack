@@ -6897,6 +6897,16 @@ button:not(:disabled):active {
   }
 }
 
+/* The desktop big-player card is a vertical scroll container. On platforms
+   with non-overlay scrollbars (notably Windows/Chrome), the scrollbar consumes
+   space only on the right, shifting the scrollport/content center left by half
+   the scrollbar width even when the controls themselves are perfectly centered.
+   Reserve a matching gutter on the left so the content center stays identical
+   to the card's visual center at every zoom level. */
+.app-player-region .player-card {
+  scrollbar-gutter: stable both-edges !important;
+}
+
 /* Center the big player's transport controls against the card itself, not
    against the favorite button. The favorite remains independently anchored at
    the right edge, so its width can never bias the transport group left/right. */
