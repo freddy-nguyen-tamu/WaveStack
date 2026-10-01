@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Heart,
   ListMusic,
@@ -82,10 +82,12 @@ export function Player({
   const desiredPlaybackRef = useRef(false);
   const currentSourceSongIdRef = useRef(activeSong.id);
   const sourcePlaySignalRef = useRef(playSignal);
+  const sourceEpochRef = useRef(0);
+  const expectedSourceUrlRef = useRef(activeSong.streamUrl);
+  const latestActiveSongRef = useRef(activeSong);
   const recoveryAttemptsRef = useRef(0);
   const startupStallTimerRef = useRef<number | null>(null);
   const startupStallBaselineRef = useRef(0);
-  const startupStallSongIdRef = useRef(activeSong.id);
   const startupStallRecoveryStepRef = useRef(0);
   const startupStallRefreshRef = useRef(0);
   const startupStallRecoveryInFlightRef = useRef(false);
@@ -102,6 +104,8 @@ export function Player({
     baseAngleDeg: 0,
     startedAtMs: null as number | null
   });
+
+  latestActiveSongRef.current = activeSong;
 
   const displayName = formatSongDisplayName(activeSong);
   const songTitle = activeSong.title?.trim() || "Untitled Track";
@@ -132,7 +136,7 @@ export function Player({
     });
   }, [discSnapshot.baseAngleDeg, discSnapshot.startedAtMs, hasPlaybackHistory, isPlaying, onPlaybackStateChange]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const audio = audioRef.current;
 
     if (!audio) return;
@@ -142,13 +146,27 @@ export function Player({
     const resetForNewPlay = songChanged || explicitPlayRequest;
     const nextSource = resolveMediaUrl(activeSong.streamUrl);
     const currentSource = audio.src ? resolveMediaUrl(audio.src) : "";
+
+    // The React identity shown in the UI and the media element source must change
+    // in the same commit. A passive effect leaves one painted frame where the UI
+    // can already show song B while Space still targets song A's <audio> source.
+    // A layout effect closes that input window before the browser can paint.
+    if (resetForNewPlay) {
+      sourceEpochRef.current += 1;
+    }
+
     currentSourceSongIdRef.current = activeSong.id;
     sourcePlaySignalRef.current = playSignal;
+    expectedSourceUrlRef.current = nextSource;
 
     if (resetForNewPlay) {
       recoveryAttemptsRef.current = 0;
       clearStartupStallWatchdog(true);
       playRequestRef.current += 1;
+
+      // Do not make the new song wait for an old song's unresolved play()/URL
+      // refresh promise. The old async work is fenced by sourceEpochRef below.
+      playPromiseRef.current = null;
       desiredPlaybackRef.current = false;
       pendingSeekRef.current = null;
       audio.pause();
@@ -228,10 +246,43 @@ export function Player({
     });
   }
 
-  function syncProgressFromAudio() {
+  type PlaybackOwner = {
+    songId: string;
+    sourceEpoch: number;
+  };
+
+  function capturePlaybackOwner(): PlaybackOwner {
+    return {
+      songId: currentSourceSongIdRef.current,
+      sourceEpoch: sourceEpochRef.current
+    };
+  }
+
+  function playbackOwnerMatches(owner: PlaybackOwner, audio = audioRef.current): boolean {
+    return Boolean(
+      audio &&
+      audioRef.current === audio &&
+      sourceEpochRef.current === owner.sourceEpoch &&
+      currentSourceSongIdRef.current === owner.songId &&
+      latestActiveSongRef.current.id === owner.songId
+    );
+  }
+
+  function audioMatchesExpectedSource(audio: HTMLAudioElement): boolean {
+    const expectedSource = resolveMediaUrl(expectedSourceUrlRef.current);
+    const actualSource = audio.src ? resolveMediaUrl(audio.src) : "";
+
+    return !expectedSource || actualSource === expectedSource;
+  }
+
+  function syncProgressFromAudio(owner?: PlaybackOwner) {
     const audio = audioRef.current;
 
-    if (!audio) {
+    if (!audio || !audioMatchesExpectedSource(audio)) {
+      return;
+    }
+
+    if (owner && !playbackOwnerMatches(owner, audio)) {
       return;
     }
 
@@ -250,7 +301,6 @@ export function Player({
 
     if (resetRecovery) {
       startupStallBaselineRef.current = 0;
-      startupStallSongIdRef.current = currentSourceSongIdRef.current;
       startupStallRecoveryStepRef.current = 0;
       startupStallRefreshRef.current = 0;
       startupStallRecoveryInFlightRef.current = false;
@@ -271,7 +321,7 @@ export function Player({
 
     const knownDuration = Number.isFinite(audio.duration) && audio.duration > 0
       ? audio.duration
-      : activeSong.durationSeconds;
+      : latestActiveSongRef.current.durationSeconds;
 
     if (knownDuration > 0) {
       target = Math.min(target, Math.max(knownDuration - 0.05, 0));
@@ -306,8 +356,7 @@ export function Player({
     }
 
     startupStallBaselineRef.current = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
-    startupStallSongIdRef.current = currentSourceSongIdRef.current;
-    const expectedSongId = startupStallSongIdRef.current;
+    const expectedOwner = capturePlaybackOwner();
 
     startupStallTimerRef.current = window.setTimeout(() => {
       startupStallTimerRef.current = null;
@@ -317,7 +366,7 @@ export function Player({
         !liveAudio ||
         !desiredPlaybackRef.current ||
         liveAudio.ended ||
-        currentSourceSongIdRef.current !== expectedSongId
+        !playbackOwnerMatches(expectedOwner, liveAudio)
       ) {
         return;
       }
@@ -327,18 +376,18 @@ export function Player({
         return;
       }
 
-      void recoverStartupStall(expectedSongId);
+      void recoverStartupStall(expectedOwner);
     }, delayMs);
   }
 
-  async function recoverStartupStall(expectedSongId: string) {
+  async function recoverStartupStall(expectedOwner: PlaybackOwner) {
     const audio = audioRef.current;
 
     if (
       !audio ||
       !desiredPlaybackRef.current ||
       audio.ended ||
-      currentSourceSongIdRef.current !== expectedSongId ||
+      !playbackOwnerMatches(expectedOwner, audio) ||
       startupStallRecoveryInFlightRef.current
     ) {
       return;
@@ -377,7 +426,7 @@ export function Player({
           await audio.play();
         }
 
-        if (desiredPlaybackRef.current && currentSourceSongIdRef.current === expectedSongId) {
+        if (desiredPlaybackRef.current && playbackOwnerMatches(expectedOwner, audio)) {
           armStartupStallWatchdog(STARTUP_STALL_RECHECK_MS);
         }
         return;
@@ -387,9 +436,9 @@ export function Player({
       // signed response entirely once and ask the API for a new stream URL.
       if (startupStallRefreshRef.current < 1) {
         startupStallRefreshRef.current += 1;
-        await refreshStreamForPlayback(audio);
+        const refreshed = await refreshStreamForPlayback(audio, expectedOwner);
 
-        if (!desiredPlaybackRef.current || currentSourceSongIdRef.current !== expectedSongId) {
+        if (!refreshed || !desiredPlaybackRef.current || !playbackOwnerMatches(expectedOwner, audio)) {
           return;
         }
 
@@ -404,7 +453,7 @@ export function Player({
       setPlayError("Playback stalled at the start even after WaveStack retried the stream.");
       clearStartupStallWatchdog(true);
     } catch (error) {
-      if (!desiredPlaybackRef.current || currentSourceSongIdRef.current !== expectedSongId) {
+      if (!desiredPlaybackRef.current || !playbackOwnerMatches(expectedOwner, audio)) {
         return;
       }
 
@@ -414,8 +463,8 @@ export function Player({
       if (startupStallRefreshRef.current < 1 && isRecoverablePlaybackError(error, audio)) {
         startupStallRefreshRef.current += 1;
         try {
-          await refreshStreamForPlayback(audio);
-          if (desiredPlaybackRef.current && currentSourceSongIdRef.current === expectedSongId) {
+          const refreshed = await refreshStreamForPlayback(audio, expectedOwner);
+          if (refreshed && desiredPlaybackRef.current && playbackOwnerMatches(expectedOwner, audio)) {
             await audio.play();
             armStartupStallWatchdog(STARTUP_STALL_RECHECK_MS);
             return;
@@ -430,7 +479,11 @@ export function Player({
       setPlayError(error instanceof Error ? error.message : "Playback stalled and could not recover.");
       clearStartupStallWatchdog(true);
     } finally {
-      startupStallRecoveryInFlightRef.current = false;
+      // If ownership moved to another song while this recovery awaited I/O,
+      // the new song may already have its own recovery in flight. Do not clear it.
+      if (playbackOwnerMatches(expectedOwner, audio)) {
+        startupStallRecoveryInFlightRef.current = false;
+      }
     }
   }
 
@@ -484,7 +537,7 @@ export function Player({
       return false;
     }
 
-    const source = audio.currentSrc || audio.src || activeSong.streamUrl;
+    const source = audio.currentSrc || audio.src || latestActiveSongRef.current.streamUrl;
     return Boolean(audio.error) || /\/(?:drive\/stream|api\/uploads)\//.test(source);
   }
 
@@ -492,7 +545,11 @@ export function Player({
     const audio = audioRef.current;
     const pendingSeek = pendingSeekRef.current;
 
-    if (!audio || pendingSeek === null) {
+    if (!audio || !audioMatchesExpectedSource(audio)) {
+      return;
+    }
+
+    if (pendingSeek === null) {
       syncProgressFromAudio();
       return;
     }
@@ -511,16 +568,36 @@ export function Player({
     syncProgressFromAudio();
   }
 
-  async function refreshStreamForPlayback(audio: HTMLAudioElement): Promise<void> {
+  async function refreshStreamForPlayback(
+    audio: HTMLAudioElement,
+    expectedOwner: PlaybackOwner
+  ): Promise<boolean> {
+    if (!playbackOwnerMatches(expectedOwner, audio)) {
+      return false;
+    }
+
+    const songToRefresh = latestActiveSongRef.current;
     const resumeAt = Number.isFinite(audio.currentTime) ? audio.currentTime : currentTime;
-    const refreshed = await onRefreshStreamUrl(activeSong);
+    const refreshed = await onRefreshStreamUrl(songToRefresh);
+
+    // This is the critical stale-refresh fence. A refresh for song A can finish
+    // after the user has already switched to song B. It must never be allowed to
+    // write A's URL back into the shared <audio> element.
+    if (!playbackOwnerMatches(expectedOwner, audio)) {
+      return false;
+    }
+
+    if (refreshed.id && refreshed.id !== expectedOwner.songId) {
+      throw new Error("WaveStack returned a playback link for the wrong song.");
+    }
 
     if (!refreshed.streamUrl) {
       throw new Error("WaveStack did not return a fresh playback link.");
     }
 
-    const currentSource = resolveMediaUrl(audio.currentSrc || audio.src);
+    const currentSource = resolveMediaUrl(audio.src || audio.currentSrc);
     const nextSource = resolveMediaUrl(refreshed.streamUrl);
+    expectedSourceUrlRef.current = nextSource;
 
     if (currentSource !== nextSource) {
       pendingSeekRef.current = resumeAt > 0 ? resumeAt : null;
@@ -528,12 +605,20 @@ export function Player({
       audio.src = refreshed.streamUrl;
       audio.load();
     }
+
+    return true;
   }
 
   async function playCurrent(forceRefresh = false) {
     const audio = audioRef.current;
 
     if (!audio) return;
+
+    const expectedOwner = capturePlaybackOwner();
+
+    if (!playbackOwnerMatches(expectedOwner, audio)) {
+      return;
+    }
 
     desiredPlaybackRef.current = true;
     setHasPlaybackHistory(true);
@@ -545,7 +630,12 @@ export function Player({
       // A quick pause -> play sequence can invalidate the first request while its
       // play() promise is still settling. Honor the latest intent instead of making
       // the user click several times to get out of that stale in-flight request.
-      if (desiredPlaybackRef.current && audio.paused && !playPromiseRef.current) {
+      if (
+        playbackOwnerMatches(expectedOwner, audio) &&
+        desiredPlaybackRef.current &&
+        audio.paused &&
+        !playPromiseRef.current
+      ) {
         return playCurrent(forceRefresh);
       }
 
@@ -555,13 +645,23 @@ export function Player({
     const requestId = playRequestRef.current + 1;
     playRequestRef.current = requestId;
 
-    const task = (async () => {
+    let task!: Promise<void>;
+    task = (async () => {
       try {
         setPlayError("");
 
-        const currentSource = audio.currentSrc || audio.src || activeSong.streamUrl;
+        const latestSong = latestActiveSongRef.current;
+        const currentSource = audio.src || audio.currentSrc || latestSong.streamUrl;
+
         if (forceRefresh || signedStreamUrlExpired(currentSource)) {
-          await refreshStreamForPlayback(audio);
+          const refreshed = await refreshStreamForPlayback(audio, expectedOwner);
+          if (!refreshed || !playbackOwnerMatches(expectedOwner, audio) || playRequestRef.current !== requestId) {
+            return;
+          }
+        }
+
+        if (!playbackOwnerMatches(expectedOwner, audio) || playRequestRef.current !== requestId) {
+          return;
         }
 
         try {
@@ -570,21 +670,34 @@ export function Player({
           if (
             !forceRefresh &&
             recoveryAttemptsRef.current < 2 &&
-            isRecoverablePlaybackError(initialError, audio)
+            isRecoverablePlaybackError(initialError, audio) &&
+            playbackOwnerMatches(expectedOwner, audio) &&
+            playRequestRef.current === requestId
           ) {
             recoveryAttemptsRef.current += 1;
-            await refreshStreamForPlayback(audio);
+            const refreshed = await refreshStreamForPlayback(audio, expectedOwner);
+            if (!refreshed || !playbackOwnerMatches(expectedOwner, audio) || playRequestRef.current !== requestId) {
+              return;
+            }
             await audio.play();
           } else {
             throw initialError;
           }
         }
 
-        if (playRequestRef.current === requestId && desiredPlaybackRef.current) {
+        if (
+          playRequestRef.current === requestId &&
+          desiredPlaybackRef.current &&
+          playbackOwnerMatches(expectedOwner, audio)
+        ) {
           armStartupStallWatchdog();
         }
       } catch (error) {
-        if (playRequestRef.current !== requestId || !desiredPlaybackRef.current) {
+        if (
+          playRequestRef.current !== requestId ||
+          !desiredPlaybackRef.current ||
+          !playbackOwnerMatches(expectedOwner, audio)
+        ) {
           return;
         }
 
@@ -600,7 +713,11 @@ export function Player({
         desiredPlaybackRef.current = false;
         setPlayError(errorMessage);
       } finally {
-        playPromiseRef.current = null;
+        // A stale request may finish after a newer song has already started.
+        // Never let that old finally-block erase the newer in-flight promise.
+        if (playPromiseRef.current === task) {
+          playPromiseRef.current = null;
+        }
       }
     })();
 

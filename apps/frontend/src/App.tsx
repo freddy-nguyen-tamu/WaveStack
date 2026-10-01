@@ -1197,7 +1197,10 @@ export function App() {
     setRecommendedData((items) => items ? items.filter((item) => item.song.id !== songId) : null);
   }
 
-  currentSongRef.current = activeSong;
+  // Keep imperative playback policy aligned with the exact song rendered by Player.
+  // During startup activeSong can still be null while currentSong already falls back
+  // to the cached/library song shown in the UI.
+  currentSongRef.current = currentSong;
   shuffleEnabledRef.current = shuffleEnabled;
   repeatModeRef.current = repeatMode;
   playHistoryRef.current = playHistory;
