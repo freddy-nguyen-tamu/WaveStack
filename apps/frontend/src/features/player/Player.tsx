@@ -1023,15 +1023,14 @@ export function Player({
         <div className="player-actions">
           <button type="button" className="player-actions__button player-actions__button--play" onClick={togglePlay} aria-label={isPlaying ? "Pause" : "Play"}>
             {isPlaying ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
-            {isPlaying ? " Pause" : " Play"}
           </button>
 
           <button type="button" className="player-actions__button player-actions__button--previous" onClick={previous} aria-label="Restart current song or go to previous song">
-            <SkipBack aria-hidden="true" /> Previous
+            <SkipBack aria-hidden="true" />
           </button>
 
           <button type="button" className="player-actions__button player-actions__button--next" onClick={skip} aria-label="Next song" aria-busy={resolvingNext} disabled={resolvingNext}>
-            <SkipForward aria-hidden="true" /> Next
+            <SkipForward aria-hidden="true" />
           </button>
 
           <button type="button" className="player-actions__button player-actions__button--shuffle" onClick={onToggleShuffle} aria-pressed={shuffleEnabled} aria-label="Toggle shuffle">
@@ -1042,8 +1041,14 @@ export function Player({
             <RepeatIcon aria-hidden="true" /> {repeatLabel}
           </button>
 
-          <button type="button" className="player-actions__button player-actions__button--favorite" onClick={favorite} aria-pressed={isFavorite}>
-            <Heart aria-hidden="true" /> {isFavorite ? "Unfavorite" : "Favorite"}
+          <button
+            type="button"
+            className="player-actions__button player-actions__button--favorite"
+            onClick={favorite}
+            aria-pressed={isFavorite}
+            aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
+          >
+            <Heart aria-hidden="true" />
           </button>
 
           <label className="player-actions__volume">

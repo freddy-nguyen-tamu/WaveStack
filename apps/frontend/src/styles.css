@@ -6948,3 +6948,28 @@ button:not(:disabled):active {
   transform: translateY(-50%) !important;
 }
 
+
+
+/* Big-player icon-only controls: the global button rule uses inline-flex with
+   gap: 0.45rem. Previously these buttons still contained visually hidden text
+   nodes (font-size: 0), so the zero-width text remained a flex item and the
+   gap occupied real space to the right of each SVG. The button boxes were
+   mathematically centered while the visible icons were shifted left by half
+   that gap. Keep these controls genuinely icon-only and center the SVG itself. */
+.app-player-region .player-actions .player-actions__button--previous,
+.app-player-region .player-actions .player-actions__button--play,
+.app-player-region .player-actions .player-actions__button--next,
+.app-player-region .player-actions .player-actions__button--favorite {
+  display: grid !important;
+  place-items: center !important;
+  gap: 0 !important;
+  line-height: 0 !important;
+}
+.app-player-region .player-actions .player-actions__button--previous > svg,
+.app-player-region .player-actions .player-actions__button--play > svg,
+.app-player-region .player-actions .player-actions__button--next > svg,
+.app-player-region .player-actions .player-actions__button--favorite > svg {
+  display: block !important;
+  margin: 0 !important;
+  flex: none !important;
+}
