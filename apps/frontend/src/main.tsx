@@ -4,12 +4,15 @@ import { ApolloProvider } from "@apollo/client";
 import { BrowserRouter } from "react-router-dom";
 import { App } from "./App";
 import { apolloClient, restoreApolloCache } from "./api";
+import { installPointerFocusPolicy } from "./hooks/pointerFocus";
 import "./styles.css";
 
 async function bootstrap() {
-  // Native focus must survive pointer interactions. The old global blur handler
-  // disrupted dialog focus restoration and keyboard scrolling; :focus-visible
-  // already avoids displaying unwanted mouse-only focus rings.
+  // Pointer activation should run an action without leaving buttons/links in a
+  // persistent focused state. The shared policy preserves keyboard focus, text
+  // editing, native select behavior, range dragging, and dialog focus trapping.
+  installPointerFocusPolicy();
+
   // Discourage ordinary image copying without interfering with lyric selection.
   for (const eventName of ["dragstart", "contextmenu", "selectstart"] as const) {
     document.addEventListener(eventName, event => {
@@ -33,3 +36,4 @@ async function bootstrap() {
 }
 
 void bootstrap();
+
