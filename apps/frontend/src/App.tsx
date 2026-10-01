@@ -38,6 +38,7 @@ import { NowPlayingProvider, createNowPlayingStore } from "./components/NowPlayi
 import { ToastNotice } from "./components/ToastNotice";
 import { SongArtwork } from "./components/SongArtwork";
 import { GlobalSearch } from "./components/GlobalSearch";
+import { KeyboardShortcutsMenu } from "./components/KeyboardShortcutsMenu";
 import { pickHabitArtworkSong } from "./habit-artwork";
 
 export type Song = {
@@ -2385,6 +2386,7 @@ export function App() {
   return (
     <>
       <NowPlayingProvider store={nowPlayingStore}>
+      <KeyboardShortcutsMenu />
       <div className="app-shell">
         <header className="app-header">
           <div className="app-header__top">

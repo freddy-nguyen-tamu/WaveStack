@@ -28,6 +28,7 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
   const [floating, setFloating] = useState(false);
   const [floatingStyle, setFloatingStyle] = useState<FloatingSearchStyle>({});
   const restoreFocusRef = useRef(false);
+  const openedByKeyboardRef = useRef(false);
   const sectionRef = useRef<HTMLElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -63,7 +64,13 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
     });
   }
 
-  function openSearch(floatWhenOutOfView = false) {
+  function openSearch(floatWhenOutOfView = false, openedByKeyboard = false) {
+    // Pointer activation should move focus only into the text field while the
+    // search is open; it must not later resurrect focus on the magnifier.
+    // The caller passes the activation modality explicitly because Ctrl/Cmd+F
+    // is handled at window-capture before the global pointer-focus policy sees
+    // the key event.
+    openedByKeyboardRef.current = openedByKeyboard;
     const modal = sectionRef.current?.closest<HTMLElement>(".song-modal");
     const toolbar = toolbarRef.current;
     let shouldFloat = false;
@@ -84,8 +91,11 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
     setFocusRequest(value => value + 1);
   }
 
-  function closeSearch() {
-    restoreFocusRef.current = true;
+  function closeSearch(closedByKeyboard = false) {
+    // Restore the opener only for a fully keyboard-driven open/close cycle.
+    // Pointer-opened or pointer-closed searches must never leave the magnifier
+    // focused after the text field disappears.
+    restoreFocusRef.current = openedByKeyboardRef.current && closedByKeyboard;
     setOpen(false);
     setQuery("");
     setFloating(false);
@@ -107,11 +117,11 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "f") {
         event.preventDefault();
         event.stopImmediatePropagation();
-        openSearch(true);
+        openSearch(true, true);
       } else if (open && event.key === "Escape") {
         event.preventDefault();
         event.stopImmediatePropagation();
-        closeSearch();
+        closeSearch(true);
       }
     }
 
@@ -189,7 +199,7 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
         onChange={event => {
           const nextQuery = event.target.value;
           if (!nextQuery.trim() && query.trim()) {
-            closeSearch();
+            closeSearch(true);
             return;
           }
           setQuery(nextQuery);
@@ -213,7 +223,12 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
       <button type="button" aria-label="Next lyric match" title="Next match" disabled={!matches.length} onClick={() => navigate(1)}>
         <ArrowDown aria-hidden="true" />
       </button>
-      <button type="button" aria-label="Close lyric search" title="Close search" onClick={closeSearch}>
+      <button
+        type="button"
+        aria-label="Close lyric search"
+        title="Close search"
+        onClick={(event) => closeSearch(event.detail === 0)}
+      >
         <X aria-hidden="true" />
       </button>
     </div>
@@ -238,7 +253,7 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
             className="lyric-find__open"
             aria-label="Find in lyrics"
             title="Find in lyrics (Ctrl+F)"
-            onClick={() => openSearch()}
+            onClick={(event) => openSearch(false, event.detail === 0)}
           >
             <Search aria-hidden="true" />
           </button>

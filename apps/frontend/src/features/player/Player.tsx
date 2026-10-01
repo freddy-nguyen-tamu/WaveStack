@@ -410,19 +410,28 @@ export function Player({
   }
 
   useEffect(() => {
-    function isTypingTarget(target: EventTarget | null): boolean {
+    function isShortcutBlockedTarget(target: EventTarget | null): boolean {
       if (!(target instanceof HTMLElement)) {
         return false;
       }
 
       const tagName = target.tagName.toLowerCase();
-
-      return (
+      if (
         tagName === "input" ||
         tagName === "textarea" ||
         tagName === "select" ||
         target.isContentEditable
-      );
+      ) {
+        return true;
+      }
+
+      // Do not hijack Space/arrow behavior from a keyboard-focused control.
+      // Pointer-opened song modals focus their non-interactive backdrop, so the
+      // global playback shortcuts still work there exactly as intended.
+      return Boolean(target.closest(
+        'button, a[href], summary, [role="button"], [role="link"], [role="tab"], ' +
+        '[role="option"], [role="switch"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]'
+      ));
     }
 
     function restartCurrentSong(): boolean {
@@ -469,14 +478,15 @@ export function Player({
     }
 
     function handleKeyboardControls(event: KeyboardEvent) {
-      if (isTypingTarget(event.target)) {
+      if (isShortcutBlockedTarget(event.target)) {
         return;
       }
 
-      // Modal/queue keystrokes belong to their own focus and shortcut handlers.
-      if (document.querySelector(
-        '.song-modal-backdrop:not(.song-modal-backdrop--released), .queue-backdrop'
-      )) return;
+      // Playback shortcuts are global, including while a song-details modal is
+      // open. Text editors and keyboard-focused controls are excluded above so
+      // shortcuts never steal keystrokes or native button activation.
+      // The queue remains isolated because it has its own keyboard interaction.
+      if (document.querySelector('.queue-backdrop')) return;
 
       const key = normalizeKey(event);
       pressedKeysRef.current.add(key);

@@ -6806,3 +6806,129 @@ button:not(:disabled):active {
 .profile-insights-rail {
   overscroll-behavior-y: auto !important;
 }
+
+/* Global keyboard-shortcut disclosure. Kept fixed and compact so the hint is
+   always discoverable, including while the song modal is open. */
+.keyboard-shortcuts {
+  position: fixed;
+  top: max(0.28rem, env(safe-area-inset-top, 0px));
+  left: 50%;
+  z-index: 1200;
+  display: grid;
+  justify-items: center;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.keyboard-shortcuts__toggle,
+.keyboard-shortcuts__bar {
+  pointer-events: auto;
+}
+.keyboard-shortcuts__toggle {
+  display: grid;
+  width: 1.7rem;
+  min-width: 1.7rem;
+  height: 1.45rem;
+  min-height: 1.45rem;
+  place-items: center;
+  border: 1px solid var(--frontier-border-strong);
+  border-radius: var(--radius-pill);
+  padding: 0;
+  background: var(--frontier-surface-strong);
+  color: var(--color-ink);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+.keyboard-shortcuts__toggle svg {
+  width: 0.86rem;
+  height: 0.86rem;
+  animation: wavestack-shortcut-nudge 1.45s ease-in-out infinite;
+  transition: transform 160ms ease;
+}
+.keyboard-shortcuts--open .keyboard-shortcuts__toggle svg {
+  animation: none;
+  transform: rotate(180deg);
+}
+.keyboard-shortcuts__bar {
+  display: flex;
+  max-width: calc(100vw - 1rem);
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.34rem 0.72rem;
+  margin-top: 0.28rem;
+  border: 1px solid var(--frontier-border-strong);
+  border-radius: var(--radius-pill);
+  padding: 0.42rem 0.7rem;
+  background: var(--frontier-surface-strong);
+  color: var(--color-ink);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+  font-size: clamp(0.62rem, 0.7vw, 0.76rem);
+  line-height: 1;
+  white-space: nowrap;
+}
+.keyboard-shortcuts__bar span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22rem;
+}
+.keyboard-shortcuts__bar kbd {
+  border: 1px solid var(--frontier-border);
+  border-radius: 0.3rem;
+  padding: 0.16rem 0.28rem;
+  background: var(--frontier-surface-muted);
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+}
+@keyframes wavestack-shortcut-nudge {
+  0%, 100% { transform: translateY(-1px); }
+  50% { transform: translateY(2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .keyboard-shortcuts__toggle svg {
+    animation: none;
+  }
+}
+@media (max-width: 640px) {
+  .keyboard-shortcuts__bar {
+    border-radius: var(--frontier-radius-md);
+    gap: 0.38rem 0.58rem;
+    padding: 0.5rem 0.6rem;
+    white-space: normal;
+  }
+}
+
+/* Center the big player's transport controls against the card itself, not
+   against the favorite button. The favorite remains independently anchored at
+   the right edge, so its width can never bias the transport group left/right. */
+.app-player-region .player-actions {
+  position: relative !important;
+  display: grid !important;
+  grid-template-columns: auto auto auto !important;
+  align-items: center !important;
+  justify-content: center !important;
+  justify-items: center !important;
+  width: 100% !important;
+  margin-inline: auto !important;
+}
+.app-player-region .player-actions__button--previous {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+}
+.app-player-region .player-actions__button--play {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+}
+.app-player-region .player-actions__button--next {
+  grid-column: 3 !important;
+  grid-row: 1 !important;
+}
+.app-player-region .player-actions__button--favorite {
+  position: absolute !important;
+  top: 50% !important;
+  right: 0 !important;
+  grid-column: auto !important;
+  grid-row: auto !important;
+  justify-self: auto !important;
+  transform: translateY(-50%) !important;
+}
+
