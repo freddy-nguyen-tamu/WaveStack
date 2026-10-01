@@ -22,6 +22,16 @@ type PlayerPlaybackState = Pick<
   "isPlaying" | "hasPlaybackHistory" | "discBaseAngleDeg" | "discStartedAtMs"
 >;
 
+// A browser can resolve HTMLMediaElement.play() and emit `play` while still
+// waiting forever for decodable bytes at media time 0. That state never raises
+// an error, so ordinary error-based retries cannot recover it. Track real media
+// time progress and, only when startup is genuinely stuck, reproduce the manual
+// seek that unblocks the browser before falling back to a fresh signed stream.
+const STARTUP_STALL_TIMEOUT_MS = 2800;
+const STARTUP_STALL_RECHECK_MS = 1600;
+const STARTUP_PROGRESS_EPSILON_SECONDS = 0.06;
+const STARTUP_RECOVERY_SEEKS_SECONDS = [0.12, 0.6, 1.5] as const;
+
 type PlayerProps = {
   activeSong: Song;
   queue: Song[];
@@ -73,6 +83,12 @@ export function Player({
   const currentSourceSongIdRef = useRef(activeSong.id);
   const sourcePlaySignalRef = useRef(playSignal);
   const recoveryAttemptsRef = useRef(0);
+  const startupStallTimerRef = useRef<number | null>(null);
+  const startupStallBaselineRef = useRef(0);
+  const startupStallSongIdRef = useRef(activeSong.id);
+  const startupStallRecoveryStepRef = useRef(0);
+  const startupStallRefreshRef = useRef(0);
+  const startupStallRecoveryInFlightRef = useRef(false);
   const pressedKeysRef = useRef<Set<string>>(new Set());
   const comboLockRef = useRef<"next" | "previous" | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -131,6 +147,7 @@ export function Player({
 
     if (resetForNewPlay) {
       recoveryAttemptsRef.current = 0;
+      clearStartupStallWatchdog(true);
       playRequestRef.current += 1;
       desiredPlaybackRef.current = false;
       pendingSeekRef.current = null;
@@ -222,6 +239,212 @@ export function Player({
 
     if (Number.isFinite(audio.duration) && audio.duration > 0) {
       setDuration(audio.duration);
+    }
+  }
+
+  function clearStartupStallWatchdog(resetRecovery = false) {
+    if (startupStallTimerRef.current !== null) {
+      window.clearTimeout(startupStallTimerRef.current);
+      startupStallTimerRef.current = null;
+    }
+
+    if (resetRecovery) {
+      startupStallBaselineRef.current = 0;
+      startupStallSongIdRef.current = currentSourceSongIdRef.current;
+      startupStallRecoveryStepRef.current = 0;
+      startupStallRefreshRef.current = 0;
+      startupStallRecoveryInFlightRef.current = false;
+    }
+  }
+
+  function startupRecoveryTarget(audio: HTMLAudioElement, requestedSeconds: number): number {
+    let target = requestedSeconds;
+
+    // If the browser says the first seekable/buffered byte starts later than
+    // zero, respect that instead of repeatedly requesting an impossible point.
+    if (audio.seekable.length > 0) {
+      target = Math.max(target, audio.seekable.start(0) + 0.02);
+      target = Math.min(target, Math.max(audio.seekable.end(0) - 0.05, 0));
+    } else if (audio.buffered.length > 0) {
+      target = Math.max(target, audio.buffered.start(0) + 0.02);
+    }
+
+    const knownDuration = Number.isFinite(audio.duration) && audio.duration > 0
+      ? audio.duration
+      : activeSong.durationSeconds;
+
+    if (knownDuration > 0) {
+      target = Math.min(target, Math.max(knownDuration - 0.05, 0));
+    }
+
+    return Math.max(0, target);
+  }
+
+  function noteStartupPlaybackProgress() {
+    const audio = audioRef.current;
+
+    if (!audio || !desiredPlaybackRef.current) {
+      return;
+    }
+
+    if (audio.currentTime > startupStallBaselineRef.current + STARTUP_PROGRESS_EPSILON_SECONDS) {
+      clearStartupStallWatchdog(true);
+    }
+  }
+
+  function armStartupStallWatchdog(delayMs = STARTUP_STALL_TIMEOUT_MS) {
+    const audio = audioRef.current;
+
+    if (!audio || !desiredPlaybackRef.current || audio.ended) {
+      return;
+    }
+
+    // An already-armed watchdog owns this startup attempt. Repeated `waiting`
+    // events must not keep moving the timeout forward forever.
+    if (startupStallTimerRef.current !== null) {
+      return;
+    }
+
+    startupStallBaselineRef.current = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
+    startupStallSongIdRef.current = currentSourceSongIdRef.current;
+    const expectedSongId = startupStallSongIdRef.current;
+
+    startupStallTimerRef.current = window.setTimeout(() => {
+      startupStallTimerRef.current = null;
+      const liveAudio = audioRef.current;
+
+      if (
+        !liveAudio ||
+        !desiredPlaybackRef.current ||
+        liveAudio.ended ||
+        currentSourceSongIdRef.current !== expectedSongId
+      ) {
+        return;
+      }
+
+      if (liveAudio.currentTime > startupStallBaselineRef.current + STARTUP_PROGRESS_EPSILON_SECONDS) {
+        clearStartupStallWatchdog(true);
+        return;
+      }
+
+      void recoverStartupStall(expectedSongId);
+    }, delayMs);
+  }
+
+  async function recoverStartupStall(expectedSongId: string) {
+    const audio = audioRef.current;
+
+    if (
+      !audio ||
+      !desiredPlaybackRef.current ||
+      audio.ended ||
+      currentSourceSongIdRef.current !== expectedSongId ||
+      startupStallRecoveryInFlightRef.current
+    ) {
+      return;
+    }
+
+    if (audio.currentTime > startupStallBaselineRef.current + STARTUP_PROGRESS_EPSILON_SECONDS) {
+      clearStartupStallWatchdog(true);
+      return;
+    }
+
+    startupStallRecoveryInFlightRef.current = true;
+
+    try {
+      const step = startupStallRecoveryStepRef.current;
+
+      if (step < STARTUP_RECOVERY_SEEKS_SECONDS.length) {
+        const target = startupRecoveryTarget(audio, STARTUP_RECOVERY_SEEKS_SECONDS[step]);
+        startupStallRecoveryStepRef.current = step + 1;
+
+        // This is deliberately a very small staged skip. It reproduces the
+        // user's successful manual recovery (which forces a new byte-range
+        // request) while minimizing how much of the beginning can be lost.
+        startupStallBaselineRef.current = target;
+        pendingSeekRef.current = null;
+
+        try {
+          audio.currentTime = target;
+          setCurrentTime(target);
+        } catch {
+          // Metadata may still be arriving. Preserve the target so the existing
+          // loadedmetadata/durationchange path applies it as soon as seeking is legal.
+          pendingSeekRef.current = target;
+        }
+
+        if (audio.paused && desiredPlaybackRef.current) {
+          await audio.play();
+        }
+
+        if (desiredPlaybackRef.current && currentSourceSongIdRef.current === expectedSongId) {
+          armStartupStallWatchdog(STARTUP_STALL_RECHECK_MS);
+        }
+        return;
+      }
+
+      // If several fresh byte positions still cannot advance, discard the old
+      // signed response entirely once and ask the API for a new stream URL.
+      if (startupStallRefreshRef.current < 1) {
+        startupStallRefreshRef.current += 1;
+        await refreshStreamForPlayback(audio);
+
+        if (!desiredPlaybackRef.current || currentSourceSongIdRef.current !== expectedSongId) {
+          return;
+        }
+
+        await audio.play();
+        armStartupStallWatchdog(STARTUP_STALL_RECHECK_MS);
+        return;
+      }
+
+      desiredPlaybackRef.current = false;
+      audio.pause();
+      setIsPlaying(false);
+      setPlayError("Playback stalled at the start even after WaveStack retried the stream.");
+      clearStartupStallWatchdog(true);
+    } catch (error) {
+      if (!desiredPlaybackRef.current || currentSourceSongIdRef.current !== expectedSongId) {
+        return;
+      }
+
+      // A recovery-stage failure gets one fresh signed URL before surfacing an
+      // error. This is separate from decode/network errors raised by the media
+      // element itself, so a silent startup stall can no longer bypass recovery.
+      if (startupStallRefreshRef.current < 1 && isRecoverablePlaybackError(error, audio)) {
+        startupStallRefreshRef.current += 1;
+        try {
+          await refreshStreamForPlayback(audio);
+          if (desiredPlaybackRef.current && currentSourceSongIdRef.current === expectedSongId) {
+            await audio.play();
+            armStartupStallWatchdog(STARTUP_STALL_RECHECK_MS);
+            return;
+          }
+        } catch (refreshError) {
+          error = refreshError;
+        }
+      }
+
+      desiredPlaybackRef.current = false;
+      setIsPlaying(false);
+      setPlayError(error instanceof Error ? error.message : "Playback stalled and could not recover.");
+      clearStartupStallWatchdog(true);
+    } finally {
+      startupStallRecoveryInFlightRef.current = false;
+    }
+  }
+
+  function handleStartupBuffering() {
+    const audio = audioRef.current;
+
+    if (!audio || !desiredPlaybackRef.current || audio.ended) {
+      return;
+    }
+
+    // This recovery is intentionally startup-only. Normal mid-song network
+    // buffering should wait for the browser instead of skipping forward.
+    if (audio.currentTime <= 3 || startupStallRecoveryStepRef.current > 0) {
+      armStartupStallWatchdog();
     }
   }
 
@@ -358,8 +581,7 @@ export function Player({
         }
 
         if (playRequestRef.current === requestId && desiredPlaybackRef.current) {
-          setIsPlaying(true);
-          setMessage(`Playing: ${displayName}`);
+          armStartupStallWatchdog();
         }
       } catch (error) {
         if (playRequestRef.current !== requestId || !desiredPlaybackRef.current) {
@@ -388,6 +610,7 @@ export function Player({
 
   function pauseCurrent(messageText: string) {
     desiredPlaybackRef.current = false;
+    clearStartupStallWatchdog(true);
     playRequestRef.current += 1;
     pauseDiscRotation();
     audioRef.current?.pause();
@@ -663,6 +886,7 @@ export function Player({
 
   useEffect(() => {
     return () => {
+      clearStartupStallWatchdog(true);
       if (!("mediaSession" in navigator)) return;
       navigator.mediaSession.playbackState = "none";
       navigator.mediaSession.metadata = null;
@@ -679,6 +903,13 @@ export function Player({
     audioRef.current.currentTime = nextTime;
     setCurrentTime(nextTime);
     setHasPlaybackHistory(true);
+
+    // A user seek is itself a fresh byte-range request. Treat that position as
+    // the new progress baseline rather than letting an older startup timer fire.
+    clearStartupStallWatchdog(true);
+    if (desiredPlaybackRef.current) {
+      armStartupStallWatchdog(STARTUP_STALL_RECHECK_MS);
+    }
   }
 
   function changeVolume(value: string) {
@@ -697,6 +928,8 @@ export function Player({
     if (!audio || !desiredPlaybackRef.current) {
       return;
     }
+
+    clearStartupStallWatchdog(false);
 
     if (recoveryAttemptsRef.current >= 2) {
       desiredPlaybackRef.current = false;
@@ -739,11 +972,15 @@ export function Player({
 
         <audio
           ref={audioRef}
-          preload="metadata"
+          preload="auto"
           controlsList="nodownload noplaybackrate noremoteplayback"
-          onLoadedMetadata={restorePendingSeek}
+          onLoadedMetadata={() => {
+            restorePendingSeek();
+            if (desiredPlaybackRef.current) armStartupStallWatchdog();
+          }}
           onTimeUpdate={() => {
             syncProgressFromAudio();
+            noteStartupPlaybackProgress();
             if ((audioRef.current?.currentTime ?? 0) > 3) {
               recoveryAttemptsRef.current = 0;
             }
@@ -751,17 +988,29 @@ export function Player({
           onDurationChange={restorePendingSeek}
           onError={handleAudioError}
           onPlay={() => {
+            setHasPlaybackHistory(true);
+            armStartupStallWatchdog();
+          }}
+          onPlaying={() => {
+            // `play` only means the element is no longer paused. `playing` is the
+            // point at which the browser actually has enough data to advance.
             startDiscRotation();
             setHasPlaybackHistory(true);
             setIsPlaying(true);
+            setMessage(`Playing: ${displayName}`);
+            armStartupStallWatchdog();
           }}
+          onWaiting={handleStartupBuffering}
+          onStalled={handleStartupBuffering}
           onPause={() => {
+            clearStartupStallWatchdog(false);
             pauseDiscRotation();
             setIsPlaying(false);
             syncProgressFromAudio();
           }}
           onEnded={() => {
             desiredPlaybackRef.current = false;
+            clearStartupStallWatchdog(true);
             pauseDiscRotation();
             setIsPlaying(false);
             onEnded();
