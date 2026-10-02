@@ -1,3 +1,4 @@
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ApolloQueryResult, useApolloClient, useMutation, useQuery } from "@apollo/client";
 import { Activity, Clock, Heart, ListMusic, Music2, RefreshCw, TrendingUp, Upload } from "lucide-react";
@@ -223,6 +224,14 @@ const ROUTE_META: Record<string, { title: string; description: string }> = {
 const FULL_LIBRARY_REMEMBER_LIMIT = 10000;
 const FULL_LIBRARY_PAGE_SIZE = 100;
 
+// The catalog cache is only a startup fallback. Persisting the entire 10k-song
+// in-memory library (including lyrics/search blobs) can occupy several MB,
+// trigger localStorage quota errors, and synchronously block the main thread.
+// Keep enough recent catalog objects for instant startup while the authoritative
+// backend library loads in the background.
+const PERSISTED_SONG_CACHE_LIMIT = 600;
+const MAX_STARTUP_SONG_CACHE_CHARS = 1_750_000;
+
 function ensureMetaTag(name: string, content: string) {
   let tag = document.querySelector<HTMLMetaElement>(`meta[name="${name}"]`);
 
@@ -306,10 +315,48 @@ function sameCachedSong(a: Song, b: Song): boolean {
     oldGenres.every((genre, index) => genre === nextGenres[index]);
 }
 
+function compactSongForStartupCache(song: Song): Song {
+  return {
+    id: song.id,
+    fileName: song.fileName,
+    title: song.title,
+    artistName: song.artistName,
+    albumTitle: song.albumTitle,
+    durationSeconds: song.durationSeconds,
+    streamUrl: song.streamUrl,
+    genreNames: song.genreNames ?? [],
+    thumbnailUrl: song.thumbnailUrl,
+    localThumbnailUrl: song.localThumbnailUrl,
+    driveThumbnailUrl: song.driveThumbnailUrl,
+    embeddedArtworkUrl: song.embeddedArtworkUrl,
+    mimeType: song.mimeType,
+    modifiedTime: song.modifiedTime,
+    addedAt: song.addedAt
+  };
+}
+
+function compactSongCacheForPersistence(songs: Song[]): Song[] {
+  return songs
+    .slice(0, PERSISTED_SONG_CACHE_LIMIT)
+    .map(compactSongForStartupCache);
+}
+
 function readSongCache(): Song[] {
   try {
     const value = window.localStorage.getItem("wavestack:song-cache");
-    return value ? JSON.parse(value) : [];
+    if (!value) return [];
+
+    // Do not spend the first interactive seconds parsing a legacy multi-megabyte
+    // catalog. The server immediately repopulates this fallback cache with the
+    // bounded compact representation above.
+    if (value.length > MAX_STARTUP_SONG_CACHE_CHARS) {
+      return [];
+    }
+
+    const parsed = JSON.parse(value) as Song[];
+    return Array.isArray(parsed)
+      ? parsed.slice(0, PERSISTED_SONG_CACHE_LIMIT)
+      : [];
   } catch {
     return [];
   }
@@ -540,20 +587,30 @@ export function App() {
   const [librarySongs, setLibrarySongs] = useState<Song[]>([]);
   const lastPersistedCacheRef = useRef(cachedSongs);
 
-  // Cache changes are durable, but large JSON serialization must never block
-  // a click, a React state updater, or audio controls on the main thread.
+  // Catalog persistence must stay off the playback-critical path. A previous
+  // version forced requestIdleCallback after four seconds and then serialized
+  // the entire 10k-song cache synchronously; on a busy startup that timeout
+  // landed directly on top of Space/click playback and could freeze the UI.
   useEffect(() => {
     if (lastPersistedCacheRef.current === cachedSongs) return;
+
     let pending = true;
     const persist = () => {
       if (!pending) return;
       pending = false;
-      writeLocalJson("wavestack:song-cache", cachedSongs);
+      writeLocalJson(
+        "wavestack:song-cache",
+        compactSongCacheForPersistence(cachedSongs)
+      );
       lastPersistedCacheRef.current = cachedSongs;
     };
-    const idleId = window.requestIdleCallback?.(persist, { timeout: 4000 });
-    const timer = idleId === undefined ? window.setTimeout(persist, 1200) : null;
+
+    // No forced idle timeout: playback/input always wins. Browsers without
+    // requestIdleCallback use a delayed, bounded write whose payload is small.
+    const idleId = window.requestIdleCallback?.(persist);
+    const timer = idleId === undefined ? window.setTimeout(persist, 2500) : null;
     window.addEventListener("pagehide", persist);
+
     return () => {
       if (idleId !== undefined) window.cancelIdleCallback(idleId);
       if (timer !== null) window.clearTimeout(timer);

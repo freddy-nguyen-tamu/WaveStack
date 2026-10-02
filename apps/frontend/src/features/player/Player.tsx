@@ -1,3 +1,4 @@
+
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Heart,
@@ -23,15 +24,14 @@ type PlayerPlaybackState = Pick<
   "isPlaying" | "hasPlaybackHistory" | "discBaseAngleDeg" | "discStartedAtMs"
 >;
 
-// A browser can resolve HTMLMediaElement.play() and emit `play` while still
-// waiting forever for decodable bytes at media time 0. That state never raises
-// an error, so ordinary error-based retries cannot recover it. Track real media
-// time progress and, only when startup is genuinely stuck, reproduce the manual
-// seek that unblocks the browser before falling back to a fresh signed stream.
-const STARTUP_STALL_TIMEOUT_MS = 2800;
-const STARTUP_STALL_RECHECK_MS = 1600;
+// Startup recovery must be fast enough that a transient zero-time stall never
+// turns into a multi-second dead period. The predecessor started immediately;
+// the previous 2.8s + 1.6s staged watchdog made the regression itself visible.
+// One tiny range-forcing seek is enough before falling back to a fresh URL.
+const STARTUP_STALL_TIMEOUT_MS = 750;
+const STARTUP_STALL_RECHECK_MS = 700;
 const STARTUP_PROGRESS_EPSILON_SECONDS = 0.06;
-const STARTUP_RECOVERY_SEEKS_SECONDS = [0.12, 0.6, 1.5] as const;
+const STARTUP_RECOVERY_SEEKS_SECONDS = [0.12] as const;
 
 type PlayerProps = {
   activeSong: Song;
@@ -95,6 +95,7 @@ export function Player({
   const pressedKeysRef = useRef<Set<string>>(new Set());
   const comboLockRef = useRef<"next" | "previous" | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isPlaybackPending, setIsPlaybackPending] = useState(false);
   const [hasPlaybackHistory, setHasPlaybackHistory] = useState(false);
   const [volume, setVolume] = useState(0.7);
   const [currentTime, setCurrentTime] = useState(0);
@@ -113,6 +114,7 @@ export function Player({
   const songArtist = activeSong.artistName?.trim() || "Unknown Artist";
   const safeDuration = duration || activeSong.durationSeconds || 0;
   const progressPercent = safeDuration > 0 ? Math.min(100, (currentTime / safeDuration) * 100) : 0;
+  const playbackUiActive = isPlaying || isPlaybackPending;
 
   const repeatLabel =
     repeatMode === "one"
@@ -130,12 +132,14 @@ export function Player({
 
   useEffect(() => {
     onPlaybackStateChange({
-      isPlaying,
+      // Playback intent is reflected immediately instead of waiting several
+      // seconds for the media element's later `playing` event.
+      isPlaying: playbackUiActive,
       hasPlaybackHistory,
       discBaseAngleDeg: discSnapshot.baseAngleDeg,
       discStartedAtMs: discSnapshot.startedAtMs
     });
-  }, [discSnapshot.baseAngleDeg, discSnapshot.startedAtMs, hasPlaybackHistory, isPlaying, onPlaybackStateChange]);
+  }, [discSnapshot.baseAngleDeg, discSnapshot.startedAtMs, hasPlaybackHistory, playbackUiActive, onPlaybackStateChange]);
 
   useLayoutEffect(() => {
     const audio = audioRef.current;
@@ -148,6 +152,11 @@ export function Player({
     const nextSource = resolveMediaUrl(activeSong.streamUrl);
     const currentSource = audio.src ? resolveMediaUrl(audio.src) : "";
     const nextSourceBelongsToSong = streamUrlBelongsToSong(activeSong.id, activeSong.streamUrl);
+    const sameSourceResource = Boolean(
+      currentSource &&
+      nextSource &&
+      mediaResourceKey(currentSource) === mediaResourceKey(nextSource)
+    );
 
     // The React identity shown in the UI and the media element source must change
     // in the same commit. A passive effect leaves one painted frame where the UI
@@ -159,7 +168,12 @@ export function Player({
 
     currentSourceSongIdRef.current = activeSong.id;
     sourcePlaySignalRef.current = playSignal;
-    expectedSourceUrlRef.current = nextSourceBelongsToSong ? nextSource : "";
+    // A signed URL's query string can rotate without changing the underlying
+    // Drive file. Keep the already-loaded source as the expected source in that
+    // case instead of aborting and restarting the same media request.
+    expectedSourceUrlRef.current = nextSourceBelongsToSong
+      ? (sameSourceResource ? currentSource : nextSource)
+      : "";
 
     if (resetForNewPlay) {
       recoveryAttemptsRef.current = 0;
@@ -178,6 +192,7 @@ export function Player({
         // The fresh source may not have metadata yet; load() below starts at zero anyway.
       }
       setIsPlaying(false);
+      setIsPlaybackPending(false);
       setCurrentTime(0);
       setDuration(activeSong.durationSeconds || 0);
       setPlayError("");
@@ -193,12 +208,13 @@ export function Player({
       audio.removeAttribute("src");
       audio.load();
       setIsPlaying(false);
+      setIsPlaybackPending(false);
       return;
     }
 
     // Player-owned source assignment prevents React from interrupting an in-flight
     // recovery when a refreshed signed URL is written back to activeSong.
-    if (currentSource !== nextSource) {
+    if (!sameSourceResource && currentSource !== nextSource) {
       const resumeAt = resetForNewPlay ? 0 : audio.currentTime || currentTime;
       pendingSeekRef.current = resumeAt > 0 ? resumeAt : null;
       audio.pause();
@@ -469,6 +485,7 @@ export function Player({
       desiredPlaybackRef.current = false;
       audio.pause();
       setIsPlaying(false);
+      setIsPlaybackPending(false);
       setPlayError("Playback stalled at the start even after WaveStack retried the stream.");
       clearStartupStallWatchdog(true);
     } catch (error) {
@@ -495,6 +512,7 @@ export function Player({
 
       desiredPlaybackRef.current = false;
       setIsPlaying(false);
+      setIsPlaybackPending(false);
       setPlayError(error instanceof Error ? error.message : "Playback stalled and could not recover.");
       clearStartupStallWatchdog(true);
     } finally {
@@ -529,6 +547,22 @@ export function Player({
       return new URL(url, window.location.href).href;
     } catch {
       return url;
+    }
+  }
+
+  function mediaResourceKey(url: string): string {
+    const resolved = resolveMediaUrl(url);
+    if (!resolved) return "";
+
+    try {
+      const parsed = new URL(resolved, window.location.href);
+      if (/\/(?:drive\/stream|api\/uploads)\//.test(parsed.pathname)) {
+        // Signed query parameters are authorization metadata, not media identity.
+        return `${parsed.origin}${parsed.pathname}`;
+      }
+      return parsed.href;
+    } catch {
+      return resolved;
     }
   }
 
@@ -646,7 +680,12 @@ export function Player({
     }
 
     desiredPlaybackRef.current = true;
+    // Reflect the user's playback intent before any signed-URL refresh or media
+    // buffering. The previous implementation waited for `playing`, making both
+    // players look frozen for exactly as long as the network took.
+    setIsPlaybackPending(true);
     setHasPlaybackHistory(true);
+    setMessage(`Loading: ${displayName}`);
 
     if (playPromiseRef.current) {
       const inFlightPlay = playPromiseRef.current;
@@ -676,10 +715,42 @@ export function Player({
         setPlayError("");
 
         const latestSong = latestActiveSongRef.current;
-        const currentSource = audio.src || audio.currentSrc || latestSong.streamUrl;
-        const sourceIdentityMismatch = !streamUrlBelongsToSong(latestSong.id, currentSource);
+        let currentSource = audio.src || audio.currentSrc;
+        const latestSource = latestSong.streamUrl;
 
-        if (forceRefresh || sourceIdentityMismatch || signedStreamUrlExpired(currentSource)) {
+        // Layout effects normally install the source before input is possible,
+        // but a restored/invalid source can intentionally be cleared. Install a
+        // known-good current-song URL locally instead of paying for a GraphQL
+        // round trip just to put the already-known URL back.
+        if (!currentSource && streamUrlBelongsToSong(latestSong.id, latestSource)) {
+          expectedSourceUrlRef.current = resolveMediaUrl(latestSource);
+          audio.src = latestSource;
+          audio.load();
+          currentSource = audio.src;
+        }
+
+        const sourceIdentityMismatch = !streamUrlBelongsToSong(latestSong.id, currentSource);
+        const sourceExpired = signedStreamUrlExpired(currentSource);
+
+        // Startup can have an older signed URL in the audio element and a newer
+        // URL for the same Drive file already present in React state. Reuse that
+        // fresh URL directly instead of doing another network metadata query.
+        const canUseKnownFreshSource =
+          !forceRefresh &&
+          !sourceIdentityMismatch &&
+          sourceExpired &&
+          streamUrlBelongsToSong(latestSong.id, latestSource) &&
+          !signedStreamUrlExpired(latestSource) &&
+          mediaResourceKey(currentSource) === mediaResourceKey(latestSource) &&
+          resolveMediaUrl(currentSource) !== resolveMediaUrl(latestSource);
+
+        if (canUseKnownFreshSource) {
+          expectedSourceUrlRef.current = resolveMediaUrl(latestSource);
+          audio.pause();
+          audio.src = latestSource;
+          audio.load();
+          currentSource = audio.src;
+        } else if (forceRefresh || sourceIdentityMismatch || sourceExpired) {
           const refreshed = await refreshStreamForPlayback(audio, expectedOwner);
           if (!refreshed || !playbackOwnerMatches(expectedOwner, audio) || playRequestRef.current !== requestId) {
             return;
@@ -729,6 +800,7 @@ export function Player({
         }
 
         setIsPlaying(false);
+        setIsPlaybackPending(false);
         const errorMessage = error instanceof Error ? error.message : "Browser blocked playback.";
 
         if (/interrupted by a call to pause/i.test(errorMessage)) {
@@ -759,6 +831,7 @@ export function Player({
     pauseDiscRotation();
     audioRef.current?.pause();
     setIsPlaying(false);
+    setIsPlaybackPending(false);
     setMessage(messageText);
     syncProgressFromAudio();
   }
@@ -768,7 +841,7 @@ export function Player({
 
     setHasPlaybackHistory(true);
 
-    if (isPlaying || desiredPlaybackRef.current) {
+    if (playbackUiActive || desiredPlaybackRef.current) {
       pauseCurrent(`Paused: ${displayName}`);
       return;
     }
@@ -892,7 +965,7 @@ export function Player({
 
       event.preventDefault();
 
-      if (isPlaying || desiredPlaybackRef.current) {
+      if (playbackUiActive || desiredPlaybackRef.current) {
         pauseCurrent(`Paused: ${displayName}`);
         return;
       }
@@ -930,7 +1003,7 @@ export function Player({
       window.removeEventListener("keydown", handleKeyboardControls);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [isPlaying, activeSong.id, displayName, onNext, onPrevious]);
+  }, [playbackUiActive, activeSong.id, displayName, onNext, onPrevious]);
 
   function skip() {
     onNext();
@@ -1025,8 +1098,8 @@ export function Player({
 
   useEffect(() => {
     if (!("mediaSession" in navigator) || !hasPlaybackHistory) return;
-    navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
-  }, [hasPlaybackHistory, isPlaying]);
+    navigator.mediaSession.playbackState = playbackUiActive ? "playing" : "paused";
+  }, [hasPlaybackHistory, playbackUiActive]);
 
   useEffect(() => {
     return () => {
@@ -1078,6 +1151,7 @@ export function Player({
     if (recoveryAttemptsRef.current >= 2) {
       desiredPlaybackRef.current = false;
       setIsPlaying(false);
+      setIsPlaybackPending(false);
       setPlayError("Playback failed after WaveStack refreshed the stream link.");
       return;
     }
@@ -1116,7 +1190,7 @@ export function Player({
 
         <audio
           ref={audioRef}
-          preload="auto"
+          preload="metadata"
           controlsList="nodownload noplaybackrate noremoteplayback"
           onLoadedMetadata={() => {
             restorePendingSeek();
@@ -1132,14 +1206,20 @@ export function Player({
           onDurationChange={restorePendingSeek}
           onError={handleAudioError}
           onPlay={() => {
+            // Match the predecessor's responsive behavior: once the browser
+            // accepts play, update both players immediately. Buffering is a media
+            // concern and must not make the controls look unresponsive.
+            startDiscRotation();
             setHasPlaybackHistory(true);
+            setIsPlaybackPending(false);
+            setIsPlaying(true);
+            setMessage(`Playing: ${displayName}`);
             armStartupStallWatchdog();
           }}
           onPlaying={() => {
-            // `play` only means the element is no longer paused. `playing` is the
-            // point at which the browser actually has enough data to advance.
             startDiscRotation();
             setHasPlaybackHistory(true);
+            setIsPlaybackPending(false);
             setIsPlaying(true);
             setMessage(`Playing: ${displayName}`);
             armStartupStallWatchdog();
@@ -1150,6 +1230,9 @@ export function Player({
             clearStartupStallWatchdog(false);
             pauseDiscRotation();
             setIsPlaying(false);
+            if (!desiredPlaybackRef.current) {
+              setIsPlaybackPending(false);
+            }
             syncProgressFromAudio();
           }}
           onEnded={() => {
@@ -1157,6 +1240,7 @@ export function Player({
             clearStartupStallWatchdog(true);
             pauseDiscRotation();
             setIsPlaying(false);
+            setIsPlaybackPending(false);
             onEnded();
           }}
         />
@@ -1165,8 +1249,8 @@ export function Player({
         {playError ? <p role="alert">Playback error: {playError}</p> : null}
 
         <div className="player-actions">
-          <button type="button" className="player-actions__button player-actions__button--play" onClick={togglePlay} aria-label={isPlaying ? "Pause" : "Play"}>
-            {isPlaying ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
+          <button type="button" className="player-actions__button player-actions__button--play" onClick={togglePlay} aria-label={playbackUiActive ? "Pause" : "Play"}>
+            {playbackUiActive ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
           </button>
 
           <button type="button" className="player-actions__button player-actions__button--previous" onClick={previous} aria-label="Restart current song or go to previous song">
@@ -1303,8 +1387,8 @@ export function Player({
                   <SkipBack aria-hidden="true" />
                 </button>
 
-                <button type="button" className="mini-player__play" aria-label={isPlaying ? "Pause" : "Play"} onClick={togglePlay}>
-                  {isPlaying ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
+                <button type="button" className="mini-player__play" aria-label={playbackUiActive ? "Pause" : "Play"} onClick={togglePlay}>
+                  {playbackUiActive ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
                 </button>
 
                 <button type="button" aria-label="Next song" onClick={skip} aria-busy={resolvingNext} disabled={resolvingNext}>
