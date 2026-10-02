@@ -16,6 +16,7 @@ import type { RepeatMode, Song } from "../../App";
 import { formatSeconds, formatSongDisplayName } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
 import { NOW_PLAYING_DISC_DEGREES_PER_MS, type NowPlayingState } from "../../components/NowPlayingContext";
+import { assertStreamUrlBelongsToSong, streamUrlBelongsToSong } from "../../playback-source-identity";
 
 type PlayerPlaybackState = Pick<
   NowPlayingState,
@@ -146,6 +147,7 @@ export function Player({
     const resetForNewPlay = songChanged || explicitPlayRequest;
     const nextSource = resolveMediaUrl(activeSong.streamUrl);
     const currentSource = audio.src ? resolveMediaUrl(audio.src) : "";
+    const nextSourceBelongsToSong = streamUrlBelongsToSong(activeSong.id, activeSong.streamUrl);
 
     // The React identity shown in the UI and the media element source must change
     // in the same commit. A passive effect leaves one painted frame where the UI
@@ -157,7 +159,7 @@ export function Player({
 
     currentSourceSongIdRef.current = activeSong.id;
     sourcePlaySignalRef.current = playSignal;
-    expectedSourceUrlRef.current = nextSource;
+    expectedSourceUrlRef.current = nextSourceBelongsToSong ? nextSource : "";
 
     if (resetForNewPlay) {
       recoveryAttemptsRef.current = 0;
@@ -182,12 +184,25 @@ export function Player({
       resetDiscRotation();
     }
 
+    // Never put a Drive URL into the media element unless its path identity agrees
+    // with activeSong.id. If persisted/cache state is already crossed, clear the
+    // source and let playCurrent() obtain a fresh URL instead of playing it once.
+    if (!nextSourceBelongsToSong) {
+      pendingSeekRef.current = null;
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+      setIsPlaying(false);
+      return;
+    }
+
     // Player-owned source assignment prevents React from interrupting an in-flight
     // recovery when a refreshed signed URL is written back to activeSong.
     if (currentSource !== nextSource) {
       const resumeAt = resetForNewPlay ? 0 : audio.currentTime || currentTime;
       pendingSeekRef.current = resumeAt > 0 ? resumeAt : null;
       audio.pause();
+      assertStreamUrlBelongsToSong(activeSong.id, activeSong.streamUrl);
       audio.src = activeSong.streamUrl;
       audio.load();
       setIsPlaying(false);
@@ -271,6 +286,10 @@ export function Player({
   function audioMatchesExpectedSource(audio: HTMLAudioElement): boolean {
     const expectedSource = resolveMediaUrl(expectedSourceUrlRef.current);
     const actualSource = audio.src ? resolveMediaUrl(audio.src) : "";
+
+    if (!actualSource || !streamUrlBelongsToSong(currentSourceSongIdRef.current, actualSource)) {
+      return false;
+    }
 
     return !expectedSource || actualSource === expectedSource;
   }
@@ -595,6 +614,11 @@ export function Player({
       throw new Error("WaveStack did not return a fresh playback link.");
     }
 
+    // The GraphQL object id alone is not enough: the probe proved we can receive
+    // the current song object while streamUrl still points at the previous Drive
+    // file. Validate the immutable file id embedded in /drive/stream/<fileId>.
+    assertStreamUrlBelongsToSong(expectedOwner.songId, refreshed.streamUrl);
+
     const currentSource = resolveMediaUrl(audio.src || audio.currentSrc);
     const nextSource = resolveMediaUrl(refreshed.streamUrl);
     expectedSourceUrlRef.current = nextSource;
@@ -602,6 +626,7 @@ export function Player({
     if (currentSource !== nextSource) {
       pendingSeekRef.current = resumeAt > 0 ? resumeAt : null;
       audio.pause();
+      assertStreamUrlBelongsToSong(expectedOwner.songId, refreshed.streamUrl);
       audio.src = refreshed.streamUrl;
       audio.load();
     }
@@ -652,8 +677,9 @@ export function Player({
 
         const latestSong = latestActiveSongRef.current;
         const currentSource = audio.src || audio.currentSrc || latestSong.streamUrl;
+        const sourceIdentityMismatch = !streamUrlBelongsToSong(latestSong.id, currentSource);
 
-        if (forceRefresh || signedStreamUrlExpired(currentSource)) {
+        if (forceRefresh || sourceIdentityMismatch || signedStreamUrlExpired(currentSource)) {
           const refreshed = await refreshStreamForPlayback(audio, expectedOwner);
           if (!refreshed || !playbackOwnerMatches(expectedOwner, audio) || playRequestRef.current !== requestId) {
             return;
@@ -665,6 +691,7 @@ export function Player({
         }
 
         try {
+          assertStreamUrlBelongsToSong(expectedOwner.songId, audio.src || audio.currentSrc);
           await audio.play();
         } catch (initialError) {
           if (

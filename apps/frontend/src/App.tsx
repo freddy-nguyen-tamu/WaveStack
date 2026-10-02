@@ -40,6 +40,7 @@ import { SongArtwork } from "./components/SongArtwork";
 import { GlobalSearch } from "./components/GlobalSearch";
 import { KeyboardShortcutsMenu } from "./components/KeyboardShortcutsMenu";
 import { pickHabitArtworkSong } from "./habit-artwork";
+import { assertStreamUrlBelongsToSong } from "./playback-source-identity";
 
 export type Song = {
   id: string;
@@ -1234,9 +1235,19 @@ export function App() {
       throw new Error("WaveStack could not refresh this song's playback link.");
     }
 
+    if (refreshed.id && refreshed.id !== song.id) {
+      throw new Error("WaveStack returned refreshed metadata for the wrong song.");
+    }
+
+    // A response can carry the requested GraphQL song id while still containing
+    // a stale stream_url from another Drive row. The immutable Drive file id in
+    // the URL path must agree with the immutable id encoded in song.id.
+    assertStreamUrlBelongsToSong(song.id, refreshed.streamUrl);
+
     return {
       ...song,
       ...refreshed,
+      id: song.id,
       streamUrl: refreshed.streamUrl
     };
   }
