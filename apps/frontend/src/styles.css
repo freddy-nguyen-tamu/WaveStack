@@ -7001,7 +7001,9 @@ button:not(:disabled):active {
   height: clamp(1.78rem, 2.15vw, 2.08rem);
   align-items: center;
   justify-content: center;
-  margin: clamp(-3.1rem, -3.25vw, -2.6rem) clamp(1.65rem, 2.15vw, 2.25rem) clamp(0.95rem, 1.2vw, 1.25rem) auto;
+  /* Pull the rotated band through the card's right padding so its outer fold
+     lands on the actual card border instead of floating inside the content. */
+  margin: clamp(-3.1rem, -3.25vw, -2.6rem) clamp(-0.86rem, -0.72vw, -0.7rem) clamp(0.95rem, 1.2vw, 1.25rem) auto;
   border: 1px solid color-mix(in srgb, var(--route-ribbon-edge) 72%, transparent);
   border-radius: 0.08rem;
   padding: 0.26rem 0.72rem;
@@ -7070,7 +7072,8 @@ html[data-theme="dark"] .route-sticker {
     width: 5.25rem;
     height: 1.68rem;
     margin-top: -2.82rem;
-    margin-right: 1.45rem;
+    /* Keep the ribbon hooked onto the physical card edge on narrow layouts too. */
+    margin-right: -0.55rem;
     margin-bottom: 0.86rem;
     padding-inline: 0.6rem;
     font-size: 0.64rem;
