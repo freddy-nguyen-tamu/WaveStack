@@ -8,6 +8,7 @@ import { SongArtwork } from "../../components/SongArtwork";
 import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
 import { LoadingStatus } from "../../components/LoadingStatus";
 import { SongActions } from "../../components/SongActions";
+import { RouteSticker } from "../../components/RouteSticker";
 
 type DashboardProps = {
   loading: boolean;
@@ -70,7 +71,7 @@ export function Dashboard({
 
   return (
     <article className="dashboard-page">
-      <span className="route-sticker" aria-hidden="true">Dashboard</span>
+      <RouteSticker>Dashboard</RouteSticker>
       <h2 className="sr-only">{userName ? `Dashboard for ${userName}` : "Dashboard"}</h2>
 
       <div className="dashboard-page__toolbar">

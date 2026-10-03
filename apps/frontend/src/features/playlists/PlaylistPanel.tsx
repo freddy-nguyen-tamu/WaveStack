@@ -8,6 +8,7 @@ import { PaginationBar } from "../../components/PaginationBar";
 import { ToastNotice } from "../../components/ToastNotice";
 import { LoadingStatus } from "../../components/LoadingStatus";
 import { useStableScrollRegion } from "../../hooks/useStableScrollRegion";
+import { RouteSticker } from "../../components/RouteSticker";
 
 type PlaylistPanelProps = {
   songs: Song[];
@@ -172,7 +173,7 @@ export function PlaylistPanel({
 
   return (
     <article ref={regionRef} className="playlist-panel">
-      <span className="route-sticker" aria-hidden="true">Playlists</span>
+      <RouteSticker>Playlists</RouteSticker>
       <h2 className="sr-only">Playlists</h2>
 
       <button type="button" onClick={createPlaylistFromPrompt}>

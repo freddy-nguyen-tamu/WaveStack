@@ -16,6 +16,7 @@ import { SongListRow } from "../../components/SongListRow";
 import { matchesSongSearch } from "../../song-format";
 import { readSearchHistory, rememberSearch } from "../../search-history";
 import { SearchHistorySuggestions } from "../../components/SearchHistorySuggestions";
+import { RouteSticker } from "../../components/RouteSticker";
 
 const ALL_PAGE_SIZE = 60;
 
@@ -251,7 +252,7 @@ export function AllPage({
 
   return (
     <article ref={regionRef} className="all-page">
-      <span className="route-sticker" aria-hidden="true">All</span>
+      <RouteSticker>All</RouteSticker>
       <h2 className="sr-only">All</h2>
 
       <section className="all-page__controls" aria-label="All songs controls">

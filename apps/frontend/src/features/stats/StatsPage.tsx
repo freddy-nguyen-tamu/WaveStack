@@ -26,6 +26,7 @@ import { StatsPieChart } from "./components/StatsPieChart";
 import { StatsReceipt } from "./components/StatsReceipt";
 import { TasteComparisonPanel } from "./components/TasteComparisonPanel";
 import { TasteJudgePanel } from "./components/TasteJudgePanel";
+import { RouteSticker } from "../../components/RouteSticker";
 
 type StatsEntry = {
   key: string;
@@ -361,7 +362,7 @@ export function StatsPage({
 
   return (
     <article className="stats-page">
-      <span className="route-sticker" aria-hidden="true">Stats</span>
+      <RouteSticker>Stats</RouteSticker>
       <h2 className="sr-only">Stats</h2>
 
       <div className="stats-page__periods">

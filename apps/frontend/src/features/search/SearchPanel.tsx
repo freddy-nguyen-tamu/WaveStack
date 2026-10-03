@@ -13,6 +13,7 @@ import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
 import { ToastNotice } from "../../components/ToastNotice";
 import { SearchHistorySuggestions } from "../../components/SearchHistorySuggestions";
 import { readSearchHistory, rememberSearch } from "../../search-history";
+import { RouteSticker } from "../../components/RouteSticker";
 
 type SearchPanelProps = {
   pageKey: string;
@@ -161,9 +162,9 @@ export function SearchPanel({
     <article ref={regionRef} className={resultsOnly ? "search-panel search-panel--results-only" : "search-panel"}>
       {!resultsOnly ? (
         <>
-          <span className="route-sticker" aria-hidden="true">
+          <RouteSticker>
             {title === "Recently Played" ? "Recent" : title}
-          </span>
+          </RouteSticker>
           <h2 className="sr-only">{title === "Recently Played" ? "Recent" : title}</h2>
           <div className="search-panel__search">
             <span className="field-caption"><Search aria-hidden="true" /> Filename, song, artist, album, or lyrics</span>

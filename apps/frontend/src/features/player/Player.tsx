@@ -1,4 +1,3 @@
-
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Heart,
@@ -964,6 +963,9 @@ export function Player({
       }
 
       event.preventDefault();
+      if (event.repeat) {
+        return;
+      }
 
       if (playbackUiActive || desiredPlaybackRef.current) {
         pauseCurrent(`Paused: ${displayName}`);
@@ -996,12 +998,23 @@ export function Player({
       }
     }
 
-    window.addEventListener("keydown", handleKeyboardControls);
-    window.addEventListener("keyup", handleKeyUp);
+    function resetShortcutState() {
+      pressedKeysRef.current.clear();
+      comboLockRef.current = null;
+    }
+
+    // Capture at document level so route components, dialogs, and buttons cannot
+    // accidentally swallow playback shortcuts before the player sees them. Text
+    // editing controls are still excluded by isShortcutBlockedTarget above.
+    document.addEventListener("keydown", handleKeyboardControls, true);
+    document.addEventListener("keyup", handleKeyUp, true);
+    window.addEventListener("blur", resetShortcutState);
 
     return () => {
-      window.removeEventListener("keydown", handleKeyboardControls);
-      window.removeEventListener("keyup", handleKeyUp);
+      document.removeEventListener("keydown", handleKeyboardControls, true);
+      document.removeEventListener("keyup", handleKeyUp, true);
+      window.removeEventListener("blur", resetShortcutState);
+      resetShortcutState();
     };
   }, [playbackUiActive, activeSong.id, displayName, onNext, onPrevious]);
 
@@ -1448,3 +1461,4 @@ export function Player({
     </>
   );
 }
+

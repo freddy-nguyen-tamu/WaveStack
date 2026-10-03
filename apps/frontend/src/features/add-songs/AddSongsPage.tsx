@@ -10,6 +10,7 @@ import type { Song } from "../../App";
 import { SongArtwork } from "../../components/SongArtwork";
 import { UploadButton } from "../../components/UploadButton";
 import { formatSongDisplayName } from "../../song-format";
+import { RouteSticker } from "../../components/RouteSticker";
 
 type AddSongsPageProps = {
   isSignedIn: boolean;
@@ -295,7 +296,7 @@ export function AddSongsPage({ isSignedIn, onSongsAdded, onNotice, onUploadFiles
 
   return (
     <article className="add-songs-page">
-      <span className="route-sticker" aria-hidden="true">Add Songs</span>
+      <RouteSticker>Add Songs</RouteSticker>
       <h2 className="sr-only">Add Songs</h2>
 
       {!isSignedIn ? (

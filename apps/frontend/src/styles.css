@@ -6975,8 +6975,9 @@ button:not(:disabled):active {
   flex: none !important;
 }
 
-/* Compact route labels replace oversized page-title blocks. The visible
-   label is a CSS-built folded corner ribbon (no image asset). */
+/* Compact route labels replace oversized page-title blocks. The ribbon is
+   sticky, but its attachment point comes from the route card's measured border
+   box (see RouteSticker.tsx) rather than guessed negative margins. */
 .all-page,
 .search-panel:not(.search-panel--results-only),
 .add-songs-page,
@@ -6986,24 +6987,45 @@ button:not(:disabled):active {
   position: relative;
   padding-top: clamp(3.55rem, 4.4vw, 4.25rem) !important;
 }
+.route-sticker-anchor {
+  --route-card-top-inset: 0px;
+  --route-card-right-inset: 0px;
+  --route-ribbon-sticky-top: calc(
+    var(--frontier-shell-pad) +
+    var(--frontier-topbar-height) +
+    var(--frontier-shell-gap) +
+    clamp(0.42rem, 0.58vw, 0.68rem)
+  );
+
+  position: sticky;
+  top: calc(var(--route-ribbon-sticky-top) + var(--route-card-top-inset));
+  z-index: 145;
+  display: block;
+  width: 100%;
+  height: 0;
+  overflow: visible;
+  pointer-events: none;
+  user-select: none;
+}
 .route-sticker {
   --route-ribbon-bg: color-mix(in srgb, var(--color-red) 91%, transparent);
   --route-ribbon-edge: color-mix(in srgb, var(--color-red) 78%, #ffffff 22%);
   --route-ribbon-fold: color-mix(in srgb, var(--color-red) 66%, #2b0a10 34%);
   --route-ribbon-shadow: color-mix(in srgb, #000000 28%, transparent);
 
-  position: sticky;
-  top: calc(var(--frontier-shell-pad) + var(--frontier-topbar-height) + var(--frontier-shell-gap) + clamp(0.42rem, 0.58vw, 0.68rem));
-  z-index: 145;
+  position: absolute;
+  /* The anchor lives at the card content edge. Runtime-measured insets move the
+     ribbon origin back to the real border corner. The remaining translate is
+     relative to the ribbon's own size, so it only controls the tied-ribbon
+     geometry and never guesses the card's padding or width. */
+  top: calc(-1 * var(--route-card-top-inset));
+  right: calc(-1 * var(--route-card-right-inset));
   display: flex;
   width: clamp(5.5rem, 7vw, 6.8rem);
   min-width: max-content;
   height: clamp(1.78rem, 2.15vw, 2.08rem);
   align-items: center;
   justify-content: center;
-  /* Pull the rotated band through the card's right padding so its outer fold
-     lands on the actual card border instead of floating inside the content. */
-  margin: clamp(-3.1rem, -3.25vw, -2.6rem) clamp(-0.86rem, -0.72vw, -0.7rem) clamp(0.95rem, 1.2vw, 1.25rem) auto;
   border: 1px solid color-mix(in srgb, var(--route-ribbon-edge) 72%, transparent);
   border-radius: 0.08rem;
   padding: 0.26rem 0.72rem;
@@ -7023,14 +7045,12 @@ button:not(:disabled):active {
   text-align: center;
   text-transform: uppercase;
   white-space: nowrap;
-  transform: rotate(45deg);
+  transform: translate(31%, 14%) rotate(45deg);
   transform-origin: center;
-  pointer-events: none;
-  user-select: none;
   isolation: isolate;
 }
-/* The darker triangular tabs sit behind the diagonal band and create the
-   tucked-under folds shown by a classic corner-ribbon sticker. */
+/* Darker triangular tabs sit behind the diagonal band and make the strip read
+   as fabric/paper wrapping around the card's top and right borders. */
 .route-sticker::before,
 .route-sticker::after {
   content: "";
@@ -7071,12 +7091,9 @@ html[data-theme="dark"] .route-sticker {
   .route-sticker {
     width: 5.25rem;
     height: 1.68rem;
-    margin-top: -2.82rem;
-    /* Keep the ribbon hooked onto the physical card edge on narrow layouts too. */
-    margin-right: -0.55rem;
-    margin-bottom: 0.86rem;
     padding-inline: 0.6rem;
     font-size: 0.64rem;
+    transform: translate(31%, 14%) rotate(45deg);
   }
 }
 
