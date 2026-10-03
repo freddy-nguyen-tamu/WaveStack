@@ -1,3 +1,4 @@
+
 /* WaveStack canonical stylesheet: unused selectors and superseded declarations removed. */
 @font-face {
   font-family: "SaolDisplay";
@@ -6798,13 +6799,13 @@ button:not(:disabled):active {
   filter: none !important;
 }
 
-/* Fixed rails may scroll internally, but must chain wheel input to the page
-   once their own scrollbar is at an edge rather than trapping that gesture. */
+/* Scroll ownership is spatial: fixed/independent rails never chain a gesture
+   into the song page simply because their own scrollbar reached an edge. */
 .app-nav,
 .app-player-region .player-card,
 .listening-rail,
 .profile-insights-rail {
-  overscroll-behavior-y: auto !important;
+  overscroll-behavior: contain !important;
 }
 
 /* Global keyboard-shortcut disclosure. Kept fixed and compact so the hint is
@@ -6973,3 +6974,50 @@ button:not(:disabled):active {
   margin: 0 !important;
   flex: none !important;
 }
+
+/* Compact route labels replace oversized page-title blocks. */
+.all-page,
+.search-panel:not(.search-panel--results-only),
+.add-songs-page,
+.dashboard-page,
+.playlist-panel,
+.stats-page {
+  position: relative;
+  padding-top: clamp(3.25rem, 4vw, 3.9rem) !important;
+}
+.route-sticker {
+  position: absolute;
+  top: clamp(0.72rem, 1vw, 1rem);
+  right: clamp(0.72rem, 1vw, 1rem);
+  z-index: 4;
+  display: inline-flex;
+  min-height: 1.65rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--frontier-border-strong);
+  border-radius: var(--radius-pill);
+  padding: 0.3rem 0.62rem;
+  background: var(--frontier-surface-muted);
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  text-transform: none;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Focus stays functional, but WaveStack no longer paints red outline/box rings.
+   Buttons/links retain their existing non-outline focus treatment; form fields
+   use the normal strong border rather than a red focus rectangle. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus,
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+:where(input, select, textarea):focus,
+:where(input, select, textarea):focus-visible {
+  border-color: var(--frontier-border-strong) !important;
+}
+

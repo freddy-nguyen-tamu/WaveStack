@@ -1,3 +1,4 @@
+
 import { Shuffle } from "lucide-react";
 import { useMemo } from "react";
 import type { OpenSongDetailsHandler, RecommendResult, Song } from "../../App";
@@ -69,6 +70,7 @@ export function Dashboard({
 
   return (
     <article className="dashboard-page">
+      <span className="route-sticker" aria-hidden="true">Dashboard</span>
       <h2 className="sr-only">{userName ? `Dashboard for ${userName}` : "Dashboard"}</h2>
 
       <div className="dashboard-page__toolbar">

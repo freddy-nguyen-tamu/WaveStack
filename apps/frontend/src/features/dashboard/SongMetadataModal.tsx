@@ -1,3 +1,4 @@
+
 import { createPortal } from "react-dom";
 import { LyricSearch } from "./LyricSearch";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -173,7 +174,12 @@ export function SongMetadataModal({
       }
 
       setLyricsRepairMessage(payload?.message || "No embedded lyrics were found for this track.");
-      await refetch();
+
+      // If the database already had lyrics while the cached details query was
+      // stale, refresh once. A confirmed no-lyrics result needs no second round trip.
+      if (/already has lyrics/i.test(payload?.message ?? "")) {
+        await refetch();
+      }
     } catch (error) {
       setLyricsRepairMessage(
         error instanceof Error
@@ -240,7 +246,7 @@ export function SongMetadataModal({
           />
 
           <LyricSearch key={details.id} lyrics={lyrics ?? ""}
-            loadingLabel={loading || repairingLyrics ? (repairingLyrics ? "Extracting lyrics..." : "Loading lyrics...") : undefined}>
+            loadingLabel={!lyrics && (loading || repairingLyrics) ? (repairingLyrics ? "Extracting lyrics..." : "Loading lyrics...") : undefined}>
               <div className="song-modal__empty-state">
                 <p className="song-modal__empty">
                   {lyricsRepairMessage || "Checking this track for embedded lyrics..."}

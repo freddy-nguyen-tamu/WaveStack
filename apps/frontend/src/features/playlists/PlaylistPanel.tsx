@@ -1,3 +1,4 @@
+
 import { ListPlus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../../App";
@@ -170,8 +171,9 @@ export function PlaylistPanel({
   }
 
   return (
-    <article ref={regionRef}>
-      <h2>Playlists</h2>
+    <article ref={regionRef} className="playlist-panel">
+      <span className="route-sticker" aria-hidden="true">Playlists</span>
+      <h2 className="sr-only">Playlists</h2>
 
       <button type="button" onClick={createPlaylistFromPrompt}>
         <ListPlus aria-hidden="true" /> New playlist

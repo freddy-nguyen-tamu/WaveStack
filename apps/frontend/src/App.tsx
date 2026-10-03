@@ -1,4 +1,5 @@
 
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ApolloQueryResult, useApolloClient, useMutation, useQuery } from "@apollo/client";
 import { Activity, Clock, Heart, ListMusic, Music2, RefreshCw, TrendingUp, Upload } from "lucide-react";
@@ -497,7 +498,13 @@ export function App() {
   const [notice, setNotice] = useState("");
   const [globalSearchQuery, setGlobalSearchQuery] = useState(() => window.sessionStorage.getItem("wavestack:active-search") ?? "");
   const [isDarkMode, setIsDarkMode] = useState(() => {
-    return window.localStorage.getItem("wavestack:theme") === "dark";
+    const explicitTheme = window.localStorage.getItem("wavestack:theme-user-set") === "true";
+    const storedTheme = window.localStorage.getItem("wavestack:theme");
+
+    // Dark is the new site-wide default, including existing visitors whose old
+    // light value was written automatically before we could distinguish a real
+    // user choice. Future explicit light-mode choices remain persistent.
+    return explicitTheme ? storedTheme !== "light" : true;
   });
   const noticeTimerRef = useRef<number | null>(null);
   const favoriteIdsRef = useRef<string[]>(favoriteIds);
@@ -536,6 +543,11 @@ export function App() {
     playlistsRef.current = next;
     setPlaylists(next);
     writeLocalJson("wavestack:playlists", next);
+  }
+
+  function toggleDarkMode() {
+    window.localStorage.setItem("wavestack:theme-user-set", "true");
+    setIsDarkMode(current => !current);
   }
 
   useEffect(() => {
@@ -1691,6 +1703,15 @@ export function App() {
   }
 
   function openDetails(song: Song, context?: PlaybackContext) {
+    // Start the details request in the same input turn as the click instead of
+    // waiting for the modal subtree to mount. Apollo deduplicates the modal's
+    // matching query and reuses any already-cached lyrics immediately.
+    void apolloClient.query<{ songDetails: Song | null }>({
+      query: SONG_DETAILS_QUERY,
+      variables: { id: song.id },
+      fetchPolicy: "cache-first"
+    }).catch(() => undefined);
+
     // A queue backdrop left underneath the song dialog intercepts scrolling
     // after closing the dialog; only one overlay should be active at a time.
     if (queueDrawerOpen) setQueueDrawerOpen(false);
@@ -2486,7 +2507,7 @@ export function App() {
           <AuthPanel
             user={authUser}
             isDarkMode={isDarkMode}
-            onToggleDarkMode={() => setIsDarkMode((current) => !current)}
+            onToggleDarkMode={toggleDarkMode}
             onLogout={logout}
           />
         </header>

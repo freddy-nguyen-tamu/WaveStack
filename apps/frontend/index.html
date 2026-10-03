@@ -1,4 +1,5 @@
 
+
 <!doctype html>
 <html lang="en">
   <head>
@@ -28,8 +29,23 @@
 
     <meta
       name="theme-color"
-      content="#ffffff"
+      content="#000000"
     />
+
+    <script>
+      (() => {
+        try {
+          const explicitTheme = localStorage.getItem("wavestack:theme-user-set") === "true";
+          const storedTheme = localStorage.getItem("wavestack:theme");
+          const theme = explicitTheme && storedTheme === "light" ? "light" : "dark";
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.style.colorScheme = theme;
+        } catch {
+          document.documentElement.dataset.theme = "dark";
+          document.documentElement.style.colorScheme = "dark";
+        }
+      })();
+    </script>
 
     <meta
       property="og:type"

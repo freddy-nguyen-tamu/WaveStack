@@ -1,3 +1,4 @@
+
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { ApolloProvider } from "@apollo/client";
@@ -5,6 +6,7 @@ import { BrowserRouter } from "react-router-dom";
 import { App } from "./App";
 import { apolloClient, restoreApolloCache } from "./api";
 import { installPointerFocusPolicy } from "./hooks/pointerFocus";
+import { installScrollOwnershipPolicy } from "./hooks/wheelHandoff";
 import "./styles.css";
 
 async function bootstrap() {
@@ -12,6 +14,7 @@ async function bootstrap() {
   // persistent focused state. The shared policy preserves keyboard focus, text
   // editing, native select behavior, range dragging, and dialog focus trapping.
   installPointerFocusPolicy();
+  installScrollOwnershipPolicy();
 
   // Discourage ordinary image copying without interfering with lyric selection.
   for (const eventName of ["dragstart", "contextmenu", "selectstart"] as const) {
@@ -36,4 +39,3 @@ async function bootstrap() {
 }
 
 void bootstrap();
-

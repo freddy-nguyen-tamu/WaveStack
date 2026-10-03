@@ -1,3 +1,4 @@
+
 import { useEffect, useMemo, useState } from "react";
 import { LoadingStatus } from "../../components/LoadingStatus";
 import { useLazyQuery, useMutation, useQuery } from "@apollo/client";
@@ -9,8 +10,7 @@ import {
   Download,
   Headphones,
   Loader2,
-  Mic2,
-  TrendingUp
+  Mic2
 } from "lucide-react";
 import {
   EXPORT_LISTENING_HABITS_MUTATION,
@@ -361,11 +361,8 @@ export function StatsPage({
 
   return (
     <article className="stats-page">
-      <div className="stats-page__hero">
-        <TrendingUp aria-hidden="true" />
-        <h2>Listening Stats</h2>
-        <p>Your listening history, ranked and analyzed.</p>
-      </div>
+      <span className="route-sticker" aria-hidden="true">Stats</span>
+      <h2 className="sr-only">Stats</h2>
 
       <div className="stats-page__periods">
         {PERIODS.map((p) => (

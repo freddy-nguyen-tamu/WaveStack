@@ -1,3 +1,4 @@
+
 import { useMemo, useState } from "react";
 import { useMutation } from "@apollo/client";
 import { Check, ListPlus, Music2, Pencil, Upload } from "lucide-react";
@@ -294,12 +295,8 @@ export function AddSongsPage({ isSignedIn, onSongsAdded, onNotice, onUploadFiles
 
   return (
     <article className="add-songs-page">
-      <p className="eyebrow">Private library</p>
-      <h2>Add Songs</h2>
-      <p>
-        Add one track or paste many at once. Songs you save here are private to your account,
-        then appear in your search results, recommendations, playlists, favorites, and queue.
-      </p>
+      <span className="route-sticker" aria-hidden="true">Add Songs</span>
+      <h2 className="sr-only">Add Songs</h2>
 
       {!isSignedIn ? (
         <p role="alert">Sign in before saving private songs.</p>

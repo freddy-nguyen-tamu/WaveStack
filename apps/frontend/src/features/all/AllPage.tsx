@@ -1,3 +1,4 @@
+
 import { Search } from "lucide-react";
 import {
   useCallback,
@@ -81,7 +82,6 @@ export function AllPage({
 
   const { page: resultPage, loading, error, loadMore: loadMoreBackendSongs, retry } = useSongPages(debouncedQuery, backendSort, ALL_PAGE_SIZE);
   const backendSongs = resultPage?.nodes ?? [];
-  const backendTotalCount = resultPage?.totalCount ?? backendSongs.length;
   const hasMoreBackendSongs = Boolean(resultPage?.pageInfo.hasNextPage);
   const regionRef = useStableScrollRegion(loading || query.trim() !== debouncedQuery);
 
@@ -251,12 +251,8 @@ export function AllPage({
 
   return (
     <article ref={regionRef} className="all-page">
-      <div className="all-page__header-row">
-        <div>
-          <p className="eyebrow">Library</p>
-          <h2>All Songs ({backendTotalCount})</h2>
-        </div>
-      </div>
+      <span className="route-sticker" aria-hidden="true">All</span>
+      <h2 className="sr-only">All</h2>
 
       <section className="all-page__controls" aria-label="All songs controls">
         <label className="all-page__search">
@@ -311,10 +307,6 @@ export function AllPage({
         </label>
       </section>
 
-      <p className="all-page__summary">
-        Showing {visibleSongs.length} of {backendTotalCount} song(s).
-        {!hasMore && !loading && !error ? " End of list." : ""}
-      </p>
 
       {visibleSongs.length ? (
         <ul ref={listRef} className="song-list all-page__list">

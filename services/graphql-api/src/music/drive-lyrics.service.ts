@@ -8,11 +8,15 @@ type NativeTag = {
 };
 
 const TEN_MINUTES_MS = 10 * 60 * 1000;
+const MP3_PREFIX_BYTES = 512 * 1024;
+const MP3_TAG_TRAILER_BYTES = 64 * 1024;
+const MAX_FAST_ID3_BYTES = 24 * 1024 * 1024;
 
 @Injectable()
 export class DriveLyricsService {
   private readonly logger = new Logger(DriveLyricsService.name);
   private readonly cache = new Map<string, { value: string | null; expiresAt: number }>();
+  private readonly pending = new Map<string, Promise<string | null>>();
 
   constructor(private readonly driveDownloadService: DriveDownloadService) {}
 
@@ -23,27 +27,118 @@ export class DriveLyricsService {
       return cached.value;
     }
 
-    const value = await this.loadEmbeddedLyrics(fileId);
+    const existing = this.pending.get(fileId);
+    if (existing) return existing;
 
-    this.cache.set(fileId, {
-      value,
-      expiresAt: Date.now() + TEN_MINUTES_MS
-    });
+    const request = this.loadEmbeddedLyrics(fileId)
+      .then(value => {
+        this.cache.set(fileId, {
+          value,
+          expiresAt: Date.now() + TEN_MINUTES_MS
+        });
+        return value;
+      })
+      .finally(() => this.pending.delete(fileId));
 
-    return value;
+    this.pending.set(fileId, request);
+    return request;
   }
 
   private async loadEmbeddedLyrics(fileId: string): Promise<string | null> {
-    const upstream = await this.driveDownloadService.fetchMedia(fileId);
+    // MP3 ID3v2 text frames live at the beginning of the file. Reading a small
+    // byte range first avoids downloading an entire multi-megabyte song just to
+    // obtain USLT/SYLT lyrics. If the ID3 header declares a larger tag (often
+    // because it contains cover art), fetch only that tag plus a small trailer.
+    const prefix = await this.driveDownloadService.fetchMedia(
+      fileId,
+      `bytes=0-${MP3_PREFIX_BYTES - 1}`,
+      AbortSignal.timeout(8000)
+    );
 
-    if (!upstream.ok) {
-      this.logger.warn(`Could not download Drive audio for lyrics. fileId=${fileId} status=${upstream.status}`);
+    if (!prefix.ok) {
+      this.logger.warn(`Could not download Drive audio prefix for lyrics. fileId=${fileId} status=${prefix.status}`);
+      await prefix.body?.cancel();
       return null;
     }
 
-    const contentType = upstream.headers.get("content-type") ?? "audio/mpeg";
-    const buffer = Buffer.from(await upstream.arrayBuffer());
+    const contentType = prefix.headers.get("content-type") ?? "audio/mpeg";
+    const prefixBuffer = Buffer.from(await prefix.arrayBuffer());
+    const rangeWasHonored = prefix.status === 206 || Boolean(prefix.headers.get("content-range"));
 
+    // Some upstreams ignore Range and return the whole file. In that case we
+    // already paid for the bytes, so parse the complete response directly.
+    if (!rangeWasHonored) {
+      return this.parseLyrics(prefixBuffer, contentType, fileId);
+    }
+
+    const id3Length = this.id3v2Length(prefixBuffer);
+    const looksLikeMp3 =
+      id3Length !== null ||
+      /(?:audio\/(?:mpeg|mp3)|application\/octet-stream)/i.test(contentType);
+
+    if (looksLikeMp3) {
+      if (id3Length === null) {
+        // Unsynchronised/synchronised embedded MP3 lyrics are ID3v2 frames. No
+        // ID3v2 header means there is nothing useful to gain by downloading the
+        // entire audio payload on every modal open.
+        return null;
+      }
+
+      let metadataBuffer = prefixBuffer;
+      if (id3Length > prefixBuffer.length && id3Length <= MAX_FAST_ID3_BYTES) {
+        const end = Math.min(
+          MAX_FAST_ID3_BYTES - 1,
+          id3Length + MP3_TAG_TRAILER_BYTES - 1
+        );
+        const tagResponse = await this.driveDownloadService.fetchMedia(
+          fileId,
+          `bytes=0-${end}`,
+          AbortSignal.timeout(10000)
+        );
+
+        if (tagResponse.ok) {
+          metadataBuffer = Buffer.from(await tagResponse.arrayBuffer());
+        } else {
+          await tagResponse.body?.cancel();
+        }
+      }
+
+      return this.parseLyrics(metadataBuffer, contentType, fileId);
+    }
+
+    // FLAC/MP4 and other formats can keep metadata outside the leading range.
+    // Preserve correctness for those less-common files with the old full-file
+    // path while MP3s take the much faster bounded-range path above.
+    const upstream = await this.driveDownloadService.fetchMedia(
+      fileId,
+      undefined,
+      AbortSignal.timeout(20000)
+    );
+
+    if (!upstream.ok) {
+      this.logger.warn(`Could not download Drive audio for lyrics. fileId=${fileId} status=${upstream.status}`);
+      await upstream.body?.cancel();
+      return null;
+    }
+
+    return this.parseLyrics(Buffer.from(await upstream.arrayBuffer()), contentType, fileId);
+  }
+
+  private id3v2Length(buffer: Buffer): number | null {
+    if (buffer.length < 10 || buffer.subarray(0, 3).toString("ascii") !== "ID3") {
+      return null;
+    }
+
+    const size =
+      ((buffer[6] & 0x7f) << 21) |
+      ((buffer[7] & 0x7f) << 14) |
+      ((buffer[8] & 0x7f) << 7) |
+      (buffer[9] & 0x7f);
+    const footerBytes = (buffer[5] & 0x10) !== 0 ? 10 : 0;
+    return 10 + size + footerBytes;
+  }
+
+  private async parseLyrics(buffer: Buffer, contentType: string, fileId: string): Promise<string | null> {
     try {
       const metadata = await parseBuffer(buffer, contentType, {
         duration: false,

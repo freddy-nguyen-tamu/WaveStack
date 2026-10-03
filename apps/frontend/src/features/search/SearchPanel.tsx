@@ -1,4 +1,5 @@
 
+
 import { Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useSongPages } from "../../hooks/useSongPages";
@@ -160,7 +161,10 @@ export function SearchPanel({
     <article ref={regionRef} className={resultsOnly ? "search-panel search-panel--results-only" : "search-panel"}>
       {!resultsOnly ? (
         <>
-          <h2>{title}</h2>
+          <span className="route-sticker" aria-hidden="true">
+            {title === "Recently Played" ? "Recent" : title}
+          </span>
+          <h2 className="sr-only">{title === "Recently Played" ? "Recent" : title}</h2>
           <label>
             <Search aria-hidden="true" /> Filename, song, artist, album, or lyrics
             <span className="search-history-field">
