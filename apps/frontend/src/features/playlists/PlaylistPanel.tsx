@@ -186,9 +186,9 @@ export function PlaylistPanel({
       ) : null}
 
       <div className="playlist-selector">
-        <label className="sr-only" htmlFor="playlist-selector">Choose playlist</label>
         <select
           id="playlist-selector"
+          aria-label="Choose playlist"
           value={selectedPlaylist?.id ?? ""}
           disabled={!playlists.length}
           onChange={(event) => {
@@ -244,10 +244,14 @@ export function PlaylistPanel({
       <section>
         <h3>Add songs to playlist</h3>
 
-        <label>
-          Search library
-          <input value={query} onChange={(event) => setQuery(event.target.value)} />
-        </label>
+        <div className="playlist-panel__search">
+          <span className="field-caption">Search library</span>
+          <input
+            aria-label="Search library"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </div>
         {query.trim() !== searchQuery ? <LoadingStatus label="Loading search results..." /> : null}
 
         <p>

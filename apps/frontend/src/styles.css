@@ -6986,26 +6986,65 @@ button:not(:disabled):active {
   padding-top: clamp(3.25rem, 4vw, 3.9rem) !important;
 }
 .route-sticker {
-  position: absolute;
-  top: clamp(0.72rem, 1vw, 1rem);
-  right: clamp(0.72rem, 1vw, 1rem);
-  z-index: 4;
-  display: inline-flex;
+  position: sticky;
+  top: calc(var(--frontier-shell-pad) + var(--frontier-topbar-height) + var(--frontier-shell-gap) + clamp(0.38rem, 0.55vw, 0.62rem));
+  z-index: 145;
+  display: flex;
+  width: max-content;
   min-height: 1.65rem;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--frontier-border-strong);
+  margin: clamp(-3rem, -3.2vw, -2.4rem) clamp(0.15rem, 0.35vw, 0.45rem) clamp(0.65rem, 0.85vw, 0.9rem) auto;
+  border: 1px solid color-mix(in srgb, var(--color-red) 68%, var(--frontier-border-strong));
   border-radius: var(--radius-pill);
-  padding: 0.3rem 0.62rem;
-  background: var(--frontier-surface-muted);
-  color: var(--color-muted);
+  padding: 0.3rem 0.68rem;
+  background: color-mix(in srgb, var(--frontier-surface-strong) 78%, transparent);
+  color: color-mix(in srgb, var(--color-red) 78%, var(--color-ink));
+  box-shadow: 0 0.42rem 1.35rem color-mix(in srgb, var(--color-red) 13%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(145%);
+  backdrop-filter: blur(14px) saturate(145%);
   font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.01em;
+  font-weight: 800;
+  letter-spacing: 0.015em;
   line-height: 1;
   text-transform: none;
   pointer-events: none;
   user-select: none;
+}
+
+/* Visible captions near search/select controls are intentionally not HTML
+   labels. That keeps the pointer hit target exactly on the actual input/select
+   box while aria-label preserves an accessible name for the control. */
+.field-caption {
+  display: inline-flex;
+  width: max-content;
+  max-width: 100%;
+  align-items: center;
+  gap: 0.42rem;
+  color: var(--color-ink);
+  font-size: 0.95rem;
+  line-height: 1.2;
+  cursor: default;
+  user-select: text;
+}
+.all-page__search,
+.all-page__sort,
+.search-panel__search,
+.playlist-panel__search {
+  display: grid;
+  gap: 0.55rem;
+  color: var(--color-ink);
+  font-size: 0.95rem;
+}
+.search-panel__search,
+.playlist-panel__search {
+  width: 100%;
+  margin: 1rem 0;
+}
+.search-panel__search input,
+.playlist-panel__search input {
+  min-height: 3.2rem;
+  font-size: 1rem;
 }
 
 /* Focus stays functional, but WaveStack no longer paints red outline/box rings.

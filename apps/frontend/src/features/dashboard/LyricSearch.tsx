@@ -1,3 +1,4 @@
+
 import { ArrowDown, ArrowUp, Search, X } from "lucide-react";
 import {
   useEffect,
@@ -187,10 +188,10 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
 
   const searchControls = open ? (
     <div className="lyric-find__controls" role="search" aria-label="Find in this song's lyrics">
-      <label className="sr-only" htmlFor={inputId}>Find in lyrics</label>
       <input
         ref={inputRef}
         id={inputId}
+        aria-label="Find in lyrics"
         type="text"
         value={query}
         placeholder="Find in lyrics"

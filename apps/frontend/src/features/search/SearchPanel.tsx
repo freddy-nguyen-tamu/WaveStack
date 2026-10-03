@@ -165,10 +165,11 @@ export function SearchPanel({
             {title === "Recently Played" ? "Recent" : title}
           </span>
           <h2 className="sr-only">{title === "Recently Played" ? "Recent" : title}</h2>
-          <label>
-            <Search aria-hidden="true" /> Filename, song, artist, album, or lyrics
+          <div className="search-panel__search">
+            <span className="field-caption"><Search aria-hidden="true" /> Filename, song, artist, album, or lyrics</span>
             <span className="search-history-field">
               <input
+                aria-label="Filename, song, artist, album, or lyrics"
                 value={query}
                 autoComplete="off"
                 onFocus={() => {
@@ -203,7 +204,7 @@ export function SearchPanel({
                 }}
               />
             </span>
-          </label>
+          </div>
         </>
       ) : null}
       {message ? (

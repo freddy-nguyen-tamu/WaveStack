@@ -255,10 +255,11 @@ export function AllPage({
       <h2 className="sr-only">All</h2>
 
       <section className="all-page__controls" aria-label="All songs controls">
-        <label className="all-page__search">
-          <Search aria-hidden="true" /> Search all songs
+        <div className="all-page__search">
+          <span className="field-caption"><Search aria-hidden="true" /> Search all songs</span>
           <span className="search-history-field">
             <input
+              aria-label="Search all songs"
               value={query}
               autoComplete="off"
               onFocus={() => {
@@ -294,17 +295,17 @@ export function AllPage({
               }}
             />
           </span>
-        </label>
+        </div>
 
-        <label className="all-page__sort">
-          Sort
-          <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)}>
+        <div className="all-page__sort">
+          <span className="field-caption">Sort</span>
+          <select aria-label="Sort all songs" value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)}>
             <option value="az">Title A-Z</option>
             <option value="artist">Author A-Z</option>
             <option value="newest">Newest added</option>
             <option value="oldest">Oldest added</option>
           </select>
-        </label>
+        </div>
       </section>
 
 
