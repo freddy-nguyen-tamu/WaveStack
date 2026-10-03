@@ -16,7 +16,7 @@ import { SongListRow } from "../../components/SongListRow";
 import { matchesSongSearch } from "../../song-format";
 import { readSearchHistory, rememberSearch } from "../../search-history";
 import { SearchHistorySuggestions } from "../../components/SearchHistorySuggestions";
-import { RouteSticker } from "../../components/RouteSticker";
+import { RouteSticker } from "../../components/KeyboardShortcutsMenu";
 
 const ALL_PAGE_SIZE = 60;
 

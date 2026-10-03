@@ -10,7 +10,7 @@ import type { Song } from "../../App";
 import { SongArtwork } from "../../components/SongArtwork";
 import { UploadButton } from "../../components/UploadButton";
 import { formatSongDisplayName } from "../../song-format";
-import { RouteSticker } from "../../components/RouteSticker";
+import { RouteSticker } from "../../components/KeyboardShortcutsMenu";
 
 type AddSongsPageProps = {
   isSignedIn: boolean;

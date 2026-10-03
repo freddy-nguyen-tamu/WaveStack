@@ -26,7 +26,7 @@ import { StatsPieChart } from "./components/StatsPieChart";
 import { StatsReceipt } from "./components/StatsReceipt";
 import { TasteComparisonPanel } from "./components/TasteComparisonPanel";
 import { TasteJudgePanel } from "./components/TasteJudgePanel";
-import { RouteSticker } from "../../components/RouteSticker";
+import { RouteSticker } from "../../components/KeyboardShortcutsMenu";
 
 type StatsEntry = {
   key: string;

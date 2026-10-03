@@ -8,7 +8,7 @@ import { PaginationBar } from "../../components/PaginationBar";
 import { ToastNotice } from "../../components/ToastNotice";
 import { LoadingStatus } from "../../components/LoadingStatus";
 import { useStableScrollRegion } from "../../hooks/useStableScrollRegion";
-import { RouteSticker } from "../../components/RouteSticker";
+import { RouteSticker } from "../../components/KeyboardShortcutsMenu";
 
 type PlaylistPanelProps = {
   songs: Song[];

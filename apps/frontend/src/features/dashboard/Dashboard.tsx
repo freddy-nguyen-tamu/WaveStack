@@ -8,7 +8,7 @@ import { SongArtwork } from "../../components/SongArtwork";
 import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
 import { LoadingStatus } from "../../components/LoadingStatus";
 import { SongActions } from "../../components/SongActions";
-import { RouteSticker } from "../../components/RouteSticker";
+import { RouteSticker } from "../../components/KeyboardShortcutsMenu";
 
 type DashboardProps = {
   loading: boolean;

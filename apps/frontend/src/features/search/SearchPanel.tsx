@@ -13,7 +13,7 @@ import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
 import { ToastNotice } from "../../components/ToastNotice";
 import { SearchHistorySuggestions } from "../../components/SearchHistorySuggestions";
 import { readSearchHistory, rememberSearch } from "../../search-history";
-import { RouteSticker } from "../../components/RouteSticker";
+import { RouteSticker } from "../../components/KeyboardShortcutsMenu";
 
 type SearchPanelProps = {
   pageKey: string;
