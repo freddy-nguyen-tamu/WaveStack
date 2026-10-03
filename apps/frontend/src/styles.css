@@ -6975,7 +6975,8 @@ button:not(:disabled):active {
   flex: none !important;
 }
 
-/* Compact route labels replace oversized page-title blocks. */
+/* Compact route labels replace oversized page-title blocks. The visible
+   label is a CSS-built folded corner ribbon (no image asset). */
 .all-page,
 .search-panel:not(.search-panel--results-only),
 .add-songs-page,
@@ -6983,33 +6984,97 @@ button:not(:disabled):active {
 .playlist-panel,
 .stats-page {
   position: relative;
-  padding-top: clamp(3.25rem, 4vw, 3.9rem) !important;
+  padding-top: clamp(3.55rem, 4.4vw, 4.25rem) !important;
 }
 .route-sticker {
+  --route-ribbon-bg: color-mix(in srgb, var(--color-red) 91%, transparent);
+  --route-ribbon-edge: color-mix(in srgb, var(--color-red) 78%, #ffffff 22%);
+  --route-ribbon-fold: color-mix(in srgb, var(--color-red) 66%, #2b0a10 34%);
+  --route-ribbon-shadow: color-mix(in srgb, #000000 28%, transparent);
+
   position: sticky;
-  top: calc(var(--frontier-shell-pad) + var(--frontier-topbar-height) + var(--frontier-shell-gap) + clamp(0.38rem, 0.55vw, 0.62rem));
+  top: calc(var(--frontier-shell-pad) + var(--frontier-topbar-height) + var(--frontier-shell-gap) + clamp(0.42rem, 0.58vw, 0.68rem));
   z-index: 145;
   display: flex;
-  width: max-content;
-  min-height: 1.65rem;
+  width: clamp(5.5rem, 7vw, 6.8rem);
+  min-width: max-content;
+  height: clamp(1.78rem, 2.15vw, 2.08rem);
   align-items: center;
   justify-content: center;
-  margin: clamp(-3rem, -3.2vw, -2.4rem) clamp(0.15rem, 0.35vw, 0.45rem) clamp(0.65rem, 0.85vw, 0.9rem) auto;
-  border: 1px solid color-mix(in srgb, var(--color-red) 68%, var(--frontier-border-strong));
-  border-radius: var(--radius-pill);
-  padding: 0.3rem 0.68rem;
-  background: color-mix(in srgb, var(--frontier-surface-strong) 78%, transparent);
-  color: color-mix(in srgb, var(--color-red) 78%, var(--color-ink));
-  box-shadow: 0 0.42rem 1.35rem color-mix(in srgb, var(--color-red) 13%, transparent);
-  -webkit-backdrop-filter: blur(14px) saturate(145%);
-  backdrop-filter: blur(14px) saturate(145%);
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.015em;
+  margin: clamp(-3.1rem, -3.25vw, -2.6rem) clamp(1.65rem, 2.15vw, 2.25rem) clamp(0.95rem, 1.2vw, 1.25rem) auto;
+  border: 1px solid color-mix(in srgb, var(--route-ribbon-edge) 72%, transparent);
+  border-radius: 0.08rem;
+  padding: 0.26rem 0.72rem;
+  overflow: visible;
+  background: var(--route-ribbon-bg);
+  color: #ffffff;
+  box-shadow:
+    0 0.12rem 0 color-mix(in srgb, #ffffff 10%, transparent) inset,
+    0 0.45rem 1rem var(--route-ribbon-shadow);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  backdrop-filter: blur(12px) saturate(150%);
+  font-family: var(--font-sans);
+  font-size: clamp(0.68rem, 0.76vw, 0.78rem);
+  font-weight: 700;
+  letter-spacing: 0.035em;
   line-height: 1;
-  text-transform: none;
+  text-align: center;
+  text-transform: uppercase;
+  white-space: nowrap;
+  transform: rotate(45deg);
+  transform-origin: center;
   pointer-events: none;
   user-select: none;
+  isolation: isolate;
+}
+/* The darker triangular tabs sit behind the diagonal band and create the
+   tucked-under folds shown by a classic corner-ribbon sticker. */
+.route-sticker::before,
+.route-sticker::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  width: clamp(0.72rem, 0.9vw, 0.92rem);
+  height: clamp(0.72rem, 0.9vw, 0.92rem);
+  background: var(--route-ribbon-fold);
+  filter: saturate(0.96);
+}
+.route-sticker::before {
+  left: clamp(-0.74rem, -0.76vw, -0.58rem);
+  bottom: -1px;
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+  box-shadow: -0.16rem 0.18rem 0.35rem color-mix(in srgb, #000000 18%, transparent);
+}
+.route-sticker::after {
+  top: -1px;
+  right: clamp(-0.74rem, -0.76vw, -0.58rem);
+  clip-path: polygon(0 0, 100% 0, 0 100%);
+  box-shadow: 0.16rem -0.18rem 0.35rem color-mix(in srgb, #000000 16%, transparent);
+}
+html[data-theme="dark"] .route-sticker {
+  --route-ribbon-bg: color-mix(in srgb, var(--color-red) 94%, transparent);
+  --route-ribbon-edge: color-mix(in srgb, var(--color-red) 82%, #ffffff 18%);
+  --route-ribbon-fold: color-mix(in srgb, var(--color-red) 62%, #120307 38%);
+  --route-ribbon-shadow: color-mix(in srgb, #000000 52%, transparent);
+}
+@media (max-width: 639px) {
+  .all-page,
+  .search-panel:not(.search-panel--results-only),
+  .add-songs-page,
+  .dashboard-page,
+  .playlist-panel,
+  .stats-page {
+    padding-top: 3.35rem !important;
+  }
+  .route-sticker {
+    width: 5.25rem;
+    height: 1.68rem;
+    margin-top: -2.82rem;
+    margin-right: 1.45rem;
+    margin-bottom: 0.86rem;
+    padding-inline: 0.6rem;
+    font-size: 0.64rem;
+  }
 }
 
 /* Visible captions near search/select controls are intentionally not HTML
