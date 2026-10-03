@@ -1,4 +1,5 @@
 
+
 import { memo, type SyntheticEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Song } from "../App";
 import { LoaderCircle } from "lucide-react";
@@ -247,7 +248,6 @@ export const SongArtwork = memo(function SongArtwork({
   const [isNearViewport, setIsNearViewport] = useState(eager);
   const [sourceIndex, setSourceIndex] = useState(0);
   const [loadedSrc, setLoadedSrc] = useState<string>();
-  const [hasEnteredViewport, setHasEnteredViewport] = useState(eager);
   const [normalizedDiscImage, setNormalizedDiscImage] = useState<{
     source: string;
     src: string;
@@ -276,7 +276,6 @@ export const SongArtwork = memo(function SongArtwork({
   useEffect(() => {
     if (eager) {
       setIsNearViewport(true);
-      setHasEnteredViewport(true);
       return;
     }
 
@@ -284,17 +283,21 @@ export const SongArtwork = memo(function SongArtwork({
 
     if (!node || !("IntersectionObserver" in window)) {
       setIsNearViewport(true);
-      setHasEnteredViewport(true);
       return;
     }
 
     return observeArtwork(node, visible => {
       setIsNearViewport(visible);
-      if (visible) setHasEnteredViewport(true);
     });
   }, [song.id, eager]);
 
-  const src = hasEnteredViewport ? sources[sourceIndex] : undefined;
+  // Always give the browser the best thumbnail URL immediately. Native image
+  // lazy-loading is already optimized for the real viewport and can begin
+  // visible requests during first paint. The previous extra IntersectionObserver
+  // gate withheld `src` until after React effects ran, then `loading="lazy"`
+  // applied a second gate, which made cold visits show rows of spinners before
+  // any artwork request could make useful progress.
+  const src = sources[sourceIndex];
   const shouldApplyNowPlayingStyle = !disableNowPlayingStyle && nowPlaying.isNowPlaying;
   const displaySrc =
     shouldApplyNowPlayingStyle && src && normalizedDiscImage?.source === src
@@ -402,9 +405,9 @@ export const SongArtwork = memo(function SongArtwork({
           src={displaySrc}
           alt=""
           draggable={false}
-          loading={loading}
+          loading={eager ? "eager" : loading}
           decoding="async"
-          fetchPriority={eager ? "high" : "low"}
+          fetchPriority={eager ? "high" : "auto"}
           style={{ opacity: loadedSrc === displaySrc ? 1 : 0 }}
           onLoad={handleImageLoad}
           onError={() => {

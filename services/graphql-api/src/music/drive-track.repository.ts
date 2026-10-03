@@ -1,3 +1,4 @@
+
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { randomUUID } from "crypto";
@@ -834,9 +835,11 @@ export class DriveTrackRepository {
       streamUrl: this.exposeStreamUrl(this.canonicalStoredStreamUrl(row)),
       genreNames: row.genre_names ?? [],
       score: row.score ?? undefined,
-      thumbnailUrl: row.local_thumbnail_url ?? row.thumbnail_url ?? row.drive_thumbnail_url ?? undefined,
-      localThumbnailUrl: row.local_thumbnail_url ?? undefined,
-      driveThumbnailUrl: row.drive_thumbnail_url ?? undefined,
+      thumbnailUrl: this.exposeArtworkUrl(
+        row.local_thumbnail_url ?? row.thumbnail_url ?? row.drive_thumbnail_url ?? undefined
+      ),
+      localThumbnailUrl: this.exposeArtworkUrl(row.local_thumbnail_url),
+      driveThumbnailUrl: this.exposeArtworkUrl(row.drive_thumbnail_url),
       embeddedArtworkUrl: row.embedded_artwork_url ?? undefined,
       lyrics: row.lyrics ?? undefined,
       webViewLink: row.web_view_link ?? undefined,
@@ -882,6 +885,24 @@ export class DriveTrackRepository {
     }
 
     return url;
+  }
+
+  private exposeArtworkUrl(url: string | null | undefined): string | undefined {
+    const trimmed = url?.trim();
+
+    if (!trimmed) {
+      return undefined;
+    }
+
+    if (trimmed.startsWith("/drive/assets/")) {
+      const apiOrigin = (
+        this.config.get<string>("API_PUBLIC_ORIGIN") ?? "http://localhost:3000"
+      ).replace(/\/+$/, "");
+
+      return `${apiOrigin}${trimmed}`;
+    }
+
+    return trimmed;
   }
 
   private async getOwnedUserSong(songId: string, userId: string): Promise<Song | null> {
