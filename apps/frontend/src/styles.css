@@ -7349,4 +7349,5 @@ article.dashboard-page .song-tile,
   caret-color: auto !important;
   user-select: text !important;
   -webkit-user-select: text !important;
+  cursor: text !important;
 }
