@@ -1,27 +1,19 @@
 
 /* WaveStack canonical stylesheet: unused selectors and superseded declarations removed. */
 @font-face {
-  font-family: "SaolDisplay";
-  src:
-    url("../../../../outhere-music-css/assets/5f0b005b335b.woff2") format("woff2"),
-    url("../../../../outhere-music-css/assets/903f8656a830.woff") format("woff");
+  font-family: "WaveStackMix";
+  src: url("https://encore.scdn.co/fonts/SpotifyMixUI-Regular-76c92fb1a35c462f73429fa8865163eb.woff2")
+    format("woff2");
   font-display: swap;
+  font-style: normal;
   font-weight: 400;
 }
 @font-face {
-  font-family: "Everett";
-  src:
-    url("../../../../outhere-music-css/assets/32636bd66a2e.woff2") format("woff2"),
-    url("../../../../outhere-music-css/assets/dc76807e1f32.woff") format("woff");
+  font-family: "WaveStackMix";
+  src: url("https://encore.scdn.co/fonts/SpotifyMixUI-Bold-09c45a3a0ce9d2971e62cb26e97760fb.woff2")
+    format("woff2");
   font-display: swap;
-  font-weight: 400;
-}
-@font-face {
-  font-family: "Everett";
-  src:
-    url("../../../../outhere-music-css/assets/a9db95e92ad4.woff2") format("woff2"),
-    url("../../../../outhere-music-css/assets/dc826c438347.woff") format("woff");
-  font-display: swap;
+  font-style: normal;
   font-weight: 700;
 }
 :root {
@@ -75,8 +67,9 @@
   --theme-animate: 200ms;
   --now-playing-disc-angle: 0deg;
   --radius-pill: 999px;
-  --font-display: "SaolDisplay", Didot, "Bodoni 72", "Bodoni MT", Georgia, serif;
-  --font-sans: "Everett", Arial, Helvetica, sans-serif;
+  --font-site: "WaveStackMix", Arial, Helvetica, sans-serif;
+  --font-display: var(--font-site);
+  --font-sans: var(--font-site);
   color: var(--color-ink);
   color-scheme: light;
   font-family: var(--font-sans);
@@ -2295,7 +2288,7 @@ html[data-theme="dark"] .queue-drawer__item:hover:not([data-ws-pointer-activated
 }
 .taste-terminal {
   min-height: 8rem;
-  font-family: "Courier New", monospace;
+  font-family: var(--font-site);
 }
 .taste-terminal__cursor {
   display: inline-block;
@@ -2387,7 +2380,7 @@ html[data-theme="dark"] .queue-drawer__item:hover:not([data-ws-pointer-activated
 .stats-receipt__paper {
   width: min(100%, 34rem);
   background: var(--color-paper);
-  font-family: "Courier New", monospace;
+  font-family: var(--font-site);
 }
 .stats-receipt--brat .stats-receipt__paper {
   background: var(--color-brat);
@@ -7144,4 +7137,3 @@ html[data-theme="dark"] .route-sticker {
 :where(input, select, textarea):focus-visible {
   border-color: var(--frontier-border-strong) !important;
 }
-
