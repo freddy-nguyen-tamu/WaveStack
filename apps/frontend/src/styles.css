@@ -7342,26 +7342,16 @@ article.dashboard-page .song-tile,
   cursor: text !important;
 }
 
-/* Dashboard windowing. The profiler proved that native content-visibility on
-   individual grid cards caused large geometry corrections while the wall grew:
-   document height changed by thousands of pixels as skipped cards were revealed.
-   Keep only a small row window mounted instead. The two lightweight spacers
-   preserve the full scroll range while the real card DOM remains bounded. */
-article.dashboard-page .dashboard-song-masonry--virtual {
+/* Dashboard scroll-performance pass. Keep every recommendation card mounted so
+   normal scrolling never runs React work or swaps rows at viewport boundaries.
+   Per-card containment still limits layout/paint invalidation without lying about
+   intrinsic height, so the grid keeps its exact geometry while the compositor
+   moves the already-rendered page. */
+article.dashboard-page .dashboard-song-masonry {
   overflow-anchor: none;
-}
-article.dashboard-page .dashboard-virtual-spacer {
-  grid-column: 1 / -1;
-  width: 100%;
-  min-width: 0;
-  pointer-events: none;
-  contain: strict;
 }
 article.dashboard-page .dashboard-song-tile {
   content-visibility: visible !important;
   contain: layout style paint;
   contain-intrinsic-size: none !important;
-  height: var(--dashboard-virtual-row-height);
-  max-height: var(--dashboard-virtual-row-height);
-  overflow: clip;
 }

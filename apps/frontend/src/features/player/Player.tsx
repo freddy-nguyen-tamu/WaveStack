@@ -871,6 +871,15 @@ export function Player({
         return true;
       }
 
+      // The mini-player title is intentionally pointer-only. It has a separate
+      // keyboard-accessible artwork button for opening details, so title focus
+      // must never be allowed to steal global playback shortcuts. Defensively
+      // clear it here as well in case a browser restores stale focus.
+      if (target.closest('.mini-player__meta-button')) {
+        target.blur();
+        return false;
+      }
+
       // A control marked by the pointer-focus policy is not deliberate keyboard
       // focus. Chromium can restore a clicked song/title after a pointer-opened
       // modal disappears, sometimes a task or frame after Escape. Treat that
@@ -1379,9 +1388,12 @@ export function Player({
                 <button
                   type="button"
                   className="mini-player__meta-button"
-                  // Mouse activation must not give the title native focus before
-                  // the modal replaces its scroll/focus layer. Click still fires;
-                  // Tab/Enter activation remains keyboard accessible.
+                  tabIndex={-1}
+                  // The title is a pointer convenience only; the adjacent artwork
+                  // button remains the keyboard-accessible details control. Never
+                  // let browser restoration or programmatic focus park here because
+                  // a focused button consumes Space/arrows before playback shortcuts.
+                  onFocus={(event) => event.currentTarget.blur()}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={(event) => {
                     event.preventDefault();

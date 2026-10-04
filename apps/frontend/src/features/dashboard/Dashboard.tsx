@@ -1,13 +1,5 @@
 import { Shuffle } from "lucide-react";
-import {
-  memo,
-  useCallback,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties
-} from "react";
+import { memo, useCallback, useMemo, useRef } from "react";
 import type { OpenSongDetailsHandler, RecommendResult, Song } from "../../App";
 import type { ClientPlaylist } from "../../App";
 import { formatSeconds, getSongCardSize } from "../../song-format";
@@ -38,7 +30,6 @@ type DashboardProps = {
 type DashboardSongTileProps = {
   item: RecommendResult;
   index: number;
-  rowHeight: number;
   playlists: ClientPlaylist[];
   isFavorite: boolean;
   onPlay: (song: Song) => void;
@@ -48,35 +39,9 @@ type DashboardSongTileProps = {
   onAddToPlaylist: (playlistId: string, song: Song) => void;
 };
 
-type DashboardWindow = {
-  columns: number;
-  rowHeight: number;
-  startRow: number;
-  endRow: number;
-};
-
-const DASHBOARD_OVERSCAN_ROWS = 2;
-const DASHBOARD_DEFAULT_ROW_HEIGHT = 420;
-
-function dashboardColumnCount(viewportWidth: number): number {
-  if (viewportWidth <= 560) return 1;
-  if (viewportWidth <= 760) return 2;
-  if (viewportWidth <= 980) return 3;
-  if (viewportWidth <= 1180) return 4;
-  return 5;
-}
-
-function dashboardRowHeight(gridWidth: number, columns: number): number {
-  const safeWidth = Math.max(1, gridWidth);
-  const cardWidth = safeWidth / Math.max(1, columns);
-  const chromeHeight = columns >= 4 ? 190 : columns === 3 ? 200 : columns === 2 ? 215 : 235;
-  return Math.max(300, Math.ceil(cardWidth + chromeHeight));
-}
-
 const DashboardSongTile = memo(function DashboardSongTile({
   item,
   index,
-  rowHeight,
   playlists,
   isFavorite,
   onPlay,
@@ -92,7 +57,6 @@ const DashboardSongTile = memo(function DashboardSongTile({
     <article
       className={`song-tile dashboard-song-tile song-tile--${size}`}
       data-dashboard-tile={song.id}
-      style={{ height: rowHeight }}
     >
       <button
         className="song-tile__open"
@@ -164,108 +128,27 @@ export function Dashboard({
   );
 
   const favoriteIdSet = useMemo(() => new Set(favoriteIds), [favoriteIds]);
-  const masonryRef = useRef<HTMLElement | null>(null);
-  const frameRef = useRef<number | null>(null);
-  const [windowState, setWindowState] = useState<DashboardWindow>({
-    columns: typeof window === "undefined" ? 5 : dashboardColumnCount(window.innerWidth),
-    rowHeight: DASHBOARD_DEFAULT_ROW_HEIGHT,
-    startRow: 0,
-    endRow: 6
-  });
-
-  useLayoutEffect(() => {
-    const masonry = masonryRef.current;
-
-    if (!masonry) {
-      return;
-    }
-
-    const updateWindow = () => {
-      frameRef.current = null;
-
-      const columns = dashboardColumnCount(window.innerWidth);
-      const rowHeight = dashboardRowHeight(masonry.clientWidth, columns);
-      const totalRows = Math.ceil(recommendations.length / columns);
-      const gridTop = masonry.getBoundingClientRect().top + window.scrollY;
-      const firstVisibleRow = Math.floor((window.scrollY - gridTop) / rowHeight);
-      const lastVisibleRow = Math.ceil((window.scrollY + window.innerHeight - gridTop) / rowHeight);
-      const startRow = Math.max(0, Math.min(totalRows, firstVisibleRow - DASHBOARD_OVERSCAN_ROWS));
-      const endRow = Math.max(
-        startRow,
-        Math.min(totalRows, lastVisibleRow + DASHBOARD_OVERSCAN_ROWS)
-      );
-
-      setWindowState((current) => {
-        if (
-          current.columns === columns &&
-          current.rowHeight === rowHeight &&
-          current.startRow === startRow &&
-          current.endRow === endRow
-        ) {
-          return current;
-        }
-
-        return { columns, rowHeight, startRow, endRow };
-      });
-    };
-
-    const scheduleWindowUpdate = () => {
-      if (frameRef.current !== null) {
-        return;
-      }
-
-      frameRef.current = window.requestAnimationFrame(updateWindow);
-    };
-
-    updateWindow();
-    window.addEventListener("scroll", scheduleWindowUpdate, { passive: true });
-    window.addEventListener("resize", scheduleWindowUpdate, { passive: true });
-
-    const resizeObserver = typeof ResizeObserver === "undefined"
-      ? null
-      : new ResizeObserver(scheduleWindowUpdate);
-    resizeObserver?.observe(masonry);
-
-    return () => {
-      window.removeEventListener("scroll", scheduleWindowUpdate);
-      window.removeEventListener("resize", scheduleWindowUpdate);
-      resizeObserver?.disconnect();
-
-      if (frameRef.current !== null) {
-        window.cancelAnimationFrame(frameRef.current);
-        frameRef.current = null;
-      }
-    };
-  }, [recommendations.length]);
-
-  const totalRows = Math.ceil(recommendations.length / windowState.columns);
-  const firstIndex = Math.min(recommendations.length, windowState.startRow * windowState.columns);
-  const lastIndex = Math.min(recommendations.length, windowState.endRow * windowState.columns);
-  const topSpacerHeight = windowState.startRow * windowState.rowHeight;
-  const bottomSpacerHeight = Math.max(0, (totalRows - windowState.endRow) * windowState.rowHeight);
-
-  const visibleTiles = useMemo(() => recommendations.slice(firstIndex, lastIndex).map((item, localIndex) => {
-    const index = firstIndex + localIndex;
-    return (
-      <DashboardSongTile
-        key={item.song.id}
-        item={item}
-        index={index}
-        rowHeight={windowState.rowHeight}
-        playlists={playlists}
-        isFavorite={favoriteIdSet.has(item.song.id)}
-        onPlay={stableOnPlay}
-        onOpenDetails={stableOnOpenDetails}
-        onQueue={stableOnQueue}
-        onToggleFavorite={stableOnToggleFavorite}
-        onAddToPlaylist={stableOnAddToPlaylist}
-      />
-    );
-  }), [
+  // Keep the recommendation wall static while scrolling. The previous manual
+  // windowing listened to every window scroll, forced layout reads, and replaced
+  // whole rows whenever the visible range crossed a row boundary. That made
+  // already-loaded content stutter because scrolling itself caused React work.
+  // Memoized tiles plus CSS containment keep the DOM stable and let the browser
+  // perform normal compositor-driven scrolling.
+  const recommendationTiles = useMemo(() => recommendations.map((item, index) => (
+    <DashboardSongTile
+      key={item.song.id}
+      item={item}
+      index={index}
+      playlists={playlists}
+      isFavorite={favoriteIdSet.has(item.song.id)}
+      onPlay={stableOnPlay}
+      onOpenDetails={stableOnOpenDetails}
+      onQueue={stableOnQueue}
+      onToggleFavorite={stableOnToggleFavorite}
+      onAddToPlaylist={stableOnAddToPlaylist}
+    />
+  )), [
     recommendations,
-    firstIndex,
-    lastIndex,
-    windowState.rowHeight,
     playlists,
     favoriteIdSet,
     stableOnPlay,
@@ -284,10 +167,6 @@ export function Dashboard({
     },
     rootMargin: "160px"
   });
-
-  const masonryStyle = {
-    "--dashboard-virtual-row-height": `${windowState.rowHeight}px`
-  } as CSSProperties;
 
   return (
     <article className="dashboard-page">
@@ -311,28 +190,10 @@ export function Dashboard({
 
       {recommendations.length ? (
         <section
-          ref={masonryRef}
-          className="song-masonry dashboard-song-masonry--virtual"
+          className="song-masonry dashboard-song-masonry"
           aria-label="Suggested songs"
-          style={masonryStyle}
         >
-          {topSpacerHeight > 0 ? (
-            <div
-              className="dashboard-virtual-spacer"
-              style={{ height: topSpacerHeight }}
-              aria-hidden="true"
-            />
-          ) : null}
-
-          {visibleTiles}
-
-          {bottomSpacerHeight > 0 ? (
-            <div
-              className="dashboard-virtual-spacer"
-              style={{ height: bottomSpacerHeight }}
-              aria-hidden="true"
-            />
-          ) : null}
+          {recommendationTiles}
         </section>
       ) : (
         <p>
