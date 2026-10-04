@@ -1,5 +1,6 @@
 
 
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ApolloQueryResult, useApolloClient, useMutation, useQuery } from "@apollo/client";
 import { Activity, Clock, Heart, ListMusic, Music2, RefreshCw, TrendingUp, Upload } from "lucide-react";
@@ -295,6 +296,36 @@ function uniqueSongsById(songs: Song[]): Song[] {
   );
 }
 
+function pickGuestRandomSongs(songs: Song[], seed: number, limit: number): Song[] {
+  const pool = songs.filter((song) => song.id !== PLACEHOLDER_SONG_ID).slice();
+  let state = (seed >>> 0) || 0x6d2b79f5;
+  const count = Math.min(Math.max(0, limit), pool.length);
+
+  function nextRandom() {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 0x100000000;
+  }
+
+  for (let index = 0; index < count; index += 1) {
+    const swapIndex = index + Math.floor(nextRandom() * (pool.length - index));
+    const current = pool[index];
+    pool[index] = pool[swapIndex];
+    pool[swapIndex] = current;
+  }
+
+  return pool.slice(0, count);
+}
+
+function authApiOrigin(): string {
+  const graphqlUrl = import.meta.env.VITE_GRAPHQL_URL ?? "http://localhost:3000/graphql";
+
+  try {
+    return new URL(graphqlUrl).origin;
+  } catch {
+    return "http://localhost:3000";
+  }
+}
+
 // Avoid publishing a brand-new 10,000-item library when a newly played track
 // contains the same catalog metadata as its cached copy.
 function sameCachedSong(a: Song, b: Song): boolean {
@@ -389,6 +420,90 @@ const habitPeriodLabels: Record<string, string> = {
 };
 
 const habitPeriodOrder = ["DAY", "WEEK", "MONTH", "YEAR"];
+
+type GuestPersonalizationNoticeProps = {
+  onLogin: () => void;
+  loginBusy: boolean;
+  className?: string;
+  message?: string;
+};
+
+function GuestPersonalizationNotice({
+  onLogin,
+  loginBusy,
+  className = "",
+  message = "Random picks for now. Signing in will make this more meaningful."
+}: GuestPersonalizationNoticeProps) {
+  return (
+    <div className={`guest-personalization-notice ${className}`.trim()}>
+      <p>{message}</p>
+      <button type="button" onClick={onLogin} disabled={loginBusy}>
+        {loginBusy ? "Opening login..." : "Log in"}
+      </button>
+    </div>
+  );
+}
+
+type GuestListeningHabitRailProps = {
+  songs: Song[];
+  onOpenDetails: OpenSongDetailsHandler;
+  onLogin: () => void;
+  loginBusy: boolean;
+};
+
+function GuestListeningHabitRail({
+  songs,
+  onOpenDetails,
+  onLogin,
+  loginBusy
+}: GuestListeningHabitRailProps) {
+  const [seed] = useState(() => Math.floor(Math.random() * 0xffffffff));
+  const randomSongs = useMemo(() => pickGuestRandomSongs(songs, seed, 4), [songs, seed]);
+
+  return (
+    <aside className="listening-rail listening-rail--guest" aria-label="Listening habit guest preview">
+      <div className="listening-rail__header">
+        <p className="eyebrow">Listening habits</p>
+        <h2>Heavy rotation</h2>
+      </div>
+
+      <GuestPersonalizationNotice
+        className="guest-personalization-notice--rail"
+        onLogin={onLogin}
+        loginBusy={loginBusy}
+      />
+
+      <section className="listening-rail__period" aria-label="Random guest picks">
+        <h3>Random picks</h3>
+        {randomSongs.length ? (
+          <div className="listening-rail__items">
+            {randomSongs.map((song) => (
+              <button
+                key={`guest-habit:${song.id}`}
+                type="button"
+                className="listening-rail__item"
+                onClick={() => onOpenDetails(song)}
+              >
+                <SongArtwork
+                  song={song}
+                  wrapClassName="listening-rail__art"
+                  fallbackClassName="listening-rail__art-fallback"
+                  disableNowPlayingStyle
+                />
+                <span className="listening-rail__copy">
+                  <strong>{song.artistName || song.title}</strong>
+                  <span>Random pick</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="listening-rail__guest-empty">Random picks will appear when the music library is available.</p>
+        )}
+      </section>
+    </aside>
+  );
+}
 
 type ListeningHabitRailProps = {
   habitSummaries: Record<string, HabitSummaryEntry[]>;
@@ -767,6 +882,8 @@ export function App() {
   const [recordListen] = useMutation(RECORD_LISTEN_MUTATION);
   const lastListenRef = useRef("");
   const hasToken = Boolean(authToken);
+  const [guestDashboardSeed, setGuestDashboardSeed] = useState(() => Math.floor(Math.random() * 0xffffffff));
+  const [guestLoginStarting, setGuestLoginStarting] = useState(false);
 
   const [shuffleEnabled, setShuffleEnabled] = useState(() =>
     window.localStorage.getItem("wavestack:shuffle-enabled") === "true"
@@ -958,6 +1075,15 @@ export function App() {
     playlists,
     activeSong
   ]);
+
+  const guestDashboardRecommendations = useMemo<RecommendResult[]>(() => {
+    if (hasToken) {
+      return [];
+    }
+
+    return pickGuestRandomSongs(allKnownSongs, guestDashboardSeed, RECOMMENDATION_PAGE_SIZE)
+      .map((song) => ({ song, reason: "" }));
+  }, [allKnownSongs, guestDashboardSeed, hasToken]);
 
   const startupAllSongs = useMemo<Song[]>(() => {
     const backendAllSongs = librarySongs.length ? librarySongs : cachedSongs;
@@ -1155,6 +1281,34 @@ export function App() {
       setNotice("");
       noticeTimerRef.current = null;
     }, 2800);
+  }
+
+  async function startGuestLogin() {
+    if (hasToken || guestLoginStarting) {
+      return;
+    }
+
+    setGuestLoginStarting(true);
+
+    try {
+      const response = await fetch(`${authApiOrigin()}/auth/google/url`);
+
+      if (!response.ok) {
+        throw new Error(`Google login URL request failed with ${response.status}`);
+      }
+
+      const data = await response.json() as { url?: string };
+
+      if (!data.url) {
+        throw new Error("The API did not return a Google login URL.");
+      }
+
+      window.location.href = data.url;
+    } catch (error) {
+      console.error("Could not start Google login", error);
+      setGuestLoginStarting(false);
+      showNotice("Could not start login. Please try again.");
+    }
   }
 
   useEffect(() => {
@@ -2345,6 +2499,12 @@ export function App() {
   }
 
   async function shuffleRecommendations() {
+    if (!hasToken) {
+      setGuestDashboardSeed((seed) => (seed + 0x9e3779b9) >>> 0);
+      showNotice("Loaded new random picks. Log in to make them more meaningful.");
+      return;
+    }
+
     if (shufflingRecommendations) {
       return;
     }
@@ -2636,9 +2796,16 @@ export function App() {
           path="/dashboard"
           element={
             <section aria-label="Dashboard">
+              {!hasToken ? (
+                <GuestPersonalizationNotice
+                  className="guest-personalization-notice--dashboard"
+                  onLogin={() => { void startGuestLogin(); }}
+                  loginBusy={guestLoginStarting}
+                />
+              ) : null}
               <Dashboard
-                loading={loading}
-                recommendations={visibleRecommendations}
+                loading={hasToken ? loading : loading && guestDashboardRecommendations.length === 0}
+                recommendations={hasToken ? visibleRecommendations : guestDashboardRecommendations}
                 playlists={playlists}
                 favoriteIds={favoriteIds}
                 onPlay={(song: Song) =>
@@ -2752,22 +2919,41 @@ export function App() {
           path="/stats"
           element={
             <section aria-label="Stats">
-              <StatsPage
-                songs={allKnownSongs}
-                playlists={playlists}
-                favoriteIds={favoriteIds}
-                onPlay={(song: Song, context?: PlaybackContext) =>
-                  playSongFromContext(song, context ?? {
-                    id: "stats",
-                    label: "Stats",
-                    source: "manual",
-                    songs: allKnownSongs
-                  })
-                }
-                onQueue={queueSong}
-                onToggleFavorite={toggleFavorite}
-                onAddToPlaylist={addToPlaylist}
-              />
+              {!hasToken ? (
+                <article className="stats-page stats-page--guest">
+                  <div className="guest-stats-state">
+                    <p className="eyebrow">Stats</p>
+                    <h2>Log in to make it more meaningful</h2>
+                    <p>
+                      Your Top Artists, Top Genres, recent plays, and listening comparisons are built from your own history.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => { void startGuestLogin(); }}
+                      disabled={guestLoginStarting}
+                    >
+                      {guestLoginStarting ? "Opening login..." : "Log in"}
+                    </button>
+                  </div>
+                </article>
+              ) : (
+                <StatsPage
+                  songs={allKnownSongs}
+                  playlists={playlists}
+                  favoriteIds={favoriteIds}
+                  onPlay={(song: Song, context?: PlaybackContext) =>
+                    playSongFromContext(song, context ?? {
+                      id: "stats",
+                      label: "Stats",
+                      source: "manual",
+                      songs: allKnownSongs
+                    })
+                  }
+                  onQueue={queueSong}
+                  onToggleFavorite={toggleFavorite}
+                  onAddToPlaylist={addToPlaylist}
+                />
+              )}
             </section>
           }
         />
@@ -2806,11 +2992,20 @@ export function App() {
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
       {showListeningRail ? (
-        <ListeningHabitRail
-          habitSummaries={habitSummaries}
-          songs={allKnownSongs}
-          onOpenDetails={openDetails}
-        />
+        hasToken ? (
+          <ListeningHabitRail
+            habitSummaries={habitSummaries}
+            songs={allKnownSongs}
+            onOpenDetails={openDetails}
+          />
+        ) : (
+          <GuestListeningHabitRail
+            songs={allKnownSongs}
+            onOpenDetails={openDetails}
+            onLogin={() => { void startGuestLogin(); }}
+            loginBusy={guestLoginStarting}
+          />
+        )
       ) : null}
       </div>
 
@@ -2858,3 +3053,5 @@ export function App() {
     </>
   );
 }
+
+
