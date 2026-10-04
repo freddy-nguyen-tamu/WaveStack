@@ -871,9 +871,19 @@ export function Player({
         return true;
       }
 
-      // Do not hijack Space/arrow behavior from a keyboard-focused control.
-      // Pointer-opened song modals focus their non-interactive backdrop, so the
-      // global playback shortcuts still work there exactly as intended.
+      // A control marked by the pointer-focus policy is not deliberate keyboard
+      // focus. Chromium can restore a clicked song/title after a pointer-opened
+      // modal disappears, sometimes a task or frame after Escape. Treat that
+      // stale restoration as background focus so Z+Left/X+Right/Space keep
+      // working instead of being swallowed by the old opener.
+      if (target.closest('[data-ws-pointer-activated]')) {
+        target.blur();
+        return false;
+      }
+
+      // Do not hijack Space/arrow behavior from a genuinely keyboard-focused
+      // control. Pointer-opened song modals focus their non-interactive backdrop,
+      // so the global playback shortcuts still work there exactly as intended.
       return Boolean(target.closest(
         'button, a[href], summary, [role="button"], [role="link"], [role="tab"], ' +
         '[role="option"], [role="switch"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]'

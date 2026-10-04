@@ -1010,23 +1010,23 @@ article li small,
 .song-tile__open:focus-visible .song-tile__reason {
   color: var(--color-red);
 }
-.song-tile__open:has(.song-artwork--now-playing) {
+.song-tile:not(.dashboard-song-tile) .song-tile__open:has(.song-artwork--now-playing) {
   background: transparent;
   color: var(--color-paper);
 }
-.song-tile__open:has(.song-artwork--now-playing)::before {
+.song-tile:not(.dashboard-song-tile) .song-tile__open:has(.song-artwork--now-playing)::before {
   opacity: 1;
 }
-.song-tile__open:has(.song-artwork--now-playing) .song-tile__overlay strong,
-.song-tile__open:has(.song-artwork--now-playing) .song-tile__overlay small,
-.song-tile__open:has(.song-artwork--now-playing) .song-tile__duration {
+.song-tile:not(.dashboard-song-tile) .song-tile__open:has(.song-artwork--now-playing) .song-tile__overlay strong,
+.song-tile:not(.dashboard-song-tile) .song-tile__open:has(.song-artwork--now-playing) .song-tile__overlay small,
+.song-tile:not(.dashboard-song-tile) .song-tile__open:has(.song-artwork--now-playing) .song-tile__duration {
   color: var(--color-paper);
 }
-.song-tile__open:has(.song-artwork--now-playing) .song-tile__reason {
+.song-tile:not(.dashboard-song-tile) .song-tile__open:has(.song-artwork--now-playing) .song-tile__reason {
   color: var(--color-red);
 }
 .song-tile:hover:not([data-ws-pointer-activated]) .song-tile__media img,
-.song-tile:has(.song-artwork--now-playing) .song-tile__media img {
+.song-tile:not(.dashboard-song-tile):has(.song-artwork--now-playing) .song-tile__media img {
   filter: grayscale(1) contrast(1.12);
 }
 article > div:has(select),
@@ -5210,26 +5210,20 @@ html[data-theme="dark"] .player-card .player-actions__button--favorite[aria-pres
   }
 }
 html[data-theme="dark"] article.dashboard-page .song-tile:hover:not([data-ws-pointer-activated]),
-html[data-theme="dark"] article.dashboard-page .song-tile:focus-within,
-html[data-theme="dark"] article.dashboard-page .song-tile:has(.song-artwork--now-playing) {
+html[data-theme="dark"] article.dashboard-page .song-tile:focus-within {
   background: var(--color-box-hover-bg);
   color: var(--color-box-hover-fg);
 }
 html[data-theme="dark"] article.dashboard-page .song-tile:hover:not([data-ws-pointer-activated]) .song-tile__open,
 html[data-theme="dark"] article.dashboard-page .song-tile:focus-within .song-tile__open,
-html[data-theme="dark"] article.dashboard-page .song-tile:has(.song-artwork--now-playing) .song-tile__open,
 html[data-theme="dark"] article.dashboard-page .song-tile:hover:not([data-ws-pointer-activated]) .song-tile__overlay,
 html[data-theme="dark"] article.dashboard-page .song-tile:focus-within .song-tile__overlay,
-html[data-theme="dark"] article.dashboard-page .song-tile:has(.song-artwork--now-playing) .song-tile__overlay,
 html[data-theme="dark"] article.dashboard-page .song-tile:hover:not([data-ws-pointer-activated]) .song-tile__overlay strong,
 html[data-theme="dark"] article.dashboard-page .song-tile:hover:not([data-ws-pointer-activated]) .song-tile__overlay small,
 html[data-theme="dark"] article.dashboard-page .song-tile:hover:not([data-ws-pointer-activated]) .song-tile__duration,
 html[data-theme="dark"] article.dashboard-page .song-tile:focus-within .song-tile__overlay strong,
 html[data-theme="dark"] article.dashboard-page .song-tile:focus-within .song-tile__overlay small,
-html[data-theme="dark"] article.dashboard-page .song-tile:focus-within .song-tile__duration,
-html[data-theme="dark"] article.dashboard-page .song-tile:has(.song-artwork--now-playing) .song-tile__overlay strong,
-html[data-theme="dark"] article.dashboard-page .song-tile:has(.song-artwork--now-playing) .song-tile__overlay small,
-html[data-theme="dark"] article.dashboard-page .song-tile:has(.song-artwork--now-playing) .song-tile__duration {
+html[data-theme="dark"] article.dashboard-page .song-tile:focus-within .song-tile__duration {
   color: var(--color-box-hover-fg);
 }
 .profile-page__content {
@@ -7348,29 +7342,37 @@ article.dashboard-page .song-tile,
   cursor: text !important;
 }
 
-
-/* Dashboard long-session virtualization. Recommendation pages are intentionally
-   retained, but off-screen cards must not keep full layout/paint trees active.
-   `auto <fallback>` remembers each card's real block size after first reveal,
-   avoiding the old 96px placeholder geometry jumps while still letting Chrome
-   skip deep off-screen tile rendering. */
-article.dashboard-page .song-tile {
-  content-visibility: auto !important;
+/* Dashboard long-session virtualization. The recommendation data can keep
+   growing, but only near-viewport cards retain their expensive image/action
+   subtrees. Off-screen cards are lightweight geometry shells with their last
+   measured height, so DOM/image/GPU cost no longer grows with time spent on
+   the route. */
+article.dashboard-page .dashboard-song-tile {
+  content-visibility: visible !important;
   contain: layout style paint;
-  contain-intrinsic-block-size: auto 390px;
+}
+article.dashboard-page .dashboard-song-tile.song-tile--virtualized {
+  min-height: clamp(15rem, 23vw, 26rem);
+  pointer-events: none;
+}
+.dashboard-song-tile__virtual-placeholder {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  aspect-ratio: 1 / 1;
 }
 @media (max-width: 1180px) {
-  article.dashboard-page .song-tile {
-    contain-intrinsic-block-size: auto 410px;
+  article.dashboard-page .dashboard-song-tile.song-tile--virtualized {
+    min-height: clamp(16rem, 29vw, 29rem);
   }
 }
 @media (max-width: 760px) {
-  article.dashboard-page .song-tile {
-    contain-intrinsic-block-size: auto 480px;
+  article.dashboard-page .dashboard-song-tile.song-tile--virtualized {
+    min-height: clamp(18rem, 52vw, 34rem);
   }
 }
 @media (max-width: 560px) {
-  article.dashboard-page .song-tile {
-    contain-intrinsic-block-size: auto 650px;
+  article.dashboard-page .dashboard-song-tile.song-tile--virtualized {
+    min-height: clamp(22rem, 112vw, 44rem);
   }
 }

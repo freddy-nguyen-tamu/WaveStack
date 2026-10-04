@@ -7,6 +7,10 @@ let pointerPressInProgress = false;
 let lastPointerX = 0;
 let lastPointerY = 0;
 const activated = new Set<HTMLElement>();
+let lastPointerActivatedControl: HTMLElement | null = null;
+let suppressedPointerRestore: HTMLElement | null = null;
+let suppressPointerRestoreUntil = 0;
+let suppressAnyPostModalActionFocusUntil = 0;
 
 export function isPointerInput(): boolean {
   return lastInputWasPointer;
@@ -47,6 +51,40 @@ function clearActivated() {
 function markActivated(element: HTMLElement) {
   element.setAttribute('data-ws-pointer-activated', '');
   activated.add(element);
+  lastPointerActivatedControl = element;
+}
+
+function isSuppressedPointerRestore(element: HTMLElement): boolean {
+  if (!suppressedPointerRestore || performance.now() > suppressPointerRestoreUntil) {
+    suppressedPointerRestore = null;
+    return false;
+  }
+
+  return element === suppressedPointerRestore || suppressedPointerRestore.contains(element);
+}
+
+function blurSuppressedPointerRestore() {
+  if (modalIsOpen()) return;
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || textEditor(active)) return;
+  if (isSuppressedPointerRestore(active)) active.blur();
+}
+
+function guardPointerModalCloseFocus() {
+  if (!lastPointerActivatedControl) return;
+  suppressedPointerRestore = lastPointerActivatedControl;
+  suppressPointerRestoreUntil = performance.now() + 900;
+  suppressAnyPostModalActionFocusUntil = suppressPointerRestoreUntil;
+
+  // Chromium may restore the pointer opener synchronously, in a microtask, on
+  // the next animation frame, or after the portal has fully detached. Cover all
+  // of those phases without stealing deliberate keyboard focus later.
+  queueMicrotask(blurSuppressedPointerRestore);
+  window.requestAnimationFrame(() => {
+    blurSuppressedPointerRestore();
+    window.setTimeout(blurSuppressedPointerRestore, 0);
+    window.setTimeout(blurSuppressedPointerRestore, 80);
+  });
 }
 
 function releasePointerFocusedAction() {
@@ -68,6 +106,13 @@ export function installPointerFocusPolicy(): () => void {
     lastInputWasPointer = true;
     pointerPressInProgress = true;
     const target = event.target;
+    if (target instanceof Element && suppressedPointerRestore &&
+        (target === suppressedPointerRestore || suppressedPointerRestore.contains(target))) {
+      // A deliberate new pointer press on the old opener is allowed to own focus
+      // again; only automatic post-modal restoration is suppressed.
+      suppressedPointerRestore = null;
+      suppressPointerRestoreUntil = 0;
+    }
     // Clicking a backdrop at the same pointer position can dismiss it without
     // generating pointermove. Keep the underlying song's hover suppression.
     if (!(target instanceof Element && target.closest(
@@ -111,7 +156,10 @@ export function installPointerFocusPolicy(): () => void {
     if (['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) return;
     // Escape commonly closes a dialog that was opened by clicking a song.
     // It must not turn the ensuing focus restoration into a keyboard opener.
-    if (event.key === 'Escape' && lastInputWasPointer) return;
+    if (event.key === 'Escape' && lastInputWasPointer) {
+      guardPointerModalCloseFocus();
+      return;
+    }
 
     lastInputWasPointer = false;
     pointerPressInProgress = false;
@@ -122,7 +170,12 @@ export function installPointerFocusPolicy(): () => void {
     // focus to that opener a task or frame after the modal has disappeared.
     // Keeping the marker until Tab or actual pointer movement lets focusin
     // reject that late restoration instead of letting it steal shortcuts.
-    if (event.key === 'Tab') clearActivated();
+    if (event.key === 'Tab') {
+      clearActivated();
+      suppressedPointerRestore = null;
+      suppressPointerRestoreUntil = 0;
+      suppressAnyPostModalActionFocusUntil = 0;
+    }
   };
 
   const onPointerUp = () => {
@@ -141,16 +194,22 @@ export function installPointerFocusPolicy(): () => void {
     const focused = event.target;
     if (!(focused instanceof HTMLElement)) return;
 
+    const postModalAutomaticActionFocus =
+      performance.now() <= suppressAnyPostModalActionFocusUntil &&
+      !modalIsOpen() &&
+      !textEditor(focused) &&
+      (focused.matches(actionControlSelector) || Boolean(focused.closest(actionControlSelector)));
+
     const stalePointerRestoration =
+      postModalAutomaticActionFocus ||
+      isSuppressedPointerRestore(focused) ||
       focused.hasAttribute('data-ws-pointer-activated') ||
       Boolean(focused.closest('[data-ws-pointer-activated]'));
 
     // A pointer-opened modal/drawer can be removed by Escape and Chromium may
     // restore its opener later, even after a playback shortcut has already
-    // changed the global input modality to keyboard. Reject that restoration
-    // based on the opener marker itself rather than the current modality. This
-    // covers song titles, artwork buttons, mini-player links and future pointer
-    // openers without hard-coding any one component.
+    // changed the global input modality to keyboard. Reject both the explicit
+    // post-close suppression target and any still-marked pointer opener.
     if (stalePointerRestoration && !modalIsOpen() && !textEditor(focused)) {
       queueMicrotask(() => {
         if (document.activeElement === focused) focused.blur();
