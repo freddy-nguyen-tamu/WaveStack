@@ -1,6 +1,5 @@
-
 import { Shuffle } from "lucide-react";
-import { useMemo } from "react";
+import { memo, useCallback, useMemo, useRef } from "react";
 import type { OpenSongDetailsHandler, RecommendResult, Song } from "../../App";
 import type { ClientPlaylist } from "../../App";
 import { formatSeconds, getSongCardSize } from "../../song-format";
@@ -28,6 +27,71 @@ type DashboardProps = {
   shufflingRecommendations?: boolean;
 };
 
+type DashboardSongTileProps = {
+  item: RecommendResult;
+  index: number;
+  playlists: ClientPlaylist[];
+  isFavorite: boolean;
+  onPlay: (song: Song) => void;
+  onOpenDetails: OpenSongDetailsHandler;
+  onQueue: (song: Song) => void;
+  onToggleFavorite: (song: Song) => void;
+  onAddToPlaylist: (playlistId: string, song: Song) => void;
+};
+
+const DashboardSongTile = memo(function DashboardSongTile({
+  item,
+  index,
+  playlists,
+  isFavorite,
+  onPlay,
+  onOpenDetails,
+  onQueue,
+  onToggleFavorite,
+  onAddToPlaylist
+}: DashboardSongTileProps) {
+  const song = item.song;
+  const size = getSongCardSize(song, index);
+
+  return (
+    <article className={`song-tile song-tile--${size}`}>
+      <button
+        className="song-tile__open"
+        type="button"
+        onClick={() => onOpenDetails(song)}
+        aria-label={`Open metadata for ${song.artistName} - ${song.title}`}
+      >
+        <SongArtwork
+          song={song}
+          wrapClassName="song-tile__media"
+          fallbackClassName="song-tile__fallback"
+          disableNowPlayingStyle
+        />
+
+        <span className="song-tile__overlay">
+          <span>
+            <strong>{song.title}</strong>
+            <small>{song.artistName}</small>
+            {item.reason ? <small className="song-tile__reason">{item.reason}</small> : null}
+          </span>
+          <span className="song-tile__duration">{formatSeconds(song.durationSeconds)}</span>
+        </span>
+      </button>
+
+      <SongActions
+        song={song}
+        playlists={playlists}
+        isFavorite={isFavorite}
+        onPlay={onPlay}
+        onQueue={onQueue}
+        onToggleFavorite={onToggleFavorite}
+        onAddToPlaylist={onAddToPlaylist}
+        className="song-actions--tile"
+      />
+    </article>
+  );
+});
+
 export function Dashboard({
   loading,
   recommendations = [],
@@ -45,19 +109,50 @@ export function Dashboard({
   onShuffleRecommendations,
   shufflingRecommendations
 }: DashboardProps) {
-  const reasonBySongId = useMemo(() => {
-    const map = new Map<string, string>();
+  // App owns several unrelated pieces of state, so these callback props can be
+  // recreated even when the recommendation wall itself did not change. Keep a
+  // stable dispatcher identity so hundreds of already-mounted tiles do not all
+  // rerender on those parent updates.
+  const handlersRef = useRef({ onPlay, onOpenDetails, onQueue, onToggleFavorite, onAddToPlaylist });
+  handlersRef.current = { onPlay, onOpenDetails, onQueue, onToggleFavorite, onAddToPlaylist };
 
-    for (const item of recommendations) {
-      map.set(item.song.id, item.reason);
-    }
+  const stableOnPlay = useCallback((song: Song) => handlersRef.current.onPlay(song), []);
+  const stableOnOpenDetails = useCallback<OpenSongDetailsHandler>(
+    (song, context) => handlersRef.current.onOpenDetails(song, context),
+    []
+  );
+  const stableOnQueue = useCallback((song: Song) => handlersRef.current.onQueue(song), []);
+  const stableOnToggleFavorite = useCallback((song: Song) => handlersRef.current.onToggleFavorite(song), []);
+  const stableOnAddToPlaylist = useCallback(
+    (playlistId: string, song: Song) => handlersRef.current.onAddToPlaylist(playlistId, song),
+    []
+  );
 
-    return map;
-  }, [recommendations]);
+  const favoriteIdSet = useMemo(() => new Set(favoriteIds), [favoriteIds]);
 
-  const suggestions = useMemo(() => {
-    return recommendations.map((item) => item.song);
-  }, [recommendations]);
+  const tiles = useMemo(() => recommendations.map((item, index) => (
+    <DashboardSongTile
+      key={item.song.id}
+      item={item}
+      index={index}
+      playlists={playlists}
+      isFavorite={favoriteIdSet.has(item.song.id)}
+      onPlay={stableOnPlay}
+      onOpenDetails={stableOnOpenDetails}
+      onQueue={stableOnQueue}
+      onToggleFavorite={stableOnToggleFavorite}
+      onAddToPlaylist={stableOnAddToPlaylist}
+    />
+  )), [
+    recommendations,
+    playlists,
+    favoriteIdSet,
+    stableOnPlay,
+    stableOnOpenDetails,
+    stableOnQueue,
+    stableOnToggleFavorite,
+    stableOnAddToPlaylist
+  ]);
 
   const recommendationSentinelRef = useInfiniteScroll({
     enabled: Boolean(onLoadMoreRecommendations),
@@ -66,7 +161,7 @@ export function Dashboard({
     onLoadMore: () => {
       onLoadMoreRecommendations?.();
     },
-    rootMargin: "250px"
+    rootMargin: "160px"
   });
 
   return (
@@ -89,49 +184,9 @@ export function Dashboard({
         ) : null}
       </div>
 
-      {suggestions.length ? (
+      {tiles.length ? (
         <section className="song-masonry" aria-label="Suggested songs">
-          {suggestions.map((song, index) => {
-            const size = getSongCardSize(song, index);
-            const reason = reasonBySongId.get(song.id);
-
-            return (
-              <article className={`song-tile song-tile--${size}`} key={song.id}>
-                <button
-                  className="song-tile__open"
-                  type="button"
-                  onClick={() => onOpenDetails(song)}
-                  aria-label={`Open metadata for ${song.artistName} - ${song.title}`}
-                >
-                  <SongArtwork
-                    song={song}
-                    wrapClassName="song-tile__media"
-                    fallbackClassName="song-tile__fallback"
-                  />
-
-                  <span className="song-tile__overlay">
-                    <span>
-                      <strong>{song.title}</strong>
-                      <small>{song.artistName}</small>
-                      {reason ? <small className="song-tile__reason">{reason}</small> : null}
-                    </span>
-                    <span className="song-tile__duration">{formatSeconds(song.durationSeconds)}</span>
-                  </span>
-                </button>
-
-                <SongActions
-                  song={song}
-                  playlists={playlists}
-                  isFavorite={favoriteIds.includes(song.id)}
-                  onPlay={onPlay}
-                  onQueue={onQueue}
-                  onToggleFavorite={onToggleFavorite}
-                  onAddToPlaylist={onAddToPlaylist}
-                  className="song-actions--tile"
-                />
-              </article>
-            );
-          })}
+          {tiles}
         </section>
       ) : (
         <p>
@@ -149,10 +204,9 @@ export function Dashboard({
         <LoadingStatus label="Loading more recommendations..." />
       ) : null}
 
-      {!loadingMoreRecommendations && !hasMoreRecommendations && suggestions.length > 0 ? (
+      {!loadingMoreRecommendations && !hasMoreRecommendations && tiles.length > 0 ? (
         <p className="infinite-scroll-status">You reached the end of the recommendation wall.</p>
       ) : null}
-
     </article>
   );
 }

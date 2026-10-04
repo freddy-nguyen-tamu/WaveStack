@@ -112,12 +112,17 @@ export function installPointerFocusPolicy(): () => void {
     // Escape commonly closes a dialog that was opened by clicking a song.
     // It must not turn the ensuing focus restoration into a keyboard opener.
     if (event.key === 'Escape' && lastInputWasPointer) return;
+
     lastInputWasPointer = false;
     pointerPressInProgress = false;
-    // Tab/shortcuts inside a mouse-opened modal are keyboard actions, but
-    // moving among modal controls must not resurrect the underlying row's
-    // hover treatment after the overlay is removed under a stationary mouse.
-    if (!modalIsOpen()) clearActivated();
+
+    // A real Tab move deliberately transfers keyboard focus, so pointer-open
+    // suppression no longer applies. Playback shortcuts (Z/X/arrows/Space),
+    // however, must NOT clear the clicked opener marker: Chromium can restore
+    // focus to that opener a task or frame after the modal has disappeared.
+    // Keeping the marker until Tab or actual pointer movement lets focusin
+    // reject that late restoration instead of letting it steal shortcuts.
+    if (event.key === 'Tab') clearActivated();
   };
 
   const onPointerUp = () => {
@@ -133,8 +138,27 @@ export function installPointerFocusPolicy(): () => void {
     queueMicrotask(releasePointerFocusedAction);
   };
   const onFocusIn = (event: FocusEvent) => {
-    if (!lastInputWasPointer || pointerPressInProgress) return;
     const focused = event.target;
+    if (!(focused instanceof HTMLElement)) return;
+
+    const stalePointerRestoration =
+      focused.hasAttribute('data-ws-pointer-activated') ||
+      Boolean(focused.closest('[data-ws-pointer-activated]'));
+
+    // A pointer-opened modal/drawer can be removed by Escape and Chromium may
+    // restore its opener later, even after a playback shortcut has already
+    // changed the global input modality to keyboard. Reject that restoration
+    // based on the opener marker itself rather than the current modality. This
+    // covers song titles, artwork buttons, mini-player links and future pointer
+    // openers without hard-coding any one component.
+    if (stalePointerRestoration && !modalIsOpen() && !textEditor(focused)) {
+      queueMicrotask(() => {
+        if (document.activeElement === focused) focused.blur();
+      });
+      return;
+    }
+
+    if (!lastInputWasPointer || pointerPressInProgress) return;
     // Also catches useEffect/rAF/timeouts that refocus an opener after click.
     queueMicrotask(() => {
       if (document.activeElement === focused) releasePointerFocusedAction();

@@ -250,7 +250,10 @@ export const SongArtwork = memo(function SongArtwork({
     source: string;
     src: string;
   } | null>(null);
-  const nowPlaying = useNowPlayingForSong(song.id);
+  // Large passive walls (Dashboard recommendations, archive art, etc.) can opt
+  // out of now-playing decoration. Subscribe to nothing in that mode instead
+  // of creating one external-store listener/snapshot entry per artwork card.
+  const nowPlaying = useNowPlayingForSong(disableNowPlayingStyle ? null : song.id);
 
   const sources = useMemo(
     () =>

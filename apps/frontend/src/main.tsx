@@ -74,12 +74,12 @@ function clearPageCaretOutsideAllowedZones() {
 
 function installCaretSelectionPolicy(): () => void {
   const onSelectStart = (event: Event) => {
-    const target = event.target;
+    // Selection events are allowed to target a Text node, especially inside a
+    // content-editable/read-only lyrics surface. Normalize that node back to
+    // its containing element before applying the global no-caret policy.
+    const target = event.target instanceof Node ? nodeElement(event.target) : null;
 
-    if (
-      target instanceof Element &&
-      isAllowedCaretTarget(target)
-    ) {
+    if (isAllowedCaretTarget(target)) {
       return;
     }
 
@@ -91,12 +91,9 @@ function installCaretSelectionPolicy(): () => void {
   };
 
   const onPointerDown = (event: PointerEvent) => {
-    const target = event.target;
+    const target = event.target instanceof Node ? nodeElement(event.target) : null;
 
-    if (
-      target instanceof Element &&
-      isAllowedCaretTarget(target)
-    ) {
+    if (isAllowedCaretTarget(target)) {
       return;
     }
 

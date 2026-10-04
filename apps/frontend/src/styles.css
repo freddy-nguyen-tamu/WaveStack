@@ -7347,3 +7347,30 @@ article.dashboard-page .song-tile,
   -webkit-user-select: text !important;
   cursor: text !important;
 }
+
+
+/* Dashboard long-session virtualization. Recommendation pages are intentionally
+   retained, but off-screen cards must not keep full layout/paint trees active.
+   `auto <fallback>` remembers each card's real block size after first reveal,
+   avoiding the old 96px placeholder geometry jumps while still letting Chrome
+   skip deep off-screen tile rendering. */
+article.dashboard-page .song-tile {
+  content-visibility: auto !important;
+  contain: layout style paint;
+  contain-intrinsic-block-size: auto 390px;
+}
+@media (max-width: 1180px) {
+  article.dashboard-page .song-tile {
+    contain-intrinsic-block-size: auto 410px;
+  }
+}
+@media (max-width: 760px) {
+  article.dashboard-page .song-tile {
+    contain-intrinsic-block-size: auto 480px;
+  }
+}
+@media (max-width: 560px) {
+  article.dashboard-page .song-tile {
+    contain-intrinsic-block-size: auto 650px;
+  }
+}

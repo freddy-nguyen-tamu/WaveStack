@@ -138,6 +138,36 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
     }
   }
 
+  function placeLyricsCaretAtPoint(surface: HTMLElement, clientX: number, clientY: number) {
+    surface.focus({ preventScroll: true });
+
+    const selection = window.getSelection();
+    if (!selection) return;
+
+    let range: Range | null = null;
+    const documentWithCaretApis = document as Document & {
+      caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    };
+
+    const position = documentWithCaretApis.caretPositionFromPoint?.(clientX, clientY);
+    if (position && surface.contains(position.offsetNode)) {
+      range = document.createRange();
+      range.setStart(position.offsetNode, position.offset);
+      range.collapse(true);
+    } else {
+      const legacyRange = documentWithCaretApis.caretRangeFromPoint?.(clientX, clientY) ?? null;
+      if (legacyRange && surface.contains(legacyRange.startContainer)) {
+        range = legacyRange;
+        range.collapse(true);
+      }
+    }
+
+    if (!range) return;
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
   useEffect(() => () => cancelPendingEmptyClose(), []);
 
   useEffect(() => {
@@ -328,7 +358,22 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
           role="textbox"
           aria-readonly="true"
           aria-multiline="true"
-          tabIndex={-1}
+          tabIndex={0}
+          onPointerDown={event => {
+            // Focus before the browser begins selection so the content-editable
+            // host owns the caret from the first click. Do not preventDefault: a
+            // drag must still use native text selection.
+            event.currentTarget.focus({ preventScroll: true });
+          }}
+          onClick={event => {
+            // Chromium normally places the caret natively. This fallback also
+            // handles clicks whose selection was disturbed by capture listeners
+            // or by highlighted <mark> nodes created by lyric search.
+            const selection = window.getSelection();
+            if (!selection || selection.isCollapsed) {
+              placeLyricsCaretAtPoint(event.currentTarget, event.clientX, event.clientY);
+            }
+          }}
           onBeforeInput={event => event.preventDefault()}
           onPaste={event => event.preventDefault()}
           onCut={event => event.preventDefault()}

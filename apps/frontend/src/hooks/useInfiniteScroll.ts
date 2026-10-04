@@ -17,6 +17,7 @@ export function useInfiniteScroll({
 }: UseInfiniteScrollOptions) {
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const callbackRef = useRef(onLoadMore);
+  const armedRef = useRef(true);
 
   callbackRef.current = onLoadMore;
 
@@ -27,13 +28,21 @@ export function useInfiniteScroll({
       return;
     }
 
-    let requested = false;
     const observer = new IntersectionObserver(
       (entries) => {
         const entry = entries[0];
 
-        if (entry.isIntersecting && !requested) {
-          requested = true;
+        if (!entry.isIntersecting) {
+          // Re-arm only after the sentinel has genuinely left the preload
+          // boundary. Loading toggles recreate this observer; without a
+          // persistent arm bit, a still-visible sentinel can immediately fire
+          // again and drain page after page while the user simply stays put.
+          armedRef.current = true;
+          return;
+        }
+
+        if (armedRef.current) {
+          armedRef.current = false;
           callbackRef.current();
         }
       },
