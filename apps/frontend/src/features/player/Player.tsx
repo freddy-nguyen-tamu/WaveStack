@@ -869,13 +869,14 @@ export function Player({
       }
 
       const tagName = target.tagName.toLowerCase();
-      if (
-        tagName === "input" ||
-        tagName === "textarea" ||
-        tagName === "select" ||
-        target.isContentEditable
-      ) {
+      if (tagName === "textarea" || tagName === "select" || target.isContentEditable) {
         return true;
+      }
+      if (target instanceof HTMLInputElement) {
+        const type = target.type || "text";
+        if (["text", "search", "email", "tel", "url", "password", "number"].includes(type)) {
+          return true;
+        }
       }
 
       // The mini-player title is intentionally pointer-only. It has a separate
@@ -897,13 +898,14 @@ export function Player({
         return false;
       }
 
-      // Do not hijack Space/arrow behavior from a genuinely keyboard-focused
-      // control. Pointer-opened song modals focus their non-interactive backdrop,
-      // so the global playback shortcuts still work there exactly as intended.
-      return Boolean(target.closest(
-        'button, a[href], summary, [role="button"], [role="link"], [role="tab"], ' +
-        '[role="option"], [role="switch"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]'
-      ));
+      // Non-editor controls are never legitimate owners of playback keys. The
+      // global focus policy should already have blurred them synchronously, but
+      // release any browser/restoration straggler here as a second line of
+      // defense and let Space/Z/X/arrows continue to the player.
+      if (target !== document.body) {
+        target.blur();
+      }
+      return false;
     }
 
     function restartCurrentSong(): boolean {

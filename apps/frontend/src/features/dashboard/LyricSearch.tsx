@@ -27,12 +27,9 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
   const [scrollRequest, setScrollRequest] = useState(0);
   const [floating, setFloating] = useState(false);
   const [floatingStyle, setFloatingStyle] = useState<FloatingSearchStyle>({});
-  const restoreFocusRef = useRef(false);
-  const openedByKeyboardRef = useRef(false);
   const sectionRef = useRef<HTMLElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
   const activeMatchRef = useRef<HTMLElement>(null);
   const isComposingRef = useRef(false);
   const pendingEmptyCloseRef = useRef<number | null>(null);
@@ -67,13 +64,7 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
     });
   }
 
-  function openSearch(floatWhenOutOfView = false, openedByKeyboard = false) {
-    // Pointer activation should move focus only into the text field while the
-    // search is open; it must not later resurrect focus on the magnifier.
-    // The caller passes the activation modality explicitly because Ctrl/Cmd+F
-    // is handled at window-capture before the global pointer-focus policy sees
-    // the key event.
-    openedByKeyboardRef.current = openedByKeyboard;
+  function openSearch(floatWhenOutOfView = false) {
     const modal = sectionRef.current?.closest<HTMLElement>(".song-modal");
     const toolbar = toolbarRef.current;
     let shouldFloat = false;
@@ -101,12 +92,8 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
     }
   }
 
-  function closeSearch(closedByKeyboard = false) {
+  function closeSearch() {
     cancelPendingEmptyClose();
-    // Restore the opener only for a fully keyboard-driven open/close cycle.
-    // Pointer-opened or pointer-closed searches must never leave the magnifier
-    // focused after the text field disappears.
-    restoreFocusRef.current = openedByKeyboardRef.current && closedByKeyboard;
     setOpen(false);
     setQuery("");
     setFloating(false);
@@ -126,7 +113,7 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
       const input = inputRef.current;
 
       if (!isComposingRef.current && input && input.value === "") {
-        closeSearch(true);
+        closeSearch();
       }
     }, 80);
   }
@@ -148,11 +135,11 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "f") {
         event.preventDefault();
         event.stopImmediatePropagation();
-        openSearch(true, true);
+        openSearch(true);
       } else if (open && event.key === "Escape") {
         event.preventDefault();
         event.stopImmediatePropagation();
-        closeSearch(true);
+        closeSearch();
       }
     }
 
@@ -161,13 +148,7 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
   }, [open]);
 
   useLayoutEffect(() => {
-    if (!open) {
-      if (restoreFocusRef.current) {
-        buttonRef.current?.focus({ preventScroll: true });
-        restoreFocusRef.current = false;
-      }
-      return;
-    }
+    if (!open) return;
 
     inputRef.current?.focus({ preventScroll: true });
     inputRef.current?.select();
@@ -286,7 +267,7 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
         type="button"
         aria-label="Close lyric search"
         title="Close search"
-        onClick={(event) => closeSearch(event.detail === 0)}
+        onClick={() => closeSearch()}
       >
         <X aria-hidden="true" />
       </button>
@@ -307,12 +288,11 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
           floating ? null : searchControls
         ) : (
           <button
-            ref={buttonRef}
             type="button"
             className="lyric-find__open"
             aria-label="Find in lyrics"
             title="Find in lyrics (Ctrl+F)"
-            onClick={(event) => openSearch(false, event.detail === 0)}
+            onClick={() => openSearch(false)}
           >
             <Search aria-hidden="true" />
           </button>

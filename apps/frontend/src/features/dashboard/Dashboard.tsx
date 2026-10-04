@@ -165,7 +165,10 @@ export function Dashboard({
     onLoadMore: () => {
       onLoadMoreRecommendations?.();
     },
-    rootMargin: "160px"
+    // Prefetch before the user reaches the literal end of the recommendation wall.
+    // A generous bottom margin starts the next batch while several card rows are
+    // still available to scroll through, without reintroducing scroll-frame work.
+    rootMargin: "0px 0px 1400px 0px"
   });
 
   return (
@@ -201,15 +204,17 @@ export function Dashboard({
         </p>
       )}
 
+      {loadingMoreRecommendations ? (
+        <div className="dashboard-page__load-more">
+          <LoadingStatus label="Loading more recommendations..." />
+        </div>
+      ) : null}
+
       <div
         ref={recommendationSentinelRef}
-        className="infinite-scroll-sentinel"
+        className="infinite-scroll-sentinel dashboard-page__recommendation-sentinel"
         aria-hidden="true"
       />
-
-      {loadingMoreRecommendations ? (
-        <LoadingStatus label="Loading more recommendations..." />
-      ) : null}
 
       {!loadingMoreRecommendations && !hasMoreRecommendations && recommendations.length > 0 ? (
         <p className="infinite-scroll-status">You reached the end of the recommendation wall.</p>

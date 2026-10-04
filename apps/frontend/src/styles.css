@@ -7367,8 +7367,8 @@ article.dashboard-page .dashboard-song-tile {
    translateY lift to the song identity button. During wheel scrolling the
    stationary pointer continually enters/leaves cards as they move underneath
    it, which starts overlapping paint/compositing work even though no data is
-   loading. Keep dashboard hover feedback paint-cheap: no card movement, no
-   animated surface/pseudo-overlay repaint, only a small title-color cue.
+   loading. Keep dashboard hover feedback paint-cheap: no card movement and no
+   animated pseudo-overlay; use an immediate stronger surface tint instead.
 */
 article.dashboard-page .dashboard-song-tile,
 article.dashboard-page .dashboard-song-tile .song-tile__open,
@@ -7376,10 +7376,14 @@ article.dashboard-page .dashboard-song-tile .song-tile__open::before {
   transition: none !important;
 }
 
-article.dashboard-page .dashboard-song-tile:hover:not([data-ws-pointer-activated]),
-html[data-theme="dark"] article.dashboard-page .dashboard-song-tile:hover:not([data-ws-pointer-activated]) {
-  background: var(--frontier-surface-strong) !important;
+article.dashboard-page .dashboard-song-tile:hover:not([data-ws-pointer-activated]) {
+  background: color-mix(in srgb, var(--color-red) 20%, var(--frontier-surface-muted)) !important;
+  border-color: color-mix(in srgb, var(--color-red) 54%, var(--frontier-border-strong)) !important;
   color: var(--color-ink) !important;
+}
+html[data-theme="dark"] article.dashboard-page .dashboard-song-tile:hover:not([data-ws-pointer-activated]) {
+  background: color-mix(in srgb, var(--color-red) 30%, var(--frontier-surface-muted)) !important;
+  border-color: color-mix(in srgb, var(--color-red) 68%, var(--frontier-border-strong)) !important;
 }
 
 article.dashboard-page .dashboard-song-tile .song-tile__open:hover:not(:disabled):not([data-ws-pointer-activated]) {
@@ -7402,3 +7406,22 @@ article.dashboard-page .dashboard-song-tile:hover:not([data-ws-pointer-activated
   color: var(--color-muted) !important;
 }
 
+
+/* Dashboard recommendation prefetch status. Keep the load-more indicator tied
+   to the recommendation wall itself so the user sees the spinner while the
+   next batch is fetched, even though the observer fires well before page end. */
+article.dashboard-page .dashboard-page__load-more {
+  display: grid;
+  min-height: 3.25rem;
+  place-items: center;
+  margin: 0.55rem 0 0;
+}
+article.dashboard-page .dashboard-page__load-more .loading-status {
+  margin: 0;
+  border: 0;
+  padding: 0.45rem 0.7rem;
+}
+article.dashboard-page .dashboard-page__recommendation-sentinel {
+  height: 1px;
+  min-height: 1px;
+}

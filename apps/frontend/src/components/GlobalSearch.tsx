@@ -119,7 +119,6 @@ export function GlobalSearch({ initialValue = "", onSubmit, onOpenSong }: Global
 
     if (!nextQuery) {
       setOpen(true);
-      inputRef.current?.focus();
       return;
     }
 
@@ -132,7 +131,6 @@ export function GlobalSearch({ initialValue = "", onSubmit, onOpenSong }: Global
     setQuery(nextQuery);
     setHistory(rememberSearch(nextQuery));
     setOpen(true);
-    window.requestAnimationFrame(() => inputRef.current?.focus());
   }
 
   function chooseSong(song: Song) {

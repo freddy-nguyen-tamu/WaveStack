@@ -45,6 +45,7 @@ import { GlobalSearch } from "./components/GlobalSearch";
 import { KeyboardShortcutsMenu } from "./components/KeyboardShortcutsMenu";
 import { pickHabitArtworkSong } from "./habit-artwork";
 import { assertStreamUrlBelongsToSong } from "./playback-source-identity";
+import { releasePageFocus } from "./hooks/pointerFocus";
 
 export type Song = {
   id: string;
@@ -601,6 +602,14 @@ export function App() {
     document.title = metadata.title;
     ensureMetaTag("description", metadata.description);
     ensureCanonicalLink(location.pathname);
+
+    // React Router keeps the clicked/current link mounted across route changes,
+    // so the browser can retain it as document.activeElement without firing a
+    // new focus event. Explicitly release any retained focus owner now and once on
+    // the next frame; the global focus guard handles all later restoration.
+    releasePageFocus();
+    const focusReleaseFrame = window.requestAnimationFrame(releasePageFocus);
+    return () => window.cancelAnimationFrame(focusReleaseFrame);
   }, [location.pathname]);
 
   const [activeSong, setActiveSong] = useState<Song | null>(readLastPlayedSong);
@@ -2651,6 +2660,8 @@ export function App() {
               className="app-header__brand"
               to="/all"
               aria-label="WaveStack home"
+              tabIndex={-1}
+              onFocus={(event) => event.currentTarget.blur()}
               onClick={() => requestNavScroll("/all")}
             >
               WaveStack
@@ -3058,4 +3069,3 @@ export function App() {
     </>
   );
 }
-

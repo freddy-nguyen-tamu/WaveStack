@@ -4,8 +4,6 @@ import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongH
 import { formatSongDisplayName } from "../../song-format";
 import { SongActions } from "../../components/SongActions";
 import { SongIdentityButton } from "../../components/SongIdentityButton";
-import { containDialogTab } from "../../hooks/containDialogTab";
-import { isPointerInput } from "../../hooks/pointerFocus";
 
 type QueueDrawerProps = {
   open: boolean;
@@ -53,9 +51,6 @@ export function QueueDrawer({
   useLayoutEffect(() => {
     if (!open) return;
 
-    const previousFocus = document.activeElement;
-    // Capture the opener's modality before Escape changes keyboard state.
-    const openedByPointer = isPointerInput();
     const backdrop = backdropRef.current;
     const drawer = drawerRef.current;
 
@@ -69,30 +64,19 @@ export function QueueDrawer({
       if (event.key === "Escape" && !event.defaultPrevented) {
         event.preventDefault();
         onCloseRef.current();
-      } else {
-        containDialogTab(event, drawer);
+      } else if (event.key === "Tab") {
+        event.preventDefault();
       }
     }
 
     backdrop?.addEventListener("wheel", containBackgroundScroll, { passive: false });
     backdrop?.addEventListener("touchmove", containBackgroundScroll, { passive: false });
     window.addEventListener("keydown", handleKeyDown);
-    if (openedByPointer) {
-      drawer?.focus({ preventScroll: true });
-    } else {
-      drawer?.querySelector<HTMLButtonElement>(".queue-drawer__close")?.focus({ preventScroll: true });
-    }
-
     return () => {
       backdrop?.removeEventListener("wheel", containBackgroundScroll);
       backdrop?.removeEventListener("touchmove", containBackgroundScroll);
       window.removeEventListener("keydown", handleKeyDown);
-      // Only restore a button after a keyboard dismissal. Pointer focus
-      // restoration otherwise leaves a highlighted control after closing.
-      if (!document.querySelector(".song-modal-backdrop") &&
-          !openedByPointer && previousFocus instanceof HTMLElement && previousFocus.isConnected) {
-        previousFocus.focus({ preventScroll: true });
-      } else if (drawer?.contains(document.activeElement)) {
+      if (drawer?.contains(document.activeElement)) {
         (document.activeElement as HTMLElement).blur();
       }
     };
@@ -115,7 +99,6 @@ export function QueueDrawer({
             ref={drawerRef}
             className="queue-drawer"
             role="dialog"
-            tabIndex={-1}
             aria-modal="true"
             aria-label="Play queue"
             onClick={(event) => event.stopPropagation()}

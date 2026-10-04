@@ -62,7 +62,6 @@ export function SongActions({
         event.preventDefault();
         event.stopPropagation();
         setPlaylistPickerOpen(false);
-        triggerRef.current?.focus();
       }
     }
     placeMenu();
@@ -78,12 +77,6 @@ export function SongActions({
     };
   }, [playlistPickerOpen]);
 
-  useLayoutEffect(() => {
-    if (playlistPickerOpen && position.visibility !== "hidden") {
-      menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true });
-    }
-  }, [playlistPickerOpen, position.visibility]);
-
   async function addToPlaylist(playlistId: string) {
     if (pendingRef.current) return;
     pendingRef.current = true;
@@ -93,7 +86,6 @@ export function SongActions({
     // change in the background instead of leaving the menu hanging open while a
     // network-backed playlist mutation finishes.
     setPlaylistPickerOpen(false);
-    triggerRef.current?.focus({ preventScroll: true });
 
     try {
       await onAddToPlaylist(playlistId, song);
@@ -146,15 +138,10 @@ export function SongActions({
           aria-busy={pending}
           aria-label={`Choose playlist for ${songName}`}
           onKeyDown={(event) => {
-            if (event.key === "Tab") { setPlaylistPickerOpen(false); return; }
-            if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-            event.preventDefault();
-            const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
-            if (!buttons.length) return;
-            const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
-            const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 :
-              (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
-            buttons[next]?.focus();
+            if (event.key === "Tab") {
+              event.preventDefault();
+              setPlaylistPickerOpen(false);
+            }
           }}
         >
           {playlists.length ? (

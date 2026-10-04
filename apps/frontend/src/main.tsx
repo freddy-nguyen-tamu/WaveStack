@@ -4,7 +4,7 @@ import { ApolloProvider } from "@apollo/client";
 import { BrowserRouter } from "react-router-dom";
 import { App } from "./App";
 import { apolloClient, restoreApolloCache } from "./api";
-import { installPointerFocusPolicy } from "./hooks/pointerFocus";
+import { installPointerFocusPolicy, releasePageFocus } from "./hooks/pointerFocus";
 import { installScrollOwnershipPolicy } from "./hooks/wheelHandoff";
 import "./styles.css";
 
@@ -111,22 +111,12 @@ function installCaretSelectionPolicy(): () => void {
   };
 }
 
-function releaseRestoredNonEditorFocus() {
+function releaseRestoredFocus() {
   window.requestAnimationFrame(() => {
-    const active = document.activeElement;
-
-    // Browsers may restore a previously focused link after reload/navigation.
-    // Do not let the WaveStack brand (or any other non-editor) become an
-    // automatic keyboard owner. Explicit keyboard Tab focus still works later.
-    if (
-      active instanceof HTMLElement &&
-      active !== document.body &&
-      active !== document.documentElement &&
-      !isAllowedCaretTarget(active)
-    ) {
-      active.blur();
-    }
-
+    // Startup/history restoration can revive either a link/button or an old
+    // text field without a fresh focus event. Begin every page load with no
+    // stale keyboard owner; deliberate editor clicks still focus normally.
+    releasePageFocus();
     clearPageCaretOutsideAllowedZones();
   });
 }
@@ -160,10 +150,7 @@ async function bootstrap() {
     </React.StrictMode>
   );
 
-  releaseRestoredNonEditorFocus();
+  releaseRestoredFocus();
 }
 
 void bootstrap();
-
-
-
