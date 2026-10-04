@@ -319,7 +319,33 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
         )}
       </div>
       {loadingLabel ? <LoadingStatus label={loadingLabel} /> : null}
-      {lyrics ? <pre className="song-modal__lyrics-text">{highlightedLyrics}</pre> : children}
+      {lyrics ? (
+        <pre
+          className="song-modal__lyrics-text"
+          contentEditable
+          suppressContentEditableWarning
+          spellCheck={false}
+          role="textbox"
+          aria-readonly="true"
+          aria-multiline="true"
+          tabIndex={-1}
+          onBeforeInput={event => event.preventDefault()}
+          onPaste={event => event.preventDefault()}
+          onCut={event => event.preventDefault()}
+          onDrop={event => event.preventDefault()}
+          onKeyDown={event => {
+            // The lyrics surface is intentionally caret/selectable but read-only.
+            // Keep native caret movement, Shift+arrow selection and copy/find,
+            // while blocking every operation that could mutate the displayed text.
+            if (event.ctrlKey || event.metaKey || event.altKey) return;
+            if (event.key.length === 1 || ["Backspace", "Delete", "Enter"].includes(event.key)) {
+              event.preventDefault();
+            }
+          }}
+        >
+          {highlightedLyrics}
+        </pre>
+      ) : children}
     </section>
   );
 }

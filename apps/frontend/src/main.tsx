@@ -27,7 +27,14 @@ function isTextEntryTarget(target: Element | null): boolean {
     return TEXT_ENTRY_INPUT_TYPES.has(target.type || "text");
   }
 
-  return target instanceof HTMLElement && target.isContentEditable;
+  return false;
+}
+
+function isAllowedCaretTarget(target: Element | null): boolean {
+  return Boolean(
+    target &&
+    (isTextEntryTarget(target) || target.closest(".song-modal__lyrics-text"))
+  );
 }
 
 function nodeElement(node: Node | null): Element | null {
@@ -43,7 +50,7 @@ function isLyricsSelectionTarget(target: Node | null): boolean {
 }
 
 function clearPageCaretOutsideAllowedZones() {
-  if (isTextEntryTarget(document.activeElement)) {
+  if (isAllowedCaretTarget(document.activeElement)) {
     return;
   }
 
@@ -71,7 +78,7 @@ function installCaretSelectionPolicy(): () => void {
 
     if (
       target instanceof Element &&
-      (isTextEntryTarget(target) || target.closest(".song-modal__lyrics-text"))
+      isAllowedCaretTarget(target)
     ) {
       return;
     }
@@ -88,7 +95,7 @@ function installCaretSelectionPolicy(): () => void {
 
     if (
       target instanceof Element &&
-      (isTextEntryTarget(target) || target.closest(".song-modal__lyrics-text"))
+      isAllowedCaretTarget(target)
     ) {
       return;
     }
@@ -118,7 +125,7 @@ function releaseRestoredNonEditorFocus() {
       active instanceof HTMLElement &&
       active !== document.body &&
       active !== document.documentElement &&
-      !isTextEntryTarget(active)
+      !isAllowedCaretTarget(active)
     ) {
       active.blur();
     }

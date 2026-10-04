@@ -7323,15 +7323,13 @@ article.dashboard-page .song-tile,
 
 
 
-/* Keyboard-first caret policy. Normal WaveStack chrome and content are not
-   editable text surfaces, so they must never expose a blinking document caret
-   or text selection that can steal playback shortcuts. Text-entry fields and
-   the lyrics body inside the song modal are the only intentional exceptions. */
-#root,
-#root * {
+/* Keyboard-first caret policy. Use inheritance plus the document-level
+   selectstart guard instead of matching #root * on every dashboard tile. The
+   universal descendant rule made long recommendation walls pay extra style
+   matching/recalculation cost while scrolling and updating. */
+#root {
   caret-color: transparent !important;
-  user-select: none !important;
-  -webkit-user-select: none !important;
+  cursor: default;
 }
 #root input:not([type]),
 #root input[type="text"],
@@ -7342,8 +7340,6 @@ article.dashboard-page .song-tile,
 #root input[type="password"],
 #root input[type="number"],
 #root textarea,
-#root [contenteditable="true"],
-#root [contenteditable="plaintext-only"],
 #root .song-modal__lyrics-text,
 #root .song-modal__lyrics-text * {
   caret-color: auto !important;

@@ -65,9 +65,17 @@ function scrollOwnerFor(element: Element | null): ScrollOwner {
   return pageScroller();
 }
 
-function openOverlay(): HTMLElement | null {
-  return document.querySelector<HTMLElement>(
-    ".song-modal-backdrop:not(.song-modal-backdrop--released), .queue-backdrop"
+const OVERLAY_SURFACE_SELECTOR = ".song-modal-backdrop, .queue-backdrop";
+
+function overlaySurfaceFor(element: Element | null): HTMLElement | null {
+  return element?.closest<HTMLElement>(OVERLAY_SURFACE_SELECTOR) ?? null;
+}
+
+function isActiveOverlay(surface: HTMLElement | null): boolean {
+  return Boolean(
+    surface &&
+    (surface.matches(".queue-backdrop") ||
+      surface.matches(".song-modal-backdrop:not(.song-modal-backdrop--released)"))
   );
 }
 
@@ -124,12 +132,23 @@ function pointerCoordinates(event: WheelEvent): { x: number; y: number } {
 function routeWheelToPointer(event: WheelEvent) {
   if (event.ctrlKey || event.metaKey) return; // Keep native browser zoom.
 
+  const eventTarget = eventElement(event.target);
+  const targetIsland = scrollIslandFor(eventTarget);
+  const overlaySurface = overlaySurfaceFor(eventTarget);
+
+  // Fast path for the main document. This is the overwhelmingly common path on
+  // Dashboard and other long routes, and it must remain compositor-native. Do
+  // not hit-test the viewport or walk ancestors/getComputedStyle for every
+  // wheel tick when the browser is already scrolling the page correctly.
+  if (!targetIsland && !overlaySurface) {
+    return;
+  }
+
   const { x, y } = pointerCoordinates(event);
   const hovered = elementAtPoint(x, y);
   if (!hovered) return;
 
-  const overlay = openOverlay();
-  if (overlay && !overlay.contains(hovered)) {
+  if (overlaySurface && isActiveOverlay(overlaySurface) && !overlaySurface.contains(hovered)) {
     // An open modal/drawer owns scrolling exclusively. Never let a wheel tick
     // leak through its backdrop into the library underneath it.
     if (event.cancelable) event.preventDefault();
@@ -138,13 +157,15 @@ function routeWheelToPointer(event: WheelEvent) {
   }
 
   const desiredOwner = scrollOwnerFor(hovered);
-  const targetOwner = scrollOwnerFor(eventElement(event.target));
+  const targetOwner = targetIsland ?? scrollOwnerFor(eventTarget);
   const desiredIsIsland = desiredOwner !== pageScroller();
 
   // Native wheel transactions can stay latched to the region where the gesture
   // started. Scroll islands are therefore handled manually every tick, while
   // the page keeps native scrolling whenever the browser is already targeting
-  // the page correctly.
+  // the page correctly. A released modal is also routed here: its stale wheel
+  // target remains in the old island while elementFromPoint resolves the page
+  // now visible underneath it.
   if (!desiredIsIsland && targetOwner === desiredOwner) return;
 
   if (event.cancelable) event.preventDefault();
@@ -163,9 +184,20 @@ function beginTouch(event: TouchEvent) {
   }
 
   const touch = event.touches[0];
-  const hovered = elementAtPoint(touch.clientX, touch.clientY);
-  if (!hovered) {
-    touchState = null;
+  const target = eventElement(event.target);
+  const targetIsland = scrollIslandFor(target);
+  const overlaySurface = overlaySurfaceFor(target);
+
+  // A normal page touch gesture should stay completely native. Remember only
+  // enough state to recognize that fast path on subsequent touchmove events.
+  if (!targetIsland && !overlaySurface) {
+    touchState = {
+      identifier: touch.identifier,
+      x: touch.clientX,
+      y: touch.clientY,
+      owner: pageScroller(),
+      manual: false
+    };
     return;
   }
 
@@ -173,7 +205,7 @@ function beginTouch(event: TouchEvent) {
     identifier: touch.identifier,
     x: touch.clientX,
     y: touch.clientY,
-    owner: scrollOwnerFor(hovered),
+    owner: targetIsland ?? scrollOwnerFor(target),
     manual: false
   };
 }
@@ -184,11 +216,28 @@ function routeTouchToFinger(event: TouchEvent) {
   const touch = Array.from(event.touches).find(item => item.identifier === touchState?.identifier);
   if (!touch) return;
 
+  const eventTarget = eventElement(event.target);
+  const targetIsland = scrollIslandFor(eventTarget);
+  const overlaySurface = overlaySurfaceFor(eventTarget);
+
+  // Keep ordinary document touch scrolling on the compositor. A gesture that
+  // started on the page stays a page gesture until the next touchstart, just as
+  // native scrolling normally latches to its initial scroller.
+  if (
+    !touchState.manual &&
+    touchState.owner === pageScroller() &&
+    !targetIsland &&
+    !overlaySurface
+  ) {
+    touchState.x = touch.clientX;
+    touchState.y = touch.clientY;
+    return;
+  }
+
   const hovered = elementAtPoint(touch.clientX, touch.clientY);
   if (!hovered) return;
 
-  const overlay = openOverlay();
-  if (overlay && !overlay.contains(hovered)) {
+  if (overlaySurface && isActiveOverlay(overlaySurface) && !overlaySurface.contains(hovered)) {
     if (event.cancelable) event.preventDefault();
     touchState.x = touch.clientX;
     touchState.y = touch.clientY;
@@ -197,7 +246,7 @@ function routeTouchToFinger(event: TouchEvent) {
   }
 
   const desiredOwner = scrollOwnerFor(hovered);
-  const targetOwner = scrollOwnerFor(eventElement(event.target));
+  const targetOwner = targetIsland ?? scrollOwnerFor(eventTarget);
   const ownerChanged = desiredOwner !== touchState.owner;
 
   if (ownerChanged) {
