@@ -7342,37 +7342,27 @@ article.dashboard-page .song-tile,
   cursor: text !important;
 }
 
-/* Dashboard long-session virtualization. The recommendation data can keep
-   growing, but only near-viewport cards retain their expensive image/action
-   subtrees. Off-screen cards are lightweight geometry shells with their last
-   measured height, so DOM/image/GPU cost no longer grows with time spent on
-   the route. */
+/* Dashboard native rendering containment. Chromium can skip layout/paint for
+   distant cards itself; do not maintain one IntersectionObserver target per
+   recommendation. A realistic intrinsic block size prevents the old 96px
+   placeholder from causing geometry corrections as cards approach view. */
 article.dashboard-page .dashboard-song-tile {
-  content-visibility: visible !important;
+  content-visibility: auto !important;
   contain: layout style paint;
-}
-article.dashboard-page .dashboard-song-tile.song-tile--virtualized {
-  min-height: clamp(15rem, 23vw, 26rem);
-  pointer-events: none;
-}
-.dashboard-song-tile__virtual-placeholder {
-  display: block;
-  width: 100%;
-  min-width: 0;
-  aspect-ratio: 1 / 1;
+  contain-intrinsic-block-size: auto clamp(15rem, 23vw, 26rem);
 }
 @media (max-width: 1180px) {
-  article.dashboard-page .dashboard-song-tile.song-tile--virtualized {
-    min-height: clamp(16rem, 29vw, 29rem);
+  article.dashboard-page .dashboard-song-tile {
+    contain-intrinsic-block-size: auto clamp(16rem, 29vw, 29rem);
   }
 }
 @media (max-width: 760px) {
-  article.dashboard-page .dashboard-song-tile.song-tile--virtualized {
-    min-height: clamp(18rem, 52vw, 34rem);
+  article.dashboard-page .dashboard-song-tile {
+    contain-intrinsic-block-size: auto clamp(18rem, 52vw, 34rem);
   }
 }
 @media (max-width: 560px) {
-  article.dashboard-page .dashboard-song-tile.song-tile--virtualized {
-    min-height: clamp(22rem, 112vw, 44rem);
+  article.dashboard-page .dashboard-song-tile {
+    contain-intrinsic-block-size: auto clamp(22rem, 112vw, 44rem);
   }
 }

@@ -1,7 +1,5 @@
 // Keep a dismissed song modal connected briefly because some browsers keep
 // dispatching the tail of a physical wheel gesture to the original DOM node.
-// The global ownership policy below still routes every stale delta to the
-// scroll region currently underneath the pointer.
 export const WHEEL_GHOST_MS = 2050;
 
 const SCROLL_ISLAND_SELECTOR = [
@@ -12,6 +10,9 @@ const SCROLL_ISLAND_SELECTOR = [
   ".song-modal",
   ".queue-drawer"
 ].join(", ");
+
+const OVERLAY_SURFACE_SELECTOR = ".song-modal-backdrop, .queue-backdrop";
+const WHEEL_SURFACE_SELECTOR = `${SCROLL_ISLAND_SELECTOR}, ${OVERLAY_SURFACE_SELECTOR}`;
 
 type ScrollOwner = HTMLElement;
 
@@ -27,6 +28,8 @@ let scrollOwnershipInstalled = false;
 let touchState: TouchScrollState | null = null;
 let lastPointerX = 0;
 let lastPointerY = 0;
+const wiredSurfaces = new WeakSet<HTMLElement>();
+let surfaceObserver: MutationObserver | null = null;
 
 function pageScroller(): ScrollOwner {
   return (document.scrollingElement as HTMLElement | null) ?? document.documentElement;
@@ -46,9 +49,9 @@ function scrollOwnerFor(element: Element | null): ScrollOwner {
   const island = scrollIslandFor(element);
   if (island) return island;
 
-  // Also respect any independently scrollable control/popover added elsewhere
-  // in the app. This keeps the policy spatial without having to maintain a
-  // brittle list of every future overflow container.
+  // Respect nested independently scrollable controls/popovers inside a known
+  // scroll surface. This walk now runs only for wheel/touch events that began
+  // on those small surfaces, never for ordinary document scrolling.
   for (let node = element as HTMLElement | null; node; node = node.parentElement) {
     if (node === document.body || node === document.documentElement) break;
     const style = getComputedStyle(node);
@@ -64,8 +67,6 @@ function scrollOwnerFor(element: Element | null): ScrollOwner {
 
   return pageScroller();
 }
-
-const OVERLAY_SURFACE_SELECTOR = ".song-modal-backdrop, .queue-backdrop";
 
 function overlaySurfaceFor(element: Element | null): HTMLElement | null {
   return element?.closest<HTMLElement>(OVERLAY_SURFACE_SELECTOR) ?? null;
@@ -109,8 +110,6 @@ function cancelMomentum(owner: ScrollOwner) {
     return;
   }
 
-  // Assigning the current position back to a native scroll container cancels
-  // compositor momentum in Chromium/WebKit without visually moving it.
   owner.scrollLeft = owner.scrollLeft;
   owner.scrollTop = owner.scrollTop;
 }
@@ -130,27 +129,16 @@ function pointerCoordinates(event: WheelEvent): { x: number; y: number } {
 }
 
 function routeWheelToPointer(event: WheelEvent) {
-  if (event.ctrlKey || event.metaKey) return; // Keep native browser zoom.
+  if (event.ctrlKey || event.metaKey) return;
 
   const eventTarget = eventElement(event.target);
   const targetIsland = scrollIslandFor(eventTarget);
   const overlaySurface = overlaySurfaceFor(eventTarget);
-
-  // Fast path for the main document. This is the overwhelmingly common path on
-  // Dashboard and other long routes, and it must remain compositor-native. Do
-  // not hit-test the viewport or walk ancestors/getComputedStyle for every
-  // wheel tick when the browser is already scrolling the page correctly.
-  if (!targetIsland && !overlaySurface) {
-    return;
-  }
-
   const { x, y } = pointerCoordinates(event);
   const hovered = elementAtPoint(x, y);
   if (!hovered) return;
 
   if (overlaySurface && isActiveOverlay(overlaySurface) && !overlaySurface.contains(hovered)) {
-    // An open modal/drawer owns scrolling exclusively. Never let a wheel tick
-    // leak through its backdrop into the library underneath it.
     if (event.cancelable) event.preventDefault();
     event.stopPropagation();
     return;
@@ -160,12 +148,6 @@ function routeWheelToPointer(event: WheelEvent) {
   const targetOwner = targetIsland ?? scrollOwnerFor(eventTarget);
   const desiredIsIsland = desiredOwner !== pageScroller();
 
-  // Native wheel transactions can stay latched to the region where the gesture
-  // started. Scroll islands are therefore handled manually every tick, while
-  // the page keeps native scrolling whenever the browser is already targeting
-  // the page correctly. A released modal is also routed here: its stale wheel
-  // target remains in the old island while elementFromPoint resolves the page
-  // now visible underneath it.
   if (!desiredIsIsland && targetOwner === desiredOwner) return;
 
   if (event.cancelable) event.preventDefault();
@@ -185,27 +167,11 @@ function beginTouch(event: TouchEvent) {
 
   const touch = event.touches[0];
   const target = eventElement(event.target);
-  const targetIsland = scrollIslandFor(target);
-  const overlaySurface = overlaySurfaceFor(target);
-
-  // A normal page touch gesture should stay completely native. Remember only
-  // enough state to recognize that fast path on subsequent touchmove events.
-  if (!targetIsland && !overlaySurface) {
-    touchState = {
-      identifier: touch.identifier,
-      x: touch.clientX,
-      y: touch.clientY,
-      owner: pageScroller(),
-      manual: false
-    };
-    return;
-  }
-
   touchState = {
     identifier: touch.identifier,
     x: touch.clientX,
     y: touch.clientY,
-    owner: targetIsland ?? scrollOwnerFor(target),
+    owner: scrollOwnerFor(target),
     manual: false
   };
 }
@@ -219,21 +185,6 @@ function routeTouchToFinger(event: TouchEvent) {
   const eventTarget = eventElement(event.target);
   const targetIsland = scrollIslandFor(eventTarget);
   const overlaySurface = overlaySurfaceFor(eventTarget);
-
-  // Keep ordinary document touch scrolling on the compositor. A gesture that
-  // started on the page stays a page gesture until the next touchstart, just as
-  // native scrolling normally latches to its initial scroller.
-  if (
-    !touchState.manual &&
-    touchState.owner === pageScroller() &&
-    !targetIsland &&
-    !overlaySurface
-  ) {
-    touchState.x = touch.clientX;
-    touchState.y = touch.clientY;
-    return;
-  }
-
   const hovered = elementAtPoint(touch.clientX, touch.clientY);
   if (!hovered) return;
 
@@ -249,17 +200,9 @@ function routeTouchToFinger(event: TouchEvent) {
   const targetOwner = targetIsland ?? scrollOwnerFor(eventTarget);
   const ownerChanged = desiredOwner !== touchState.owner;
 
-  if (ownerChanged) {
-    cancelMomentum(touchState.owner);
-  }
+  if (ownerChanged) cancelMomentum(touchState.owner);
 
-  const shouldRouteManually =
-    touchState.manual ||
-    desiredOwner !== pageScroller() ||
-    targetOwner !== desiredOwner ||
-    ownerChanged;
-
-  if (shouldRouteManually) {
+  if (touchState.manual || desiredOwner !== pageScroller() || targetOwner !== desiredOwner || ownerChanged) {
     if (event.cancelable) event.preventDefault();
     scrollOwnerBy(
       desiredOwner,
@@ -278,6 +221,29 @@ function endTouch() {
   touchState = null;
 }
 
+function wireSurface(surface: HTMLElement) {
+  if (wiredSurfaces.has(surface)) return;
+  wiredSurfaces.add(surface);
+
+  // Critical performance rule: cancelable wheel/touch listeners live only on
+  // the handful of independent scroll surfaces. A passive:false listener on
+  // window/document makes Chromium treat *every* page wheel as main-thread
+  // blocking even when the handler returns immediately.
+  surface.addEventListener("wheel", routeWheelToPointer, { passive: false });
+  surface.addEventListener("touchstart", beginTouch, { passive: true });
+  surface.addEventListener("touchmove", routeTouchToFinger, { passive: false });
+  surface.addEventListener("touchend", endTouch, { passive: true });
+  surface.addEventListener("touchcancel", endTouch, { passive: true });
+}
+
+function wireTree(node: ParentNode | Element) {
+  if (node instanceof HTMLElement && node.matches(WHEEL_SURFACE_SELECTOR)) {
+    wireSurface(node);
+  }
+
+  node.querySelectorAll<HTMLElement>(WHEEL_SURFACE_SELECTOR).forEach(wireSurface);
+}
+
 export function installScrollOwnershipPolicy() {
   if (scrollOwnershipInstalled) return;
   scrollOwnershipInstalled = true;
@@ -294,20 +260,26 @@ export function installScrollOwnershipPolicy() {
     lastPointerY = event.clientY;
   }, { capture: true, passive: true });
 
-  window.addEventListener("wheel", routeWheelToPointer, { capture: true, passive: false });
-  window.addEventListener("touchstart", beginTouch, { capture: true, passive: true });
-  window.addEventListener("touchmove", routeTouchToFinger, { capture: true, passive: false });
-  window.addEventListener("touchend", endTouch, { capture: true, passive: true });
-  window.addEventListener("touchcancel", endTouch, { capture: true, passive: true });
+  wireTree(document);
+
+  surfaceObserver = new MutationObserver(records => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (node instanceof Element) wireTree(node);
+      }
+    }
+  });
+  surfaceObserver.observe(document.documentElement, { childList: true, subtree: true });
 }
 
-// Compatibility exports for the modal code. Ownership is now global rather
-// than a short-lived post-modal listener, so opening/closing a dialog only
-// needs to ensure the policy is installed.
+// Compatibility exports for the modal code. Released modal DOM is intentionally
+// retained for WHEEL_GHOST_MS and keeps its own direct wheel listener, so no
+// temporary window-level blocking listener is necessary.
 export function cancelWheelHandoff() {
-  // Intentionally empty: there is no transient handoff listener anymore.
+  // No global handoff listener exists.
 }
 
 export function handOffWheelToDocument() {
-  installScrollOwnershipPolicy();
+  // Direct listeners on the retained modal/backdrop already own the stale wheel
+  // transaction until that released DOM is removed.
 }
