@@ -7159,7 +7159,7 @@ article.dashboard-page .song-tile,
   background: color-mix(in srgb, var(--color-red) 96%, transparent);
 }
 
-/* Artist rankings use the thumbnail already returned by TOP_ARTISTS_QUERY.
+/* Artist rankings show artwork from one stable-random song by that artist.
    Images stay lazy/async in React so the richer row does not reintroduce the
    scroll-time decoding pressure this performance pass removes. */
 .stats-page .ranking-list__item--with-art {

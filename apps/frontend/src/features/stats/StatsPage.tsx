@@ -98,6 +98,31 @@ type RecentlyPlayedRowProps = {
   onAddToPlaylist: (playlistId: string, song: Song) => void;
 };
 
+function normalizeArtistName(value: string) {
+  return value.trim().toLocaleLowerCase();
+}
+
+function getSongArtworkUrl(song: Song) {
+  return [
+    song.localThumbnailUrl,
+    song.thumbnailUrl,
+    song.driveThumbnailUrl,
+    song.embeddedArtworkUrl
+  ]
+    .map((value) => value?.trim())
+    .find((value): value is string => Boolean(value));
+}
+
+function stableRandomIndex(seed: number, key: string, length: number) {
+  let hash = seed | 0;
+
+  for (let index = 0; index < key.length; index += 1) {
+    hash = Math.imul(hash ^ key.charCodeAt(index), 16777619);
+  }
+
+  return Math.abs(hash) % length;
+}
+
 function DriveExportPanel({ period }: DriveExportPanelProps) {
   const [exportData, { loading, data, error }] = useMutation(EXPORT_LISTENING_HABITS_MUTATION);
 
@@ -195,6 +220,7 @@ export function StatsPage({
   const [tab, setTab] = useState<Tab>("ARTISTS");
   const [receiptMode, setReceiptMode] = useState<"normal" | "brat">("normal");
   const [receiptLength, setReceiptLength] = useState<10 | 50>(10);
+  const [artistArtworkSeed] = useState(() => Math.floor(Math.random() * 0x7fffffff));
 
   const [topTracksQuery, { data: tracksData }] = useLazyQuery(TOP_TRACKS_QUERY, { fetchPolicy: "cache-and-network" });
   const [topArtistsQuery, { data: artistsData, loading: artistsLoading }] = useLazyQuery(TOP_ARTISTS_QUERY, { fetchPolicy: "cache-and-network" });
@@ -206,6 +232,42 @@ export function StatsPage({
   const genreEntries: StatsEntry[] = useMemo(() => genresData?.topGenres ?? [], [genresData]);
   const recentEntries: RecentlyPlayedEntry[] = useMemo(() => recentData?.recentlyPlayedDetailed ?? [], [recentData]);
   const songById = useMemo(() => new Map(songs.map((song) => [song.id, song])), [songs]);
+  const artistArtworkByKey = useMemo(() => {
+    const songsByArtist = new Map<string, Song[]>();
+
+    for (const song of songs) {
+      const artistName = normalizeArtistName(song.artistName);
+
+      if (!artistName || !getSongArtworkUrl(song)) {
+        continue;
+      }
+
+      const candidates = songsByArtist.get(artistName);
+      if (candidates) {
+        candidates.push(song);
+      } else {
+        songsByArtist.set(artistName, [song]);
+      }
+    }
+
+    const selected = new Map<string, string>();
+
+    for (const entry of artistEntries) {
+      const candidates = songsByArtist.get(normalizeArtistName(entry.label));
+      if (!candidates?.length) {
+        continue;
+      }
+
+      const index = stableRandomIndex(artistArtworkSeed, entry.key, candidates.length);
+      const artworkUrl = getSongArtworkUrl(candidates[index]);
+
+      if (artworkUrl) {
+        selected.set(entry.key, artworkUrl);
+      }
+    }
+
+    return selected;
+  }, [artistArtworkSeed, artistEntries, songs]);
   const recentSongsForPlayback = useMemo(() => {
     const seen = new Set<string>();
     const orderedSongs: Song[] = [];
@@ -276,43 +338,47 @@ export function StatsPage({
 
     return (
       <ol className={showArtwork ? "ranking-list ranking-list--with-art" : "ranking-list"}>
-        {entries.map((entry) => (
-          <li
-            key={entry.key}
-            className={showArtwork ? "ranking-list__item ranking-list__item--with-art" : "ranking-list__item"}
-          >
-            <span className="ranking-list__position">#{entry.rank}</span>
+        {entries.map((entry) => {
+          const artworkUrl = showArtwork ? artistArtworkByKey.get(entry.key) : undefined;
 
-            {showArtwork ? (
-              <span className="ranking-list__art" aria-hidden="true">
-                <span className="ranking-list__art-fallback">
-                  {entry.label.trim().charAt(0).toUpperCase() || "?"}
+          return (
+            <li
+              key={entry.key}
+              className={showArtwork ? "ranking-list__item ranking-list__item--with-art" : "ranking-list__item"}
+            >
+              <span className="ranking-list__position">#{entry.rank}</span>
+
+              {showArtwork ? (
+                <span className="ranking-list__art" aria-hidden="true">
+                  <span className="ranking-list__art-fallback">
+                    {entry.label.trim().charAt(0).toUpperCase() || "?"}
+                  </span>
+                  {artworkUrl ? (
+                    <img
+                      key={artworkUrl}
+                      src={artworkUrl}
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                      fetchPriority="low"
+                      draggable={false}
+                      onError={(event) => { event.currentTarget.style.display = "none"; }}
+                    />
+                  ) : null}
                 </span>
-                {entry.thumbnailUrl ? (
-                  <img
-                    key={entry.thumbnailUrl}
-                    src={entry.thumbnailUrl}
-                    alt=""
-                    loading="lazy"
-                    decoding="async"
-                    fetchPriority="low"
-                    draggable={false}
-                    onError={(event) => { event.currentTarget.style.display = "none"; }}
-                  />
-                ) : null}
-              </span>
-            ) : null}
+              ) : null}
 
-            <div className="ranking-list__info">
-              <strong>{entry.label}</strong>
-              {showSubtitle && entry.subtitle ? <small>{entry.subtitle}</small> : null}
-            </div>
+              <div className="ranking-list__info">
+                <strong>{entry.label}</strong>
+                {showSubtitle && entry.subtitle ? <small>{entry.subtitle}</small> : null}
+              </div>
 
-            <span className="ranking-list__count">{entry.playCount} plays</span>
+              <span className="ranking-list__count">{entry.playCount} plays</span>
 
-            <RankChange entry={entry} />
-          </li>
-        ))}
+              <RankChange entry={entry} />
+            </li>
+          );
+        })}
       </ol>
     );
   }
