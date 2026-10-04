@@ -1499,12 +1499,15 @@ export function App() {
     return refreshed;
   }
 
-  function startSong(song: Song, options: { preserveContext?: boolean } = {}) {
+  function startSong(
+    song: Song,
+    options: { preserveContext?: boolean; followDetailsPlayback?: boolean } = {}
+  ) {
     const previousSong = currentSongRef.current;
     const shouldFollowPlaybackInDetails =
       Boolean(previousSong) &&
       songDetailsStore.getSnapshot()?.song.id === previousSong?.id &&
-      nowPlayingStore.getState().isPlaying;
+      (options.followDetailsPlayback === true || nowPlayingStore.getState().isPlaying);
 
     // Commit the user's play request immediately. Do not wait for a network refresh here:
     // delaying the state change makes rapid song clicks race each other and can outlive
@@ -1752,7 +1755,11 @@ export function App() {
       setPlayHistory(nextHistory);
     }
 
-    startSong(nextSong, { preserveContext: true });
+    // Natural `ended` advances resolve asynchronously, after Player has already
+    // published its stopped state. Explicitly preserve the same modal-follow
+    // behavior used by an in-progress manual next action: only a modal showing
+    // the song that just advanced is moved to the resolved next song.
+    startSong(nextSong, { preserveContext: true, followDetailsPlayback: true });
     markPlayed(nextSong);
 
     if (nextSong.id !== latestCurrentSong?.id) {
@@ -3069,3 +3076,6 @@ export function App() {
     </>
   );
 }
+
+
+

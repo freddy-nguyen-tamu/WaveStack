@@ -59,13 +59,14 @@ function clearPageCaretOutsideAllowedZones() {
     return;
   }
 
-  // Lyrics remain intentionally selectable/copyable. Everywhere else the app
-  // is a keyboard-control surface, so a document caret must never become the
-  // hidden owner of Space/Z/X/arrow keystrokes.
-  if (
-    isLyricsSelectionTarget(selection.anchorNode) &&
-    isLyricsSelectionTarget(selection.focusNode)
-  ) {
+  // Lyrics remain intentionally selectable/copyable. Keep any selection that
+  // started in the lyrics even when its moving focus endpoint leaves the lyric
+  // element while the user drags above/below the modal or outside the browser
+  // content area. Requiring both endpoints to stay inside the lyrics caused the
+  // selectionchange guard to erase a legitimate in-progress lyric selection.
+  // Everywhere else the app remains a keyboard-control surface, so a document
+  // caret must never become the hidden owner of Space/Z/X/arrow keystrokes.
+  if (isLyricsSelectionTarget(selection.anchorNode)) {
     return;
   }
 
@@ -154,3 +155,6 @@ async function bootstrap() {
 }
 
 void bootstrap();
+
+
+
