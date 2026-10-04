@@ -1,6 +1,7 @@
 
 
 
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ApolloQueryResult, useApolloClient, useMutation, useQuery } from "@apollo/client";
 import { Activity, Clock, Heart, ListMusic, Music2, RefreshCw, TrendingUp, Upload } from "lucide-react";
@@ -2410,7 +2411,11 @@ export function App() {
   }> {
     const result = await apolloClient.query<RecommendedSongsPageData, RecommendedSongsPageVariables>({
       query: RECOMMENDED_SONGS_QUERY,
-      fetchPolicy: "network-only",
+      // Recommendation pages are an ephemeral infinite-scroll feed. Caching
+      // every page made Apollo retain the full wall and previously triggered a
+      // full-cache localStorage serialization on each append. Keep this feed out
+      // of the normalized cache; Dashboard already owns the returned items.
+      fetchPolicy: "no-cache",
       variables: {
         limit: RECOMMENDATION_PAGE_SIZE,
         offset,
@@ -3053,5 +3058,4 @@ export function App() {
     </>
   );
 }
-
 

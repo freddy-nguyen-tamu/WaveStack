@@ -1,3 +1,4 @@
+
 import {
   ApolloClient,
   InMemoryCache,
@@ -5,7 +6,6 @@ import {
   gql
 } from "@apollo/client";
 import { setContext } from "@apollo/client/link/context";
-import { persistCache, LocalStorageWrapper } from "apollo3-cache-persist";
 
 const httpLink = createHttpLink({
   uri: import.meta.env.VITE_GRAPHQL_URL ?? "http://localhost:3000/graphql"
@@ -65,13 +65,41 @@ export const apolloClient = new ApolloClient({
   }
 });
 
+const APOLLO_CACHE_STORAGE_KEY = "wavestack:apollo-cache";
+const MAX_RESTORABLE_APOLLO_CACHE_CHARS = 1_500_000;
+
 export async function restoreApolloCache(): Promise<void> {
-  await persistCache({
-    cache: apolloCache as unknown as Parameters<typeof persistCache>[0]["cache"],
-    storage: new LocalStorageWrapper(window.localStorage),
-    key: "wavestack:apollo-cache",
-    maxSize: 6 * 1024 * 1024
-  });
+  // Do not install apollo3-cache-persist's continuous localStorage writer. The
+  // Dashboard can legitimately discover hundreds of songs; serializing the
+  // whole normalized cache after every query grew past localStorage quota and
+  // then kept retrying expensive writes on the main thread. Restore a small
+  // legacy snapshot once, then keep Apollo's runtime cache memory-only.
+  try {
+    const serialized = window.localStorage.getItem(APOLLO_CACHE_STORAGE_KEY);
+
+    if (!serialized) {
+      return;
+    }
+
+    if (serialized.length > MAX_RESTORABLE_APOLLO_CACHE_CHARS) {
+      window.localStorage.removeItem(APOLLO_CACHE_STORAGE_KEY);
+      return;
+    }
+
+    const restored = JSON.parse(serialized) as Record<string, unknown>;
+    apolloCache.restore(restored);
+
+    // The old persistence layer is intentionally retired. Removing the legacy
+    // snapshot also immediately returns its quota to the rest of WaveStack.
+    window.localStorage.removeItem(APOLLO_CACHE_STORAGE_KEY);
+  } catch (error) {
+    console.warn("Could not restore the legacy Apollo cache", error);
+    try {
+      window.localStorage.removeItem(APOLLO_CACHE_STORAGE_KEY);
+    } catch {
+      // Ignore storage cleanup failures; runtime Apollo cache still works.
+    }
+  }
 }
 
 export function uploadTrack(

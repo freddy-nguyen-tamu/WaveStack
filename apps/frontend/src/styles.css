@@ -7342,27 +7342,26 @@ article.dashboard-page .song-tile,
   cursor: text !important;
 }
 
-/* Dashboard native rendering containment. Chromium can skip layout/paint for
-   distant cards itself; do not maintain one IntersectionObserver target per
-   recommendation. A realistic intrinsic block size prevents the old 96px
-   placeholder from causing geometry corrections as cards approach view. */
+/* Dashboard windowing. The profiler proved that native content-visibility on
+   individual grid cards caused large geometry corrections while the wall grew:
+   document height changed by thousands of pixels as skipped cards were revealed.
+   Keep only a small row window mounted instead. The two lightweight spacers
+   preserve the full scroll range while the real card DOM remains bounded. */
+article.dashboard-page .dashboard-song-masonry--virtual {
+  overflow-anchor: none;
+}
+article.dashboard-page .dashboard-virtual-spacer {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+  pointer-events: none;
+  contain: strict;
+}
 article.dashboard-page .dashboard-song-tile {
-  content-visibility: auto !important;
+  content-visibility: visible !important;
   contain: layout style paint;
-  contain-intrinsic-block-size: auto clamp(15rem, 23vw, 26rem);
-}
-@media (max-width: 1180px) {
-  article.dashboard-page .dashboard-song-tile {
-    contain-intrinsic-block-size: auto clamp(16rem, 29vw, 29rem);
-  }
-}
-@media (max-width: 760px) {
-  article.dashboard-page .dashboard-song-tile {
-    contain-intrinsic-block-size: auto clamp(18rem, 52vw, 34rem);
-  }
-}
-@media (max-width: 560px) {
-  article.dashboard-page .dashboard-song-tile {
-    contain-intrinsic-block-size: auto clamp(22rem, 112vw, 44rem);
-  }
+  contain-intrinsic-size: none !important;
+  height: var(--dashboard-virtual-row-height);
+  max-height: var(--dashboard-virtual-row-height);
+  overflow: clip;
 }
