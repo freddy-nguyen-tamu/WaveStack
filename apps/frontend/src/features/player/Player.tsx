@@ -861,6 +861,13 @@ export function Player({
         return false;
       }
 
+      // Lyrics are selectable text, not an editor. Selection/copy must never
+      // take ownership of the global playback shortcuts, even if a browser
+      // reports a nested highlighted <mark> as the keyboard event target.
+      if (target.closest(".song-modal__lyrics-text")) {
+        return false;
+      }
+
       const tagName = target.tagName.toLowerCase();
       if (
         tagName === "input" ||

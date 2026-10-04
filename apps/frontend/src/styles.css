@@ -7333,13 +7333,18 @@ article.dashboard-page .song-tile,
 #root input[type="url"],
 #root input[type="password"],
 #root input[type="number"],
-#root textarea,
-#root .song-modal__lyrics-text,
-#root .song-modal__lyrics-text * {
+#root textarea {
   caret-color: auto !important;
   user-select: text !important;
   -webkit-user-select: text !important;
   cursor: text !important;
+}
+#root .song-modal__lyrics-text,
+#root .song-modal__lyrics-text * {
+  caret-color: transparent !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  cursor: default !important;
 }
 
 /* Dashboard scroll-performance pass. Keep every recommendation card mounted so
@@ -7355,3 +7360,45 @@ article.dashboard-page .dashboard-song-tile {
   contain: layout style paint;
   contain-intrinsic-size: none !important;
 }
+
+/* Dashboard pointer-hover scroll performance. */
+/*
+   The Frontier card skin added whole-card hover background transitions plus a
+   translateY lift to the song identity button. During wheel scrolling the
+   stationary pointer continually enters/leaves cards as they move underneath
+   it, which starts overlapping paint/compositing work even though no data is
+   loading. Keep dashboard hover feedback paint-cheap: no card movement, no
+   animated surface/pseudo-overlay repaint, only a small title-color cue.
+*/
+article.dashboard-page .dashboard-song-tile,
+article.dashboard-page .dashboard-song-tile .song-tile__open,
+article.dashboard-page .dashboard-song-tile .song-tile__open::before {
+  transition: none !important;
+}
+
+article.dashboard-page .dashboard-song-tile:hover:not([data-ws-pointer-activated]),
+html[data-theme="dark"] article.dashboard-page .dashboard-song-tile:hover:not([data-ws-pointer-activated]) {
+  background: var(--frontier-surface-strong) !important;
+  color: var(--color-ink) !important;
+}
+
+article.dashboard-page .dashboard-song-tile .song-tile__open:hover:not(:disabled):not([data-ws-pointer-activated]) {
+  background: transparent !important;
+  color: var(--color-ink) !important;
+  transform: none !important;
+}
+
+article.dashboard-page .dashboard-song-tile .song-tile__open:hover:not(:disabled):not([data-ws-pointer-activated])::before {
+  opacity: 0 !important;
+}
+
+article.dashboard-page .dashboard-song-tile:hover:not([data-ws-pointer-activated]) .song-tile__overlay strong {
+  color: var(--color-red) !important;
+}
+
+article.dashboard-page .dashboard-song-tile:hover:not([data-ws-pointer-activated]) .song-tile__overlay small,
+article.dashboard-page .dashboard-song-tile:hover:not([data-ws-pointer-activated]) .song-tile__duration,
+article.dashboard-page .dashboard-song-tile:hover:not([data-ws-pointer-activated]) .song-tile__reason {
+  color: var(--color-muted) !important;
+}
+
