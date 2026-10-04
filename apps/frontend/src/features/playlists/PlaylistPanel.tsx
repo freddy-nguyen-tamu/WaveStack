@@ -1,6 +1,6 @@
 
 import { ListPlus, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../../App";
 import { formatSongDisplayName, matchesSongSearch } from "../../song-format";
 import { SongListRow } from "../../components/SongListRow";
@@ -46,6 +46,7 @@ export function PlaylistPanel({
   const [query, setQuery] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const regionRef = useStableScrollRegion(query.trim() !== searchQuery);
+  const addSongsSectionRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     const timer = window.setTimeout(() => setSearchQuery(query.trim()), 300);
     return () => window.clearTimeout(timer);
@@ -242,7 +243,7 @@ export function PlaylistPanel({
         </section>
       ) : null}
 
-      <section>
+      <section ref={addSongsSectionRef}>
         <h3>Add songs to playlist</h3>
 
         <div className="playlist-panel__search">
@@ -282,6 +283,7 @@ export function PlaylistPanel({
           pageCount={pageCount}
           onPageChange={setPage}
           label="Playlist library pagination"
+          scrollTargetRef={addSongsSectionRef}
         />
       </section>
     </article>

@@ -24,13 +24,14 @@ type PlayerPlaybackState = Pick<
 >;
 
 // Startup recovery must be fast enough that a transient zero-time stall never
-// turns into a multi-second dead period. The predecessor started immediately;
-// the previous 2.8s + 1.6s staged watchdog made the regression itself visible.
-// One tiny range-forcing seek is enough before falling back to a fresh URL.
+// turns into a multi-second dead period. Keep the range-forcing seek extremely
+// small and always relative to the media element's current position: an older
+// absolute 0.12s seek could visibly/audibly skip the opening, and if buffering
+// happened after playback had already advanced it could even rewind the song.
 const STARTUP_STALL_TIMEOUT_MS = 750;
 const STARTUP_STALL_RECHECK_MS = 700;
 const STARTUP_PROGRESS_EPSILON_SECONDS = 0.06;
-const STARTUP_RECOVERY_SEEKS_SECONDS = [0.12] as const;
+const STARTUP_RECOVERY_NUDGES_SECONDS = [0.02] as const;
 
 type PlayerProps = {
   activeSong: Song;
@@ -341,16 +342,22 @@ export function Player({
     }
   }
 
-  function startupRecoveryTarget(audio: HTMLAudioElement, requestedSeconds: number): number {
-    let target = requestedSeconds;
+  function startupRecoveryTarget(audio: HTMLAudioElement, nudgeSeconds: number): number {
+    const currentPosition = Number.isFinite(audio.currentTime)
+      ? Math.max(0, audio.currentTime)
+      : Math.max(0, startupStallBaselineRef.current);
+    let target = currentPosition + nudgeSeconds;
 
-    // If the browser says the first seekable/buffered byte starts later than
-    // zero, respect that instead of repeatedly requesting an impossible point.
+    // The recovery must never jump backward. The previous absolute 0.12s target
+    // could rewind a song that had already made a little progress before a
+    // startup `waiting` event, creating the audible repeat/glitch at the start.
     if (audio.seekable.length > 0) {
-      target = Math.max(target, audio.seekable.start(0) + 0.02);
-      target = Math.min(target, Math.max(audio.seekable.end(0) - 0.05, 0));
+      const seekableStart = Math.max(0, audio.seekable.start(0));
+      const seekableEnd = Math.max(seekableStart, audio.seekable.end(0));
+      target = Math.max(target, seekableStart + Math.min(nudgeSeconds, 0.02));
+      target = Math.min(target, Math.max(seekableEnd - 0.01, seekableStart));
     } else if (audio.buffered.length > 0) {
-      target = Math.max(target, audio.buffered.start(0) + 0.02);
+      target = Math.max(target, audio.buffered.start(0) + Math.min(nudgeSeconds, 0.02));
     }
 
     const knownDuration = Number.isFinite(audio.duration) && audio.duration > 0
@@ -358,10 +365,10 @@ export function Player({
       : latestActiveSongRef.current.durationSeconds;
 
     if (knownDuration > 0) {
-      target = Math.min(target, Math.max(knownDuration - 0.05, 0));
+      target = Math.min(target, Math.max(knownDuration - 0.01, 0));
     }
 
-    return Math.max(0, target);
+    return Math.max(currentPosition, target);
   }
 
   function noteStartupPlaybackProgress() {
@@ -437,13 +444,13 @@ export function Player({
     try {
       const step = startupStallRecoveryStepRef.current;
 
-      if (step < STARTUP_RECOVERY_SEEKS_SECONDS.length) {
-        const target = startupRecoveryTarget(audio, STARTUP_RECOVERY_SEEKS_SECONDS[step]);
+      if (step < STARTUP_RECOVERY_NUDGES_SECONDS.length) {
+        const target = startupRecoveryTarget(audio, STARTUP_RECOVERY_NUDGES_SECONDS[step]);
         startupStallRecoveryStepRef.current = step + 1;
 
-        // This is deliberately a very small staged skip. It reproduces the
-        // user's successful manual recovery (which forces a new byte-range
-        // request) while minimizing how much of the beginning can be lost.
+        // This is deliberately a tiny forward nudge. It reproduces the manual
+        // seek recovery that forces a new byte-range request without skipping an
+        // audible chunk of the intro or ever rewinding already-played audio.
         startupStallBaselineRef.current = target;
         pendingSeekRef.current = null;
 
@@ -1461,4 +1468,3 @@ export function Player({
     </>
   );
 }
-

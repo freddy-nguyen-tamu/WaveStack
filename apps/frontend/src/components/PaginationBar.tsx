@@ -1,15 +1,19 @@
+import type { RefObject } from "react";
+
 type PaginationBarProps = {
   currentPage: number;
   pageCount: number;
   onPageChange: (page: number) => void;
   label?: string;
+  scrollTargetRef?: RefObject<HTMLElement | null>;
 };
 
 export function PaginationBar({
   currentPage,
   pageCount,
   onPageChange,
-  label = "Pagination"
+  label = "Pagination",
+  scrollTargetRef
 }: PaginationBarProps) {
   if (pageCount <= 1) {
     return null;
@@ -26,9 +30,17 @@ export function PaginationBar({
 
     onPageChange(nextPage);
 
-    // A pagination click replaces the visible result page, so start that new page
-    // at the top instead of leaving the user stranded at the old page's footer.
+    // A pagination click replaces the visible result page. Most routes should
+    // return to the route top, but embedded paginated sections can provide their
+    // own start element so pagination does not throw the user out of that section.
     window.requestAnimationFrame(() => {
+      const scrollTarget = scrollTargetRef?.current;
+
+      if (scrollTarget) {
+        scrollTarget.scrollIntoView({ block: "start", behavior: "auto" });
+        return;
+      }
+
       window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     });
   }
