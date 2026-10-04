@@ -1,4 +1,3 @@
-
 /* WaveStack canonical stylesheet: unused selectors and superseded declarations removed. */
 @font-face {
   font-family: "WaveStackMix";
@@ -7319,4 +7318,35 @@ article.dashboard-page .song-tile,
   .guest-personalization-notice button {
     width: 100%;
   }
+}
+
+
+
+
+/* Keyboard-first caret policy. Normal WaveStack chrome and content are not
+   editable text surfaces, so they must never expose a blinking document caret
+   or text selection that can steal playback shortcuts. Text-entry fields and
+   the lyrics body inside the song modal are the only intentional exceptions. */
+#root,
+#root * {
+  caret-color: transparent !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+#root input:not([type]),
+#root input[type="text"],
+#root input[type="search"],
+#root input[type="email"],
+#root input[type="tel"],
+#root input[type="url"],
+#root input[type="password"],
+#root input[type="number"],
+#root textarea,
+#root [contenteditable="true"],
+#root [contenteditable="plaintext-only"],
+#root .song-modal__lyrics-text,
+#root .song-modal__lyrics-text * {
+  caret-color: auto !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
 }

@@ -1,4 +1,3 @@
-
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { ApolloProvider } from "@apollo/client";
@@ -9,43 +8,122 @@ import { installPointerFocusPolicy } from "./hooks/pointerFocus";
 import { installScrollOwnershipPolicy } from "./hooks/wheelHandoff";
 import "./styles.css";
 
+const TEXT_ENTRY_INPUT_TYPES = new Set([
+  "text",
+  "search",
+  "email",
+  "tel",
+  "url",
+  "password",
+  "number"
+]);
+
 function isTextEntryTarget(target: Element | null): boolean {
-  return target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    target instanceof HTMLSelectElement ||
-    (target instanceof HTMLElement && target.isContentEditable);
+  if (target instanceof HTMLTextAreaElement) {
+    return true;
+  }
+
+  if (target instanceof HTMLInputElement) {
+    return TEXT_ENTRY_INPUT_TYPES.has(target.type || "text");
+  }
+
+  return target instanceof HTMLElement && target.isContentEditable;
 }
 
-function primeAppKeyboardFocus() {
-  const root = document.getElementById("root");
+function nodeElement(node: Node | null): Element | null {
+  if (node instanceof Element) {
+    return node;
+  }
 
-  if (!(root instanceof HTMLElement) || isTextEntryTarget(document.activeElement)) {
+  return node?.parentElement ?? null;
+}
+
+function isLyricsSelectionTarget(target: Node | null): boolean {
+  return Boolean(nodeElement(target)?.closest(".song-modal__lyrics-text"));
+}
+
+function clearPageCaretOutsideAllowedZones() {
+  if (isTextEntryTarget(document.activeElement)) {
     return;
   }
 
-  const active = document.activeElement;
-  const pageAlreadyOwnsMeaningfulFocus =
-    active instanceof HTMLElement &&
-    active !== document.body &&
-    active !== document.documentElement &&
-    active !== root;
-
-  if (pageAlreadyOwnsMeaningfulFocus) {
+  const selection = document.getSelection();
+  if (!selection || selection.rangeCount === 0) {
     return;
   }
 
-  // A browser refresh can leave keyboard focus on browser chrome even though
-  // the WaveStack tab is visible. Ask the top-level browsing context for focus
-  // and give the non-tabbable app root a programmatic focus target so global
-  // shortcuts are live immediately without requiring a throwaway page click.
-  window.focus();
-  root.tabIndex = -1;
-  root.focus({ preventScroll: true });
+  // Lyrics remain intentionally selectable/copyable. Everywhere else the app
+  // is a keyboard-control surface, so a document caret must never become the
+  // hidden owner of Space/Z/X/arrow keystrokes.
+  if (
+    isLyricsSelectionTarget(selection.anchorNode) &&
+    isLyricsSelectionTarget(selection.focusNode)
+  ) {
+    return;
+  }
+
+  selection.removeAllRanges();
 }
 
-function scheduleAppKeyboardFocus() {
+function installCaretSelectionPolicy(): () => void {
+  const onSelectStart = (event: Event) => {
+    const target = event.target;
+
+    if (
+      target instanceof Element &&
+      (isTextEntryTarget(target) || target.closest(".song-modal__lyrics-text"))
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+  };
+
+  const onSelectionChange = () => {
+    clearPageCaretOutsideAllowedZones();
+  };
+
+  const onPointerDown = (event: PointerEvent) => {
+    const target = event.target;
+
+    if (
+      target instanceof Element &&
+      (isTextEntryTarget(target) || target.closest(".song-modal__lyrics-text"))
+    ) {
+      return;
+    }
+
+    clearPageCaretOutsideAllowedZones();
+  };
+
+  document.addEventListener("selectstart", onSelectStart, true);
+  document.addEventListener("selectionchange", onSelectionChange);
+  document.addEventListener("pointerdown", onPointerDown, true);
+
+  return () => {
+    document.removeEventListener("selectstart", onSelectStart, true);
+    document.removeEventListener("selectionchange", onSelectionChange);
+    document.removeEventListener("pointerdown", onPointerDown, true);
+  };
+}
+
+function releaseRestoredNonEditorFocus() {
   window.requestAnimationFrame(() => {
-    window.requestAnimationFrame(primeAppKeyboardFocus);
+    const active = document.activeElement;
+
+    // Browsers may restore a previously focused link after reload/navigation.
+    // Do not let the WaveStack brand (or any other non-editor) become an
+    // automatic keyboard owner. Explicit keyboard Tab focus still works later.
+    if (
+      active instanceof HTMLElement &&
+      active !== document.body &&
+      active !== document.documentElement &&
+      !isTextEntryTarget(active)
+    ) {
+      active.blur();
+    }
+
+    clearPageCaretOutsideAllowedZones();
   });
 }
 
@@ -55,6 +133,7 @@ async function bootstrap() {
   // editing, native select behavior, range dragging, and dialog focus trapping.
   installPointerFocusPolicy();
   installScrollOwnershipPolicy();
+  installCaretSelectionPolicy();
 
   // Discourage ordinary image copying without interfering with lyric selection.
   for (const eventName of ["dragstart", "contextmenu", "selectstart"] as const) {
@@ -77,13 +156,10 @@ async function bootstrap() {
     </React.StrictMode>
   );
 
-  scheduleAppKeyboardFocus();
-  window.addEventListener("pageshow", scheduleAppKeyboardFocus);
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") {
-      scheduleAppKeyboardFocus();
-    }
-  });
+  releaseRestoredNonEditorFocus();
 }
 
 void bootstrap();
+
+
+

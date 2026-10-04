@@ -1,4 +1,3 @@
-
 import { ArrowDown, ArrowUp, Search, X } from "lucide-react";
 import {
   useEffect,
@@ -35,6 +34,9 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
   const inputRef = useRef<HTMLInputElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const activeMatchRef = useRef<HTMLElement>(null);
+  const isComposingRef = useRef(false);
+  const pendingEmptyCloseRef = useRef<number | null>(null);
+  const deleteIntentRef = useRef(false);
   const inputId = useId();
 
   const matches = useMemo(() => {
@@ -92,7 +94,15 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
     setFocusRequest(value => value + 1);
   }
 
+  function cancelPendingEmptyClose() {
+    if (pendingEmptyCloseRef.current !== null) {
+      window.clearTimeout(pendingEmptyCloseRef.current);
+      pendingEmptyCloseRef.current = null;
+    }
+  }
+
   function closeSearch(closedByKeyboard = false) {
+    cancelPendingEmptyClose();
     // Restore the opener only for a fully keyboard-driven open/close cycle.
     // Pointer-opened or pointer-closed searches must never leave the magnifier
     // focused after the text field disappears.
@@ -103,12 +113,32 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
     setSelected(0);
   }
 
+  function scheduleCloseAfterConfirmedDeletion() {
+    cancelPendingEmptyClose();
+
+    // Vietnamese and other IMEs can briefly report an empty input while they
+    // replace the previous text with a composed form. Give that replacement a
+    // short window to arrive; any subsequent input/composition event cancels
+    // this close. A genuine Backspace/Delete/Cut to empty remains empty and
+    // therefore closes exactly as before.
+    pendingEmptyCloseRef.current = window.setTimeout(() => {
+      pendingEmptyCloseRef.current = null;
+      const input = inputRef.current;
+
+      if (!isComposingRef.current && input && input.value === "") {
+        closeSearch(true);
+      }
+    }, 80);
+  }
+
   function navigate(direction: number) {
     if (matches.length) {
       setSelected((current + direction + matches.length) % matches.length);
       setScrollRequest(value => value + 1);
     }
   }
+
+  useEffect(() => () => cancelPendingEmptyClose(), []);
 
   useEffect(() => {
     function handleFind(event: KeyboardEvent) {
@@ -197,17 +227,45 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
         placeholder="Find in lyrics"
         autoComplete="off"
         spellCheck={false}
+        onCompositionStart={() => {
+          isComposingRef.current = true;
+          deleteIntentRef.current = false;
+          cancelPendingEmptyClose();
+        }}
+        onCompositionEnd={event => {
+          isComposingRef.current = false;
+          deleteIntentRef.current = false;
+          cancelPendingEmptyClose();
+          // Keep React state aligned with the IME's final committed value.
+          // Composition itself never auto-closes the find UI, even if an IME
+          // briefly or finally commits an empty intermediate value.
+          setQuery(event.currentTarget.value);
+          setSelected(0);
+        }}
         onChange={event => {
+          cancelPendingEmptyClose();
+
           const nextQuery = event.target.value;
-          if (!nextQuery.trim() && query.trim()) {
-            closeSearch(true);
-            return;
-          }
+          const nativeEvent = event.nativeEvent as InputEvent;
+          const inputType = nativeEvent.inputType ?? "";
+          const composing = nativeEvent.isComposing || isComposingRef.current;
+          const explicitDeletion = inputType.startsWith("delete") || deleteIntentRef.current;
+
           setQuery(nextQuery);
           setSelected(0);
+          deleteIntentRef.current = false;
+
+          // Auto-close only for a stable, explicit user deletion to empty.
+          // Do not treat IME replacement/composition transitions as deletion.
+          if (nextQuery === "" && query !== "" && explicitDeletion && !composing) {
+            scheduleCloseAfterConfirmedDeletion();
+          }
         }}
         onKeyDown={event => {
           if (event.nativeEvent.isComposing) return;
+
+          deleteIntentRef.current = event.key === "Backspace" || event.key === "Delete";
+
           if (["ArrowUp", "ArrowDown", "Enter"].includes(event.key)) {
             event.preventDefault();
             event.stopPropagation();
@@ -265,3 +323,4 @@ export function LyricSearch({ lyrics, loadingLabel, children }: LyricSearchProps
     </section>
   );
 }
+
