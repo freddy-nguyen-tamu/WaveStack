@@ -86,7 +86,7 @@ export async function restoreApolloCache(): Promise<void> {
       return;
     }
 
-    const restored = JSON.parse(serialized) as Record<string, unknown>;
+    const restored = JSON.parse(serialized) as Parameters<typeof apolloCache.restore>[0];
     apolloCache.restore(restored);
 
     // The old persistence layer is intentionally retired. Removing the legacy
