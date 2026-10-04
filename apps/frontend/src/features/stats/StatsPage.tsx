@@ -1,4 +1,3 @@
-
 import { useEffect, useMemo, useState } from "react";
 import { LoadingStatus } from "../../components/LoadingStatus";
 import { useLazyQuery, useMutation, useQuery } from "@apollo/client";
@@ -270,16 +269,39 @@ export function StatsPage({
     );
   }
 
-  function renderRankingList(entries: StatsEntry[], showSubtitle = true) {
+  function renderRankingList(entries: StatsEntry[], showSubtitle = true, showArtwork = false) {
     if (!entries.length) {
       return <p className="stats-page__empty">No data for this period yet.</p>;
     }
 
     return (
-      <ol className="ranking-list">
+      <ol className={showArtwork ? "ranking-list ranking-list--with-art" : "ranking-list"}>
         {entries.map((entry) => (
-          <li key={entry.key} className="ranking-list__item">
+          <li
+            key={entry.key}
+            className={showArtwork ? "ranking-list__item ranking-list__item--with-art" : "ranking-list__item"}
+          >
             <span className="ranking-list__position">#{entry.rank}</span>
+
+            {showArtwork ? (
+              <span className="ranking-list__art" aria-hidden="true">
+                <span className="ranking-list__art-fallback">
+                  {entry.label.trim().charAt(0).toUpperCase() || "?"}
+                </span>
+                {entry.thumbnailUrl ? (
+                  <img
+                    key={entry.thumbnailUrl}
+                    src={entry.thumbnailUrl}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    fetchPriority="low"
+                    draggable={false}
+                    onError={(event) => { event.currentTarget.style.display = "none"; }}
+                  />
+                ) : null}
+              </span>
+            ) : null}
 
             <div className="ranking-list__info">
               <strong>{entry.label}</strong>
@@ -486,7 +508,7 @@ export function StatsPage({
 
         {tab === "ARTISTS" && (
           <>
-            {artistsLoading ? <LoadingStatus /> : renderRankingList(artistEntries)}
+            {artistsLoading ? <LoadingStatus /> : renderRankingList(artistEntries, true, true)}
           </>
         )}
 

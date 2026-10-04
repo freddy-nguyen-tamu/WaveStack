@@ -1,5 +1,3 @@
-
-
 import { memo, type SyntheticEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Song } from "../App";
 import { LoaderCircle } from "lucide-react";
@@ -273,7 +271,19 @@ export const SongArtwork = memo(function SongArtwork({
     setSourceIndex(0);
   }, [song.id, sources.join("|")]);
 
+  const src = sources[sourceIndex];
+  const shouldApplyNowPlayingStyle = !disableNowPlayingStyle && nowPlaying.isNowPlaying;
+
   useEffect(() => {
+    // Viewport tracking only matters for the actively spinning artwork. The
+    // recommendation wall can contain hundreds of SongArtwork instances;
+    // observing every one made scroll intersections trigger React state updates
+    // even though non-playing cards never consume the visibility state.
+    if (!shouldApplyNowPlayingStyle) {
+      setIsNearViewport(false);
+      return;
+    }
+
     if (eager) {
       setIsNearViewport(true);
       return;
@@ -289,7 +299,7 @@ export const SongArtwork = memo(function SongArtwork({
     return observeArtwork(node, visible => {
       setIsNearViewport(visible);
     });
-  }, [song.id, eager]);
+  }, [song.id, eager, shouldApplyNowPlayingStyle]);
 
   // Always give the browser the best thumbnail URL immediately. Native image
   // lazy-loading is already optimized for the real viewport and can begin
@@ -297,8 +307,6 @@ export const SongArtwork = memo(function SongArtwork({
   // gate withheld `src` until after React effects ran, then `loading="lazy"`
   // applied a second gate, which made cold visits show rows of spinners before
   // any artwork request could make useful progress.
-  const src = sources[sourceIndex];
-  const shouldApplyNowPlayingStyle = !disableNowPlayingStyle && nowPlaying.isNowPlaying;
   const displaySrc =
     shouldApplyNowPlayingStyle && src && normalizedDiscImage?.source === src
       ? normalizedDiscImage.src
@@ -420,7 +428,9 @@ export const SongArtwork = memo(function SongArtwork({
           }}
         />
       ) : null}
-      {src && loadedSrc !== displaySrc && isNearViewport ? <LoaderCircle className="song-artwork__loading" aria-hidden="true" /> : null}
+      {src && loadedSrc !== displaySrc && (eager || (shouldApplyNowPlayingStyle && isNearViewport)) ? (
+        <LoaderCircle className="song-artwork__loading" aria-hidden="true" />
+      ) : null}
     </span>
   );
 });

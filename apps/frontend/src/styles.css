@@ -7137,3 +7137,96 @@ html[data-theme="dark"] .route-sticker {
 :where(input, select, textarea):focus-visible {
   border-color: var(--frontier-border-strong) !important;
 }
+
+/* Dashboard + Stats scroll-performance pass */
+/* These two long scrolling surfaces used the generic 96px content-visibility
+   placeholder. Dashboard tiles are several hundred pixels tall, so Chrome had
+   to repeatedly correct their geometry as they entered the viewport. Keep
+   exact layout geometry and isolate each item instead of revealing it late. */
+article.dashboard-page .song-tile,
+.stats-page .ranking-list__item {
+  content-visibility: visible;
+  contain: layout style;
+}
+
+/* The sticky route ribbon moves against the viewport. Backdrop blur forces a
+   costly backdrop repaint while the long dashboard/stats lists scroll. The
+   opaque-looking ribbon keeps the same visual treatment without live blur. */
+.dashboard-page .route-sticker,
+.stats-page .route-sticker {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: color-mix(in srgb, var(--color-red) 96%, transparent);
+}
+
+/* Artist rankings use the thumbnail already returned by TOP_ARTISTS_QUERY.
+   Images stay lazy/async in React so the richer row does not reintroduce the
+   scroll-time decoding pressure this performance pass removes. */
+.stats-page .ranking-list__item--with-art {
+  grid-template-columns: 4rem 4.75rem minmax(0, 1fr) auto auto;
+  min-height: 6rem;
+}
+.stats-page .ranking-list__art {
+  position: relative;
+  display: grid;
+  width: 4.75rem;
+  aspect-ratio: 1 / 1;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--frontier-border);
+  border-radius: var(--frontier-radius-md);
+  background: var(--frontier-surface-muted);
+  color: var(--color-muted);
+}
+.stats-page .ranking-list__art-fallback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.stats-page .ranking-list__art img {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.stats-page .ranking-list__item--with-art .ranking-list__info {
+  min-width: 0;
+}
+
+@media (max-width: 760px) {
+  .stats-page .ranking-list__item--with-art {
+    grid-template-columns: 3rem 4rem minmax(0, 1fr);
+    gap: 0.55rem 0.75rem;
+    align-items: center;
+  }
+  .stats-page .ranking-list__item--with-art .ranking-list__position {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .stats-page .ranking-list__art {
+    grid-column: 2;
+    grid-row: 1 / span 3;
+    width: 4rem;
+  }
+  .stats-page .ranking-list__item--with-art .ranking-list__info,
+  .stats-page .ranking-list__item--with-art .ranking-list__count,
+  .stats-page .ranking-list__item--with-art .rank-change {
+    grid-column: 3;
+  }
+  .stats-page .ranking-list__item--with-art .ranking-list__info {
+    grid-row: 1;
+  }
+  .stats-page .ranking-list__item--with-art .ranking-list__count {
+    grid-row: 2;
+  }
+  .stats-page .ranking-list__item--with-art .rank-change {
+    grid-row: 3;
+    justify-self: start;
+  }
+}
