@@ -1,3 +1,4 @@
+
 /* WaveStack canonical stylesheet: unused selectors and superseded declarations removed. */
 @font-face {
   font-family: "WaveStackMix";
@@ -6275,7 +6276,8 @@ button:not(:disabled):active {
     --frontier-topbar-height: min(5.2dvw, 13dvh);
     --frontier-left-rail: 22.5dvw;
     --frontier-listening-rail: 18dvw;
-    --frontier-nav-height: min(17dvw, 35dvh);
+    /* The nav grows into all space the player does not actually need. */
+    --frontier-nav-min-height: clamp(6.3rem, 18dvh, 13.7rem);
     --frontier-mini-player-height: min(5.7dvw, 12dvh);
     --frontier-player-art-size: min(
       calc(var(--frontier-left-rail) - 1.7dvw),
@@ -6448,8 +6450,15 @@ button:not(:disabled):active {
     display: grid !important;
     grid-column: 1 !important;
     grid-row: 2 !important;
-    grid-template-rows: var(--frontier-nav-height) minmax(0, 1fr) !important;
+    /* The player is content-sized; the nav takes the remaining viewport height.
+       Unlike the former fixed-height nav, this also adapts to fullscreen/zoom. */
+    grid-template-rows: minmax(var(--frontier-nav-min-height), 1fr) minmax(0, max-content) !important;
     grid-template-columns: minmax(0, 1fr) !important;
+    --frontier-player-max-height: calc(
+      100dvh - var(--frontier-topbar-height) -
+      (var(--frontier-shell-pad) * 2) - (var(--frontier-shell-gap) * 2) -
+      var(--frontier-nav-min-height)
+    );
     gap: var(--frontier-shell-gap) !important;
     width: 100% !important;
     height: calc(100dvh - var(--frontier-topbar-height) - (var(--frontier-shell-pad) * 2) - var(--frontier-shell-gap)) !important;
@@ -6510,18 +6519,20 @@ button:not(:disabled):active {
     order: 1 !important;
     display: block !important;
     width: 100% !important;
-    height: 100% !important;
+    height: auto !important;
     min-height: 0 !important;
-    max-height: none !important;
+    /* When the viewport is short, keep enough room to use the nav and let
+       only the player's contents scroll rather than clipping its controls. */
+    max-height: var(--frontier-player-max-height) !important;
     margin: 0 !important;
     overflow: hidden !important;
   }
     .app-player-region .player-card {
     display: flex !important;
     width: 100% !important;
-    height: 100% !important;
+    height: auto !important;
     min-height: 0 !important;
-    max-height: none !important;
+    max-height: var(--frontier-player-max-height) !important;
     flex-direction: column !important;
     align-items: center !important;
     text-align: center !important;
@@ -6560,7 +6571,7 @@ button:not(:disabled):active {
     min-height: 100% !important;
     max-height: 100% !important;
     aspect-ratio: 1 / 1 !important;
-    object-fit: cover !important;
+    object-fit: contain !important;
   }
     .app-player-region .player-card__identity {
     width: 100% !important;

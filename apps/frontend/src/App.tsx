@@ -1,7 +1,6 @@
 
 
 
-
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ApolloQueryResult, useApolloClient, useMutation, useQuery } from "@apollo/client";
 import { Activity, Clock, Heart, ListMusic, Music2, RefreshCw, TrendingUp, Upload } from "lucide-react";
@@ -45,6 +44,7 @@ import { GlobalSearch } from "./components/GlobalSearch";
 import { KeyboardShortcutsMenu } from "./components/KeyboardShortcutsMenu";
 import { pickHabitArtworkSong } from "./habit-artwork";
 import { assertStreamUrlBelongsToSong } from "./playback-source-identity";
+import { createPlaybackTimeline } from "./playback-timeline";
 import { releasePageFocus } from "./hooks/pointerFocus";
 
 export type Song = {
@@ -702,7 +702,8 @@ export function App() {
   const playRequestIdRef = useRef(0);
   const shuffleEnabledRef = useRef(false);
   const repeatModeRef = useRef<RepeatMode>("none");
-  const playHistoryRef = useRef<Song[]>([]);
+  const [playbackTimeline] = useState(() => createPlaybackTimeline<Song>());
+  const advanceInFlightRef = useRef(false);
   const playbackContextRef = useRef<PlaybackContext | null>(null);
   const queueRef = useRef<Song[]>([]);
   const allKnownSongsRef = useRef<Song[]>([]);
@@ -903,7 +904,8 @@ export function App() {
     const stored = window.localStorage.getItem("wavestack:repeat-mode");
     return stored === "all" || stored === "one" ? stored : "none";
   });
-  const [playHistory, setPlayHistory] = useState<Song[]>([]);
+  const [recentlyPlayedSessionSongs, setRecentlyPlayedSessionSongs] = useState<Song[]>([]);
+  const [canGoBackInTimeline, setCanGoBackInTimeline] = useState(false);
   const [dismissedRecommendationIds, setDismissedRecommendationIds] = useState<string[]>([]);
   const [recommendationOffset, setRecommendationOffset] = useState(0);
   const [hasMoreRecommendations, setHasMoreRecommendations] = useState(true);
@@ -1068,7 +1070,7 @@ export function App() {
       ...homeRecommendationSongs,
       ...visibleRecommendations.map((item) => item.song),
       ...queue,
-      ...playHistory,
+      ...recentlyPlayedSessionSongs,
       ...playlists.flatMap((playlist) => playlist.songs ?? []),
       ...(activeSong ? [activeSong] : [])
     ]);
@@ -1081,7 +1083,7 @@ export function App() {
     homeRecommendationSongs,
     visibleRecommendations,
     queue,
-    playHistory,
+    recentlyPlayedSessionSongs,
     playlists,
     activeSong
   ]);
@@ -1200,8 +1202,9 @@ export function App() {
       playbackContextRef.current = startupContext;
       currentSongRef.current = startupSong;
 
+      playbackTimeline.reset(startupSong);
       setPlaybackContext(startupContext);
-      setPlayHistory([]);
+      setCanGoBackInTimeline(false);
       setActiveSong(startupSong);
     }
 
@@ -1345,7 +1348,7 @@ export function App() {
   function rememberPlayedSong(song: Song) {
     if (song.id === PLACEHOLDER_SONG_ID) return;
 
-    setPlayHistory((items) => {
+    setRecentlyPlayedSessionSongs((items) => {
       const withoutDuplicate = items.filter((item) => item.id !== song.id);
       return [song, ...withoutDuplicate].slice(0, 100);
     });
@@ -1437,7 +1440,6 @@ export function App() {
   currentSongRef.current = currentSong;
   shuffleEnabledRef.current = shuffleEnabled;
   repeatModeRef.current = repeatMode;
-  playHistoryRef.current = playHistory;
   playbackContextRef.current = playbackContext;
   queueRef.current = queue;
   allKnownSongsRef.current = allKnownSongs;
@@ -1490,6 +1492,7 @@ export function App() {
 
     if (currentSongRef.current?.id === song.id) {
       currentSongRef.current = refreshed;
+      playbackTimeline.replaceCurrent(refreshed);
       lastPlayedSongIdRef.current = refreshed.id;
       window.localStorage.setItem("wavestack:last-song-id", refreshed.id);
       writeLocalJson("wavestack:last-song", refreshed);
@@ -1514,6 +1517,9 @@ export function App() {
     // the browser's transient user-activation window. The Player refreshes an expired
     // signed URL on demand and retries failed signed streams without lengthening the URL TTL.
     playRequestIdRef.current += 1;
+    // A manual change or Previous invalidates a pending backend shuffle result.
+    advanceInFlightRef.current = false;
+    setIsResolvingNextSong(false);
     currentSongRef.current = song;
     nowPlayingStore.setActiveSongId(song.id);
     lastPlayedSongIdRef.current = song.id;
@@ -1733,72 +1739,91 @@ export function App() {
   }
 
   async function playNextFromPolicy(reason: PlaybackAdvanceReason = "manual") {
+    // The imperative lock also covers media-session and keyboard Next callbacks,
+    // which can fire before React has rerendered the resolvingNext prop.
+    if (advanceInFlightRef.current) return;
+    advanceInFlightRef.current = true;
+    setIsResolvingNextSong(true);
+
+    const requestId = playRequestIdRef.current;
     const latestCurrentSong = currentSongRef.current;
 
-    setIsResolvingNextSong(true);
-    let nextSong: Song | null = null;
-
     try {
-      nextSong = await resolveNextSongFromCurrentPolicy(reason);
+      const timeline = playbackTimeline;
+      if (!timeline.current() && latestCurrentSong) timeline.reset(latestCurrentSong);
+
+      // Rewinding does not destroy the future. Replay it before consuming the
+      // queue, querying backend randomness, or choosing a new local shuffle pick.
+      // Repeat-one on natural song completion still repeats the same track.
+      const repeatCurrentSong = reason === "ended" &&
+        repeatModeRef.current === "one" && queueRef.current.length === 0;
+      const replaySong = repeatCurrentSong ? null : timeline.peekNext();
+      const nextSong = replaySong ?? await resolveNextSongFromCurrentPolicy(reason);
+
+      // A user may select another song, go Previous or change context while a
+      // network randomSong query is pending. Never resurrect that stale result.
+      if (playRequestIdRef.current !== requestId) return;
+
+      if (!nextSong) {
+        showNotice("No next song available.");
+        return;
+      }
+
+      if (replaySong) {
+        timeline.next();
+      } else if (nextSong.id !== latestCurrentSong?.id) {
+        timeline.append(nextSong);
+      }
+      setCanGoBackInTimeline(timeline.hasPrevious());
+
+      // Natural `ended` advances must keep the details modal following playback
+      // just as they do when Next is pressed manually.
+      startSong(nextSong, { preserveContext: true, followDetailsPlayback: true });
+      markPlayed(nextSong);
+
+      if (nextSong.id !== latestCurrentSong?.id) rememberRecent(nextSong);
+    } catch (error) {
+      if (playRequestIdRef.current === requestId) {
+        console.error("Failed to advance playback", error);
+        showNotice("Could not play the next song.");
+      }
     } finally {
-      setIsResolvingNextSong(false);
-    }
-
-    if (!nextSong) {
-      showNotice("No next song available.");
-      return;
-    }
-
-    if (latestCurrentSong && nextSong.id !== latestCurrentSong.id) {
-      const nextHistory = [...playHistoryRef.current, latestCurrentSong];
-      playHistoryRef.current = nextHistory;
-      setPlayHistory(nextHistory);
-    }
-
-    // Natural `ended` advances resolve asynchronously, after Player has already
-    // published its stopped state. Explicitly preserve the same modal-follow
-    // behavior used by an in-progress manual next action: only a modal showing
-    // the song that just advanced is moved to the resolved next song.
-    startSong(nextSong, { preserveContext: true, followDetailsPlayback: true });
-    markPlayed(nextSong);
-
-    if (nextSong.id !== latestCurrentSong?.id) {
-      rememberRecent(nextSong);
+      if (playRequestIdRef.current === requestId) {
+        advanceInFlightRef.current = false;
+        setIsResolvingNextSong(false);
+      }
     }
   }
 
   function playPreviousFromHistory() {
-    const latestHistory = playHistoryRef.current;
+    const timeline = playbackTimeline;
+    const latestCurrentSong = currentSongRef.current;
+    if (!timeline.current() && latestCurrentSong) timeline.reset(latestCurrentSong);
 
-    if (latestHistory.length) {
-      const previousSong = latestHistory[latestHistory.length - 1];
-      const remainingHistory = latestHistory.slice(0, -1);
-
-      playHistoryRef.current = remainingHistory;
-      setPlayHistory(remainingHistory);
-
-      startSong(previousSong, { preserveContext: true });
-      rememberRecent(previousSong);
+    const visitedPreviousSong = timeline.previous();
+    if (visitedPreviousSong) {
+      setCanGoBackInTimeline(timeline.hasPrevious());
+      startSong(visitedPreviousSong, { preserveContext: true });
+      rememberRecent(visitedPreviousSong);
       return;
     }
 
     const latestContext = playbackContextRef.current;
 
-    if (shuffleEnabledRef.current && latestContext && usesBackendShufflePool(latestContext.source)) {
+    // In shuffle mode Previous is always a real visited track, never a random
+    // (or sequential) approximation of an unvisited predecessor.
+    if (shuffleEnabledRef.current || !latestContext) {
       showNotice("No previous song available.");
       return;
     }
 
-    const latestCurrentSong = currentSongRef.current;
-    const contextSongs = latestContext?.songs?.filter(Boolean) ?? [];
-
+    const contextSongs = latestContext.songs.filter(Boolean);
     if (!latestCurrentSong || !contextSongs.length) {
       showNotice("No previous song available.");
       return;
     }
 
     const currentIndex = contextSongs.findIndex((song) => song.id === latestCurrentSong.id);
-
     if (currentIndex < 0) {
       showNotice("No previous song available.");
       return;
@@ -1816,6 +1841,8 @@ export function App() {
       return;
     }
 
+    timeline.prepend(previousSong);
+    setCanGoBackInTimeline(timeline.hasPrevious());
     startSong(previousSong, { preserveContext: true });
     rememberRecent(previousSong);
   }
@@ -1855,8 +1882,8 @@ export function App() {
     playbackContextRef.current = deduplicatedContext;
     setPlaybackContext(deduplicatedContext);
 
-    playHistoryRef.current = [];
-    setPlayHistory([]);
+    playbackTimeline.reset(song);
+    setCanGoBackInTimeline(false);
     resetPlayedSession(song);
 
     startSong(song, { preserveContext: true });
@@ -2744,8 +2771,7 @@ export function App() {
             shuffleEnabled={shuffleEnabled}
             repeatMode={repeatMode}
             canGoPrevious={
-              playHistory.length > 0 ||
-              (!(shuffleEnabled && usesBackendShufflePool(playbackContext.source)) && playbackContext.songs.length > 1)
+              canGoBackInTimeline || (!shuffleEnabled && playbackContext.songs.length > 1)
             }
             onToggleFavorite={() => toggleFavorite(currentSong)}
             onToggleShuffle={toggleShuffle}
@@ -3076,6 +3102,3 @@ export function App() {
     </>
   );
 }
-
-
-
