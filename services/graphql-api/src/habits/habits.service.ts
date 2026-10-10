@@ -87,6 +87,18 @@ export class HabitsService {
     }
   }
 
+  async listeningPlayCount(userId: string): Promise<number> {
+    await this.ensureArchiveCacheForPeriod(userId, "ALL_TIME");
+    const result = await this.database.query(
+      `SELECT COUNT(*)::int AS count
+       FROM app_listening_events_combined
+       WHERE user_id = $1 AND song_id <> '${PLACEHOLDER_SONG_ID}'`,
+      [userId]
+    );
+    const [row] = this.rows(result) as Array<{ count: number | string }>;
+    return Number(row?.count ?? 0);
+  }
+
   async recordListen(
     userId: string,
     songId: string,

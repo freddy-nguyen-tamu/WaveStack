@@ -28,6 +28,7 @@ type ProfilePageProps = {
   favoriteIds: string[];
   queueLength: number;
   habitSummaries: Record<string, HabitSummaryEntry[]>;
+  totalPlays: number;
   onLogout: () => void;
   onPlay: PlaySongHandler;
   onQueue: (song: Song) => void;
@@ -54,6 +55,7 @@ export function ProfilePage({
   favoriteIds,
   queueLength,
   habitSummaries,
+  totalPlays,
   onLogout,
   onPlay,
   onQueue,
@@ -105,10 +107,6 @@ export function ProfilePage({
       </article>
     );
   }
-
-  const totalPlays = Object.values(habitSummaries)
-    .flat()
-    .reduce((total, entry) => total + entry.count, 0);
 
   return (
     <article className="profile-page" aria-label="Profile">

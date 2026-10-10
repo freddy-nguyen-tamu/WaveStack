@@ -168,6 +168,13 @@ export class HabitsResolver {
     return this.habitsService.summarize(userId, period);
   }
 
+  @Query(() => Int)
+  async listeningPlayCount(@Context() context: GqlContext): Promise<number> {
+    const userId = this.resolveUserId(context);
+    if (!userId) return 0;
+    return this.habitsService.listeningPlayCount(userId);
+  }
+
   @Mutation(() => Boolean)
   async recordListen(
     @Context() context: GqlContext,

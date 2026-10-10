@@ -1,6 +1,3 @@
-
-
-
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ApolloQueryResult, useApolloClient, useMutation, useQuery } from "@apollo/client";
 import { Activity, Clock, Heart, ListMusic, Music2, RefreshCw, TrendingUp, Upload } from "lucide-react";
@@ -14,6 +11,7 @@ import {
     RANDOM_SONG_QUERY,
     RECOMMENDED_SONGS_QUERY,
     RECORD_LISTEN_MUTATION,
+    LISTENING_PLAY_COUNT_QUERY,
     LIBRARY_STATE_QUERY,
     FAVORITE_SONG_MUTATION,
     UNFAVORITE_SONG_MUTATION,
@@ -890,8 +888,8 @@ export function App() {
 
   const [recommendedData, setRecommendedData] = useState<RecommendResult[] | null>(null);
   const [habitSummaries, setHabitSummaries] = useState<Record<string, HabitSummaryEntry[]>>({});
-  const [recordListen] = useMutation(RECORD_LISTEN_MUTATION);
-  const lastListenRef = useRef("");
+  const [recordListen] = useMutation<{ recordListen: boolean }>(RECORD_LISTEN_MUTATION);
+  const [listensRevision, setListensRevision] = useState(0);
   const hasToken = Boolean(authToken);
   const [guestDashboardSeed, setGuestDashboardSeed] = useState(() => Math.floor(Math.random() * 0xffffffff));
   const [guestLoginStarting, setGuestLoginStarting] = useState(false);
@@ -992,6 +990,17 @@ export function App() {
     () => visibleRecommendations.map((item) => item.song),
     [visibleRecommendations]
   );
+
+  const { data: listeningPlayCountData, refetch: refetchListeningPlayCount } = useQuery<{ listeningPlayCount: number }>(
+    LISTENING_PLAY_COUNT_QUERY,
+    { skip: !hasToken, fetchPolicy: "network-only" }
+  );
+
+  useEffect(() => {
+    if (hasToken && listensRevision > 0) {
+      void refetchListeningPlayCount();
+    }
+  }, [hasToken, listensRevision, refetchListeningPlayCount]);
 
   const {
     data: meData,
@@ -2378,10 +2387,12 @@ export function App() {
       return;
     }
 
+    const controller = new AbortController();
     const timer = setTimeout(async () => {
       const periods = ["DAY", "WEEK", "MONTH", "YEAR"] as const;
 
       for (const period of periods) {
+        if (controller.signal.aborted) break;
         try {
           const token = getAuthToken();
           if (!token) return;
@@ -2392,6 +2403,7 @@ export function App() {
               "Content-Type": "application/json",
               Authorization: `Bearer ${token}`
             },
+            signal: controller.signal,
             body: JSON.stringify({
               query: LISTENING_HABIT_SUMMARY_QUERY.loc?.source?.body ?? "",
               variables: { period }
@@ -2401,7 +2413,7 @@ export function App() {
           const summaryJson = await response.json() as { data?: { listeningHabitSummary?: HabitSummaryEntry[] } };
 
           const summaryPeriodData = summaryJson.data?.listeningHabitSummary;
-          if (summaryPeriodData) {
+          if (summaryPeriodData && !controller.signal.aborted) {
             setHabitSummaries((prev) => {
               const next: Record<string, HabitSummaryEntry[]> = {};
               for (const key of Object.keys(prev)) {
@@ -2417,31 +2429,36 @@ export function App() {
       }
     }, 500);
 
-    return () => clearTimeout(timer);
-  }, [authToken, favoriteIds.join("|"), recentSongIds.join("|")]);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [authToken, favoriteIds.join("|"), recentSongIds.join("|"), listensRevision]);
 
-  useEffect(() => {
-    if (!authUser || !currentSong || currentSong.id === PLACEHOLDER_SONG_ID) return;
+  // Player reports the first `playing` event of each distinct playback cycle.
+  // Recording from currentSong changes loses repeat-one loops and misses the
+  // cached last song when the user presses Space after a page refresh.
+  const handleListenStart = useCallback((song: Song) => {
+    if (!getAuthToken() || song.id === PLACEHOLDER_SONG_ID) return;
 
-    const key = `${authUser.id}:${currentSong.id}`;
-
-    if (key === lastListenRef.current) return;
-    lastListenRef.current = key;
-
-    const timer = setTimeout(() => {
-      void recordListen({
-        variables: {
-          songId: currentSong.id,
-          artistName: currentSong.artistName,
-          title: currentSong.title,
-          durationSeconds: currentSong.durationSeconds || 0,
-          completedPlayRatio: 0
-        }
-      });
-    }, 1000);
-
-    return () => clearTimeout(timer);
-  }, [authUser, currentSong, recordListen]);
+    void recordListen({
+      variables: {
+        songId: song.id,
+        artistName: song.artistName,
+        title: song.title,
+        durationSeconds: Math.max(0, Math.round(song.durationSeconds || 0)),
+        completedPlayRatio: 0
+      }
+    }).then(({ data }) => {
+      if (data?.recordListen) {
+        // Keep the listening rail, profile and open stats route in sync with
+        // successfully persisted events (not merely playback intentions).
+        setListensRevision((revision) => revision + 1);
+      }
+    }).catch((error) => {
+      console.error("Failed to record listening playback", error);
+    });
+  }, [recordListen]);
 
   async function fetchRecommendedPage(
     offset: number,
@@ -2784,6 +2801,7 @@ export function App() {
             onRefreshStreamUrl={refreshSongStreamUrl}
             onOpenDetails={openDetails}
             onPlaybackStateChange={nowPlayingStore.setPlaybackState}
+            onListenStart={handleListenStart}
             resolvingNext={isResolvingNextSong}
             onNext={() => { void playNextFromPolicy("manual"); }}
             onPrevious={playPreviousFromHistory}
@@ -2987,6 +3005,7 @@ export function App() {
                 </article>
               ) : (
                 <StatsPage
+                  listensRevision={listensRevision}
                   songs={allKnownSongs}
                   playlists={playlists}
                   favoriteIds={favoriteIds}
@@ -3018,6 +3037,7 @@ export function App() {
                 favoriteIds={favoriteIds}
                 queueLength={queue.length}
                 habitSummaries={habitSummaries}
+                totalPlays={listeningPlayCountData?.listeningPlayCount ?? 0}
                 onLogout={logout}
                 onPlay={(song: Song, context?: PlaybackContext) =>
                   playSongFromContext(song, context ?? {

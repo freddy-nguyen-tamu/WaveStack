@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useQuery } from "@apollo/client";
 import { LoadingStatus } from "../../../components/LoadingStatus";
 import { TASTE_COMPARISON_QUERY } from "../../../api";
@@ -23,16 +24,21 @@ type TasteComparisonResult = {
 
 type TasteComparisonPanelProps = {
   period: string;
+  listensRevision: number;
 };
 
-export function TasteComparisonPanel({ period }: TasteComparisonPanelProps) {
-  const { data, loading } = useQuery<{ tasteComparison: TasteComparisonResult }>(
+export function TasteComparisonPanel({ period, listensRevision }: TasteComparisonPanelProps) {
+  const { data, loading, refetch } = useQuery<{ tasteComparison: TasteComparisonResult }>(
     TASTE_COMPARISON_QUERY,
     {
       variables: { period },
       fetchPolicy: "cache-and-network"
     }
   );
+
+  useEffect(() => {
+    if (listensRevision > 0) void refetch();
+  }, [listensRevision, refetch]);
 
   const comparison = data?.tasteComparison;
 

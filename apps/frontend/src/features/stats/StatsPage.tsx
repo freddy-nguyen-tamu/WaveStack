@@ -76,6 +76,7 @@ type DriveExportPanelProps = {
 };
 
 type StatsPageProps = {
+  listensRevision: number;
   songs: Song[];
   playlists: ClientPlaylist[];
   favoriteIds: string[];
@@ -208,6 +209,7 @@ function RecentlyPlayedRow({
 }
 
 export function StatsPage({
+  listensRevision,
   songs,
   playlists,
   favoriteIds,
@@ -297,7 +299,7 @@ export function StatsPage({
       void topGenresQuery({ variables: { period, limit: 50 } });
       void recentQuery({ variables: { period, limit: 50 } });
     }
-  }, [period, topTracksQuery, topArtistsQuery, topGenresQuery, recentQuery]);
+  }, [period, listensRevision, topTracksQuery, topArtistsQuery, topGenresQuery, recentQuery]);
 
   const tabEntries = useMemo(() => {
     switch (tab) {
@@ -500,7 +502,7 @@ export function StatsPage({
           />
         </div>
 
-        <TasteComparisonPanel period={period} />
+        <TasteComparisonPanel period={period} listensRevision={listensRevision} />
 
         {renderSongPlayBarChart()}
 

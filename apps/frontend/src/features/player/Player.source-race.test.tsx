@@ -44,6 +44,7 @@ function playerProps(activeSong: Song, playSignal: number, onRefreshStreamUrl: (
     onRefreshStreamUrl,
     onOpenDetails: noop,
     onPlaybackStateChange: noop,
+    onListenStart: noop,
     onNext: noop,
     onPrevious: noop,
     onEnded: noop

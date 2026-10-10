@@ -1,5 +1,3 @@
-
-
 import {
   ApolloClient,
   InMemoryCache,
@@ -291,6 +289,12 @@ export const ME_QUERY = gql`
       displayName
       avatarUrl
     }
+  }
+`;
+
+export const LISTENING_PLAY_COUNT_QUERY = gql`
+  query ListeningPlayCount {
+    listeningPlayCount
   }
 `;
 

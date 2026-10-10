@@ -49,6 +49,7 @@ type PlayerProps = {
   onRefreshStreamUrl: (song: Song) => Promise<Song>;
   onOpenDetails: (song: Song) => void;
   onPlaybackStateChange: (state: PlayerPlaybackState) => void;
+  onListenStart: (song: Song) => void;
   onNext: () => void;
   onPrevious: () => void;
   onEnded: () => void;
@@ -70,6 +71,7 @@ export function Player({
   onRefreshStreamUrl,
   onOpenDetails,
   onPlaybackStateChange,
+  onListenStart,
   onNext,
   onPrevious,
   onEnded
@@ -84,6 +86,7 @@ export function Player({
   const currentSourceSongIdRef = useRef(activeSong.id);
   const sourcePlaySignalRef = useRef(playSignal);
   const sourceEpochRef = useRef(0);
+  const recordedListenEpochRef = useRef<number | null>(null);
   const expectedSourceUrlRef = useRef(activeSong.streamUrl);
   const latestActiveSongRef = useRef(activeSong);
   const recoveryAttemptsRef = useRef(0);
@@ -308,6 +311,24 @@ export function Player({
     }
 
     return !expectedSource || actualSource === expectedSource;
+  }
+
+  // Count a playback cycle, not a selected song. React re-renders, buffering,
+  // pause/resume, and signed-URL recovery must not create extra events. A fresh
+  // playSignal (including repeat-one) advances the source epoch. The initial
+  // cached song has epoch zero and is counted on its first real playback too.
+  function reportListenStart() {
+    const audio = audioRef.current;
+    const epoch = sourceEpochRef.current;
+    if (
+      !audio ||
+      !desiredPlaybackRef.current ||
+      !audioMatchesExpectedSource(audio) ||
+      recordedListenEpochRef.current === epoch
+    ) return;
+
+    recordedListenEpochRef.current = epoch;
+    onListenStart(latestActiveSongRef.current);
   }
 
   function syncProgressFromAudio(owner?: PlaybackOwner) {
@@ -918,6 +939,11 @@ export function Player({
       audio.currentTime = 0;
       setCurrentTime(0);
       setHasPlaybackHistory(true);
+      // Restarting an already playing song at zero is a new listen.
+      recordedListenEpochRef.current = null;
+      if (audio && desiredPlaybackRef.current && !audio.paused) {
+        reportListenStart();
+      }
       setMessage(`Restarted: ${displayName}`);
 
       return true;
@@ -1068,6 +1094,11 @@ export function Player({
 
       setCurrentTime(0);
       setHasPlaybackHistory(true);
+      // Restarting an already playing song at zero is a new listen.
+      recordedListenEpochRef.current = null;
+      if (audio && desiredPlaybackRef.current && !audio.paused) {
+        reportListenStart();
+      }
       setMessage(`Restarted: ${displayName}`);
       return;
     }
@@ -1265,6 +1296,7 @@ export function Player({
             armStartupStallWatchdog();
           }}
           onPlaying={() => {
+            reportListenStart();
             startDiscRotation();
             setHasPlaybackHistory(true);
             setIsPlaybackPending(false);
@@ -1284,6 +1316,9 @@ export function Player({
             syncProgressFromAudio();
           }}
           onEnded={() => {
+            // A Space replay after the end is another complete playback cycle
+            // even if repeat mode is disabled and the source does not change.
+            recordedListenEpochRef.current = null;
             desiredPlaybackRef.current = false;
             clearStartupStallWatchdog(true);
             pauseDiscRotation();
