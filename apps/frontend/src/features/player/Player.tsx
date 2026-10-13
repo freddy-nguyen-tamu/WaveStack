@@ -23,15 +23,11 @@ type PlayerPlaybackState = Pick<
   "isPlaying" | "hasPlaybackHistory" | "discBaseAngleDeg" | "discStartedAtMs"
 >;
 
-// Startup recovery must be fast enough that a transient zero-time stall never
-// turns into a multi-second dead period. Keep the range-forcing seek extremely
-// small and always relative to the media element's current position: an older
-// absolute 0.12s seek could visibly/audibly skip the opening, and if buffering
-// happened after playback had already advanced it could even rewind the song.
+// Retry a stalled startup with a fresh stream instead of seeking past the
+// opening audio. Even a tiny synthetic seek can cause an audible intro blip.
 const STARTUP_STALL_TIMEOUT_MS = 750;
 const STARTUP_STALL_RECHECK_MS = 700;
 const STARTUP_PROGRESS_EPSILON_SECONDS = 0.06;
-const STARTUP_RECOVERY_NUDGES_SECONDS = [0.02] as const;
 
 type PlayerProps = {
   activeSong: Song;
@@ -81,6 +77,7 @@ export function Player({
   const discTimestampRef = useRef<number | null>(null);
   const playRequestRef = useRef(0);
   const playPromiseRef = useRef<Promise<void> | null>(null);
+  const playPromiseRequestIdRef = useRef(0);
   const pendingSeekRef = useRef<number | null>(null);
   const desiredPlaybackRef = useRef(false);
   const currentSourceSongIdRef = useRef(activeSong.id);
@@ -92,7 +89,6 @@ export function Player({
   const recoveryAttemptsRef = useRef(0);
   const startupStallTimerRef = useRef<number | null>(null);
   const startupStallBaselineRef = useRef(0);
-  const startupStallRecoveryStepRef = useRef(0);
   const startupStallRefreshRef = useRef(0);
   const startupStallRecoveryInFlightRef = useRef(false);
   const pressedKeysRef = useRef<Set<string>>(new Set());
@@ -186,6 +182,7 @@ export function Player({
       // Do not make the new song wait for an old song's unresolved play()/URL
       // refresh promise. The old async work is fenced by sourceEpochRef below.
       playPromiseRef.current = null;
+      playPromiseRequestIdRef.current = 0;
       desiredPlaybackRef.current = false;
       pendingSeekRef.current = null;
       audio.pause();
@@ -357,39 +354,9 @@ export function Player({
 
     if (resetRecovery) {
       startupStallBaselineRef.current = 0;
-      startupStallRecoveryStepRef.current = 0;
       startupStallRefreshRef.current = 0;
       startupStallRecoveryInFlightRef.current = false;
     }
-  }
-
-  function startupRecoveryTarget(audio: HTMLAudioElement, nudgeSeconds: number): number {
-    const currentPosition = Number.isFinite(audio.currentTime)
-      ? Math.max(0, audio.currentTime)
-      : Math.max(0, startupStallBaselineRef.current);
-    let target = currentPosition + nudgeSeconds;
-
-    // The recovery must never jump backward. The previous absolute 0.12s target
-    // could rewind a song that had already made a little progress before a
-    // startup `waiting` event, creating the audible repeat/glitch at the start.
-    if (audio.seekable.length > 0) {
-      const seekableStart = Math.max(0, audio.seekable.start(0));
-      const seekableEnd = Math.max(seekableStart, audio.seekable.end(0));
-      target = Math.max(target, seekableStart + Math.min(nudgeSeconds, 0.02));
-      target = Math.min(target, Math.max(seekableEnd - 0.01, seekableStart));
-    } else if (audio.buffered.length > 0) {
-      target = Math.max(target, audio.buffered.start(0) + Math.min(nudgeSeconds, 0.02));
-    }
-
-    const knownDuration = Number.isFinite(audio.duration) && audio.duration > 0
-      ? audio.duration
-      : latestActiveSongRef.current.durationSeconds;
-
-    if (knownDuration > 0) {
-      target = Math.min(target, Math.max(knownDuration - 0.01, 0));
-    }
-
-    return Math.max(currentPosition, target);
   }
 
   function noteStartupPlaybackProgress() {
@@ -419,6 +386,7 @@ export function Player({
 
     startupStallBaselineRef.current = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
     const expectedOwner = capturePlaybackOwner();
+    const expectedRequestId = playRequestRef.current;
 
     startupStallTimerRef.current = window.setTimeout(() => {
       startupStallTimerRef.current = null;
@@ -428,6 +396,7 @@ export function Player({
         !liveAudio ||
         !desiredPlaybackRef.current ||
         liveAudio.ended ||
+        playRequestRef.current !== expectedRequestId ||
         !playbackOwnerMatches(expectedOwner, liveAudio)
       ) {
         return;
@@ -461,46 +430,22 @@ export function Player({
     }
 
     startupStallRecoveryInFlightRef.current = true;
+    const recoveryRequestId = playRequestRef.current;
 
     try {
-      const step = startupStallRecoveryStepRef.current;
-
-      if (step < STARTUP_RECOVERY_NUDGES_SECONDS.length) {
-        const target = startupRecoveryTarget(audio, STARTUP_RECOVERY_NUDGES_SECONDS[step]);
-        startupStallRecoveryStepRef.current = step + 1;
-
-        // This is deliberately a tiny forward nudge. It reproduces the manual
-        // seek recovery that forces a new byte-range request without skipping an
-        // audible chunk of the intro or ever rewinding already-played audio.
-        startupStallBaselineRef.current = target;
-        pendingSeekRef.current = null;
-
-        try {
-          audio.currentTime = target;
-          setCurrentTime(target);
-        } catch {
-          // Metadata may still be arriving. Preserve the target so the existing
-          // loadedmetadata/durationchange path applies it as soon as seeking is legal.
-          pendingSeekRef.current = target;
-        }
-
-        if (audio.paused && desiredPlaybackRef.current) {
-          await audio.play();
-        }
-
-        if (desiredPlaybackRef.current && playbackOwnerMatches(expectedOwner, audio)) {
-          armStartupStallWatchdog(STARTUP_STALL_RECHECK_MS);
-        }
-        return;
-      }
-
-      // If several fresh byte positions still cannot advance, discard the old
-      // signed response entirely once and ask the API for a new stream URL.
+      // Do not play a throwaway fragment of the intro to force a byte-range
+      // request. Refresh the underlying signed stream once, preserving the
+      // actual playback position, and retry the same user's play intent.
       if (startupStallRefreshRef.current < 1) {
         startupStallRefreshRef.current += 1;
         const refreshed = await refreshStreamForPlayback(audio, expectedOwner);
 
-        if (!refreshed || !desiredPlaybackRef.current || !playbackOwnerMatches(expectedOwner, audio)) {
+        if (
+          !refreshed ||
+          !desiredPlaybackRef.current ||
+          playRequestRef.current !== recoveryRequestId ||
+          !playbackOwnerMatches(expectedOwner, audio)
+        ) {
           return;
         }
 
@@ -516,7 +461,11 @@ export function Player({
       setPlayError("Playback stalled at the start even after WaveStack retried the stream.");
       clearStartupStallWatchdog(true);
     } catch (error) {
-      if (!desiredPlaybackRef.current || !playbackOwnerMatches(expectedOwner, audio)) {
+      if (
+        !desiredPlaybackRef.current ||
+        playRequestRef.current !== recoveryRequestId ||
+        !playbackOwnerMatches(expectedOwner, audio)
+      ) {
         return;
       }
 
@@ -545,7 +494,7 @@ export function Player({
     } finally {
       // If ownership moved to another song while this recovery awaited I/O,
       // the new song may already have its own recovery in flight. Do not clear it.
-      if (playbackOwnerMatches(expectedOwner, audio)) {
+      if (playbackOwnerMatches(expectedOwner, audio) && playRequestRef.current === recoveryRequestId) {
         startupStallRecoveryInFlightRef.current = false;
       }
     }
@@ -560,7 +509,7 @@ export function Player({
 
     // This recovery is intentionally startup-only. Normal mid-song network
     // buffering should wait for the browser instead of skipping forward.
-    if (audio.currentTime <= 3 || startupStallRecoveryStepRef.current > 0) {
+    if (audio.currentTime <= 3 || startupStallRefreshRef.current > 0) {
       armStartupStallWatchdog();
     }
   }
@@ -607,7 +556,10 @@ export function Player({
   }
 
   function isRecoverablePlaybackError(error: unknown, audio: HTMLAudioElement): boolean {
-    if (error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "AbortError")) {
+    // Browser autoplay denial needs a new user gesture. An AbortError does not:
+    // a failed/aborted fetch for a signed stream can be retried automatically,
+    // provided the request still owns the play intent and was not paused.
+    if (error instanceof DOMException && error.name === "NotAllowedError") {
       return false;
     }
 
@@ -657,13 +609,17 @@ export function Player({
     }
 
     const songToRefresh = latestActiveSongRef.current;
-    const resumeAt = Number.isFinite(audio.currentTime) ? audio.currentTime : currentTime;
+    const expectedRequestId = playRequestRef.current;
     const refreshed = await onRefreshStreamUrl(songToRefresh);
 
     // This is the critical stale-refresh fence. A refresh for song A can finish
     // after the user has already switched to song B. It must never be allowed to
     // write A's URL back into the shared <audio> element.
-    if (!playbackOwnerMatches(expectedOwner, audio)) {
+    if (
+      !playbackOwnerMatches(expectedOwner, audio) ||
+      playRequestRef.current !== expectedRequestId ||
+      !desiredPlaybackRef.current
+    ) {
       return false;
     }
 
@@ -680,16 +636,32 @@ export function Player({
     // file. Validate the immutable file id embedded in /drive/stream/<fileId>.
     assertStreamUrlBelongsToSong(expectedOwner.songId, refreshed.streamUrl);
 
+    // Read the position only after the network round trip: a still-playing
+    // source may have advanced while the replacement link was requested.
+    const resumeAt = Number.isFinite(audio.currentTime) ? audio.currentTime : currentTime;
     const currentSource = resolveMediaUrl(audio.src || audio.currentSrc);
     const nextSource = resolveMediaUrl(refreshed.streamUrl);
     expectedSourceUrlRef.current = nextSource;
 
+    // Even when the signing service returns the exact same URL (for example,
+    // within the same second), a failed media element needs a new load. Reusing
+    // its error state makes the first Space press appear to do nothing.
+    pendingSeekRef.current = resumeAt > 0 ? resumeAt : null;
+    audio.pause();
     if (currentSource !== nextSource) {
-      pendingSeekRef.current = resumeAt > 0 ? resumeAt : null;
-      audio.pause();
-      assertStreamUrlBelongsToSong(expectedOwner.songId, refreshed.streamUrl);
       audio.src = refreshed.streamUrl;
-      audio.load();
+    }
+    audio.load();
+
+    // Apply a real resume position before play(), not only when metadata later
+    // arrives. Otherwise the new source can audibly play a short bit from zero
+    // before the delayed loadedmetadata handler jumps to the resume position.
+    if (resumeAt > 0) {
+      try {
+        audio.currentTime = resumeAt;
+      } catch {
+        // restorePendingSeek() will retry as soon as seeking becomes legal.
+      }
     }
 
     return true;
@@ -714,25 +686,22 @@ export function Player({
     setHasPlaybackHistory(true);
     setMessage(`Loading: ${displayName}`);
 
-    if (playPromiseRef.current) {
-      const inFlightPlay = playPromiseRef.current;
-      await inFlightPlay;
-
-      // A quick pause -> play sequence can invalidate the first request while its
-      // play() promise is still settling. Honor the latest intent instead of making
-      // the user click several times to get out of that stale in-flight request.
-      if (
-        playbackOwnerMatches(expectedOwner, audio) &&
-        desiredPlaybackRef.current &&
-        audio.paused &&
-        !playPromiseRef.current
-      ) {
-        return playCurrent(forceRefresh);
-      }
-
-      return;
+    // Share only an in-flight request that still owns the latest play intent.
+    // Error recovery must supersede an unresolved play() immediately: waiting
+    // for that failed promise can clear the user's intent and require Space twice.
+    // Likewise, a pause -> play invalidates the earlier requestId and should
+    // start a new attempt without waiting for the interrupted promise to settle.
+    if (
+      !forceRefresh &&
+      playPromiseRef.current &&
+      playPromiseRequestIdRef.current === playRequestRef.current
+    ) {
+      return playPromiseRef.current;
     }
 
+    // A new attempt owns its own watchdog and recovery budget. In particular,
+    // an abandoned same-song recovery must not leave the next attempt locked.
+    clearStartupStallWatchdog(true);
     const requestId = playRequestRef.current + 1;
     playRequestRef.current = requestId;
 
@@ -788,25 +757,30 @@ export function Player({
           return;
         }
 
-        try {
+        // Keep the first Space/click intent alive through transient failures,
+        // including a second failure after the first URL refresh. The retry
+        // budget is shared with the media-element error handler.
+        while (playbackOwnerMatches(expectedOwner, audio) && playRequestRef.current === requestId) {
           assertStreamUrlBelongsToSong(expectedOwner.songId, audio.src || audio.currentSrc);
-          await audio.play();
-        } catch (initialError) {
-          if (
-            !forceRefresh &&
-            recoveryAttemptsRef.current < 2 &&
-            isRecoverablePlaybackError(initialError, audio) &&
-            playbackOwnerMatches(expectedOwner, audio) &&
-            playRequestRef.current === requestId
-          ) {
+          try {
+            await audio.play();
+            break;
+          } catch (playError) {
+            if (
+              !desiredPlaybackRef.current ||
+              !playbackOwnerMatches(expectedOwner, audio) ||
+              playRequestRef.current !== requestId ||
+              recoveryAttemptsRef.current >= 2 ||
+              !isRecoverablePlaybackError(playError, audio)
+            ) {
+              throw playError;
+            }
+
             recoveryAttemptsRef.current += 1;
             const refreshed = await refreshStreamForPlayback(audio, expectedOwner);
             if (!refreshed || !playbackOwnerMatches(expectedOwner, audio) || playRequestRef.current !== requestId) {
               return;
             }
-            await audio.play();
-          } else {
-            throw initialError;
           }
         }
 
@@ -847,6 +821,7 @@ export function Player({
       }
     })();
 
+    playPromiseRequestIdRef.current = requestId;
     playPromiseRef.current = task;
     return task;
   }

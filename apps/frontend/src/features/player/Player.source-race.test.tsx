@@ -1,4 +1,4 @@
-import { act, render } from "@testing-library/react";
+import { act, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Song } from "../../App";
 import { Player } from "./Player";
@@ -59,6 +59,7 @@ describe("Player media-source ownership", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -117,6 +118,130 @@ describe("Player media-source ownership", () => {
     expect(onRefreshStreamUrl).toHaveBeenCalled();
     expect(audio!.src).not.toContain("/drive/stream/a?");
     expect(audio!.src).toContain("/drive/stream/b?");
+  });
+
+  it("recovers an old stream on the first Space press even while play() is unresolved", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const oldSong = makeSong("drive-a", `/drive/stream/a?expires=${now + 3600}&signature=old`);
+    const newSong = makeSong("drive-a", `/drive/stream/a?expires=${now + 3600}&signature=new`);
+    const failedPlay = deferred<void>();
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play")
+      .mockImplementationOnce(() => failedPlay.promise)
+      .mockResolvedValue(undefined);
+    const refresh = vi.fn(async () => newSong);
+    const view = render(<Player {...playerProps(oldSong, 0, refresh)} />);
+    const audio = view.container.querySelector("audio")!;
+
+    fireEvent.keyDown(document, { code: "Space", key: " ", repeat: false });
+    fireEvent.keyUp(document, { code: "Space", key: " " });
+    expect(play).toHaveBeenCalledTimes(1);
+
+    // A media error often arrives while the original play() is still pending.
+    // Its recovery must take over rather than wait for that promise to settle.
+    await act(async () => {
+      fireEvent.error(audio);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(audio.src).toContain("signature=new");
+
+    // Late failure from the replaced request must not turn playback off.
+    await act(async () => {
+      failedPlay.reject(new DOMException("Failed to load prior stream", "NotSupportedError"));
+      await failedPlay.promise.catch(() => undefined);
+    });
+
+    expect(view.getByRole("button", { name: "Pause" })).toBeTruthy();
+    expect(view.queryByText(/Playback error:/)).toBeNull();
+  });
+
+  it("does not let an older refresh for the same song overwrite a newer recovery", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const oldSong = makeSong("drive-a", `/drive/stream/a?expires=${now - 60}`);
+    const stale = makeSong("drive-a", `/drive/stream/a?expires=${now + 3600}&signature=stale`);
+    const fresh = makeSong("drive-a", `/drive/stream/a?expires=${now + 3600}&signature=fresh`);
+    const firstRefresh = deferred<Song>();
+    const refresh = vi.fn()
+      .mockImplementationOnce(() => firstRefresh.promise)
+      .mockResolvedValue(fresh);
+    const view = render(<Player {...playerProps(oldSong, 1, refresh)} />);
+    const audio = view.container.querySelector("audio")!;
+    await act(async () => { await Promise.resolve(); });
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      fireEvent.error(audio);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(audio.src).toContain("signature=fresh");
+
+    await act(async () => {
+      firstRefresh.resolve(stale);
+      await firstRefresh.promise;
+      await Promise.resolve();
+    });
+    expect(audio.src).toContain("signature=fresh");
+    expect(audio.src).not.toContain("signature=stale");
+  });
+
+  it("restarts a failed media element even if refreshed signing returns the same URL", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const song = makeSong("drive-a", `/drive/stream/a?expires=${now + 3600}`);
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play")
+      .mockRejectedValueOnce(new Error("Failed to load stream"))
+      .mockResolvedValue(undefined);
+    const load = vi.spyOn(HTMLMediaElement.prototype, "load");
+    const refresh = vi.fn(async () => song);
+    const view = render(<Player {...playerProps(song, 0, refresh)} />);
+    const loadsBeforePlay = load.mock.calls.length;
+
+    fireEvent.keyDown(document, { code: "Space", key: " ", repeat: false });
+    fireEvent.keyUp(document, { code: "Space", key: " " });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(load.mock.calls.length).toBeGreaterThan(loadsBeforePlay);
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(view.getByRole("button", { name: "Pause" })).toBeTruthy();
+  });
+
+  it("recovers a startup stall without nudging the playhead or skipping the intro", async () => {
+    vi.useFakeTimers();
+    const now = Math.floor(Date.now() / 1000);
+    const song = makeSong("drive-a", `/drive/stream/a?expires=${now + 3600}`);
+    const refresh = vi.fn(async () => makeSong("drive-a", `/drive/stream/a?expires=${now + 3600}&retry=1`));
+    const view = render(<Player {...playerProps(song, 1, refresh)} />);
+    const audio = view.container.querySelector("audio")!;
+    await act(async () => { await Promise.resolve(); });
+
+    const currentTimeDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "currentTime")!;
+    const seekPositions: number[] = [];
+    Object.defineProperty(audio, "currentTime", {
+      configurable: true,
+      get: () => currentTimeDescriptor.get!.call(audio) as number,
+      set: (value: number) => {
+        seekPositions.push(value);
+        currentTimeDescriptor.set!.call(audio, value);
+      }
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(760);
+    });
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(seekPositions).not.toContain(0.02);
+    expect(seekPositions.every((position) => position === 0)).toBe(true);
+    expect(audio.currentTime).toBe(0);
   });
 
 });
