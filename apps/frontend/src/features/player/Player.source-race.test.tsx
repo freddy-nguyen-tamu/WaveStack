@@ -382,4 +382,106 @@ describe("Player media-source ownership", () => {
     expect(view.getByRole("button", { name: "Pause" })).toBeTruthy();
   });
 
+
+  it("renews an expired paused stream after an hour and resumes the original time", async () => {
+    let clock = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    const old = makeSong("drive-a", `/drive/stream/a?expires=${Math.floor(clock / 1000) + 900}`);
+    const fresh = makeSong("drive-a", `/drive/stream/a?expires=${Math.floor(clock / 1000) + 7200}&signature=fresh`);
+    // A source load resets media position in real browsers. Mock it explicitly
+    // because jsdom does not implement an actual media decoder.
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(function (this: HTMLMediaElement) {
+      this.currentTime = 0;
+    });
+    const refresh = vi.fn(async () => fresh);
+    const view = render(<Player {...playerProps(old, 0, refresh)} />);
+    const audio = view.container.querySelector("audio")!;
+
+    await act(async () => { fireEvent.click(view.getByRole("button", { name: "Play" })); });
+    audio.currentTime = 83.5;
+    fireEvent.timeUpdate(audio);
+    await act(async () => { fireEvent.click(view.getByRole("button", { name: "Pause" })); });
+    expect(audio.currentTime).toBe(83.5);
+    expect(refresh).not.toHaveBeenCalled();
+
+    clock += 60 * 60 * 1000;
+    await act(async () => {
+      fireEvent.click(view.getByRole("button", { name: "Play" }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(audio.src).toContain("signature=fresh");
+    expect(audio.currentTime).toBeCloseTo(83.5);
+    expect(view.getByRole("button", { name: "Pause" })).toBeTruthy();
+    expect(view.queryByText(/Playback error:/)).toBeNull();
+  });
+
+  it("preserves paused progress when reusing a newer same-song URL already in React state", async () => {
+    let clock = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    const old = makeSong("drive-a", `/drive/stream/a?expires=${Math.floor(clock / 1000) + 900}`);
+    const fresh = makeSong("drive-a", `/drive/stream/a?expires=${Math.floor(clock / 1000) + 7200}&signature=already-fresh`);
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(function (this: HTMLMediaElement) {
+      this.currentTime = 0;
+    });
+    const refresh = vi.fn(async () => fresh);
+    const view = render(<Player {...playerProps(old, 0, refresh)} />);
+    const audio = view.container.querySelector("audio")!;
+
+    await act(async () => { fireEvent.click(view.getByRole("button", { name: "Play" })); });
+    audio.currentTime = 102.25;
+    fireEvent.timeUpdate(audio);
+    await act(async () => { fireEvent.click(view.getByRole("button", { name: "Pause" })); });
+    // The metadata refresh rotates signing while the user stays paused.
+    view.rerender(<Player {...playerProps(fresh, 0, refresh)} />);
+    expect(audio.src).toContain(`expires=${Math.floor(clock / 1000) + 900}`);
+    clock += 60 * 60 * 1000;
+
+    // Even if the browser discarded its paused resource, our saved progress
+    // must survive. The play click should use the fresh known URL, not the old.
+    audio.currentTime = 0;
+    await act(async () => {
+      fireEvent.click(view.getByRole("button", { name: "Play" }));
+      await Promise.resolve();
+    });
+
+    expect(refresh).not.toHaveBeenCalled();
+    expect(audio.src).toContain("signature=already-fresh");
+    expect(audio.currentTime).toBeCloseTo(102.25);
+    expect(view.getByRole("button", { name: "Pause" })).toBeTruthy();
+  });
+
+  it("does not restart after the user pauses while a renewed link is pending", async () => {
+    let clock = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    const old = makeSong("drive-a", `/drive/stream/a?expires=${Math.floor(clock / 1000) + 900}`);
+    const fresh = makeSong("drive-a", `/drive/stream/a?expires=${Math.floor(clock / 1000) + 7200}&signature=late`);
+    const delayed = deferred<Song>();
+    const refresh = vi.fn(() => delayed.promise);
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play");
+    const view = render(<Player {...playerProps(old, 0, refresh)} />);
+    const audio = view.container.querySelector("audio")!;
+
+    await act(async () => { fireEvent.click(view.getByRole("button", { name: "Play" })); });
+    audio.currentTime = 42;
+    fireEvent.timeUpdate(audio);
+    await act(async () => { fireEvent.click(view.getByRole("button", { name: "Pause" })); });
+    clock += 60 * 60 * 1000;
+    await act(async () => { fireEvent.click(view.getByRole("button", { name: "Play" })); });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    const playsBeforeCancel = play.mock.calls.length;
+    await act(async () => { fireEvent.click(view.getByRole("button", { name: "Pause" })); });
+    await act(async () => {
+      delayed.resolve(fresh);
+      await delayed.promise;
+      await Promise.resolve();
+    });
+
+    expect(play).toHaveBeenCalledTimes(playsBeforeCancel);
+    expect(audio.currentTime).toBe(42);
+    expect(view.getByRole("button", { name: "Play" })).toBeTruthy();
+  });
+
 });

@@ -79,6 +79,9 @@ export function Player({
   const playPromiseRef = useRef<Promise<void> | null>(null);
   const playPromiseRequestIdRef = useRef(0);
   const pendingSeekRef = useRef<number | null>(null);
+  // Keep the paused position even if an expired media resource is evicted or
+  // replacing its signed URL resets the audio element back to time zero.
+  const lastPlaybackPositionRef = useRef(0);
   const desiredPlaybackRef = useRef(false);
   const currentSourceSongIdRef = useRef(activeSong.id);
   const sourcePlaySignalRef = useRef(playSignal);
@@ -184,6 +187,7 @@ export function Player({
       playPromiseRequestIdRef.current = 0;
       desiredPlaybackRef.current = false;
       pendingSeekRef.current = null;
+      lastPlaybackPositionRef.current = 0;
       audio.pause();
       try {
         audio.currentTime = 0;
@@ -214,12 +218,13 @@ export function Player({
     // Player-owned source assignment prevents React from interrupting an in-flight
     // recovery when a refreshed signed URL is written back to activeSong.
     if (!sameSourceResource && currentSource !== nextSource) {
-      const resumeAt = resetForNewPlay ? 0 : audio.currentTime || currentTime;
+      const resumeAt = resetForNewPlay ? 0 : rememberResumePosition(audio);
       pendingSeekRef.current = resumeAt > 0 ? resumeAt : null;
       audio.pause();
       assertStreamUrlBelongsToSong(activeSong.id, activeSong.streamUrl);
       audio.src = activeSong.streamUrl;
       audio.load();
+      restorePendingSeek();
       setIsPlaying(false);
     }
   }, [activeSong.id, activeSong.streamUrl, playSignal]);
@@ -327,6 +332,18 @@ export function Player({
     onListenStart(latestActiveSongRef.current);
   }
 
+  function rememberResumePosition(audio: HTMLAudioElement): number {
+    const actual = Number.isFinite(audio.currentTime) ? Math.max(0, audio.currentTime) : 0;
+    // When the browser drops an idle media resource, currentTime can return 0
+    // even though the user's paused position was nonzero. Explicit seeks and
+    // song changes reset the saved position, so only use it as a fallback.
+    const resumeAt = actual > 0
+      ? Math.max(actual, pendingSeekRef.current ?? 0)
+      : Math.max(pendingSeekRef.current ?? 0, lastPlaybackPositionRef.current);
+    lastPlaybackPositionRef.current = resumeAt;
+    return resumeAt;
+  }
+
   function syncProgressFromAudio(owner?: PlaybackOwner) {
     const audio = audioRef.current;
 
@@ -338,7 +355,16 @@ export function Player({
       return;
     }
 
-    setCurrentTime(audio.currentTime || 0);
+    const mediaTime = Number.isFinite(audio.currentTime) ? Math.max(0, audio.currentTime) : 0;
+    const pending = pendingSeekRef.current;
+    if (pending !== null && mediaTime < pending - 0.05) {
+      // A new source can briefly emit timeupdate(0) before it is seekable.
+      // Do not erase the paused position while waiting to restore it.
+      setCurrentTime(pending);
+    } else if (mediaTime > 0 || !audio.paused || lastPlaybackPositionRef.current === 0) {
+      lastPlaybackPositionRef.current = mediaTime;
+      setCurrentTime(mediaTime);
+    }
 
     if (Number.isFinite(audio.duration) && audio.duration > 0) {
       setDuration(audio.duration);
@@ -517,9 +543,15 @@ export function Player({
       const maxTime = Number.isFinite(audio.duration) && audio.duration > 0
         ? Math.max(0, audio.duration - 0.05)
         : pendingSeek;
-      audio.currentTime = Math.min(pendingSeek, maxTime);
-      setCurrentTime(audio.currentTime || pendingSeek);
-      pendingSeekRef.current = null;
+      const target = Math.min(pendingSeek, maxTime);
+      audio.currentTime = target;
+      // A setter can be ignored before metadata on some browsers. Keep the
+      // pending seek for loadedmetadata/canplay instead of playing at zero.
+      if (Math.abs(audio.currentTime - target) < 0.1) {
+        lastPlaybackPositionRef.current = audio.currentTime;
+        setCurrentTime(audio.currentTime);
+        pendingSeekRef.current = null;
+      }
     } catch {
       // Some browsers do not allow seeking until a later readyState. Keep it pending.
     }
@@ -565,7 +597,7 @@ export function Player({
 
     // Read the position only after the network round trip: a still-playing
     // source may have advanced while the replacement link was requested.
-    const resumeAt = Number.isFinite(audio.currentTime) ? audio.currentTime : currentTime;
+    const resumeAt = rememberResumePosition(audio);
     const currentSource = resolveMediaUrl(audio.src || audio.currentSrc);
     const nextSource = resolveMediaUrl(refreshed.streamUrl);
     expectedSourceUrlRef.current = nextSource;
@@ -580,16 +612,9 @@ export function Player({
     }
     audio.load();
 
-    // Apply a real resume position before play(), not only when metadata later
-    // arrives. Otherwise the new source can audibly play a short bit from zero
-    // before the delayed loadedmetadata handler jumps to the resume position.
-    if (resumeAt > 0) {
-      try {
-        audio.currentTime = resumeAt;
-      } catch {
-        // restorePendingSeek() will retry as soon as seeking becomes legal.
-      }
-    }
+    // Restore before play() wherever possible. On browsers that cannot seek
+    // until metadata is loaded, restorePendingSeek retries on media events.
+    restorePendingSeek();
 
     return true;
   }
@@ -670,10 +695,15 @@ export function Player({
           resolveMediaUrl(currentSource) !== resolveMediaUrl(latestSource);
 
         if (canUseKnownFreshSource) {
+          // A newer URL supplied by React is just as much a source replacement
+          // as a GraphQL refresh. load() resets currentTime, so preserve it here.
+          const resumeAt = rememberResumePosition(audio);
+          pendingSeekRef.current = resumeAt > 0 ? resumeAt : null;
           expectedSourceUrlRef.current = resolveMediaUrl(latestSource);
           audio.pause();
           audio.src = latestSource;
           audio.load();
+          restorePendingSeek();
           currentSource = audio.src;
         } else if (forceRefresh || sourceIdentityMismatch || sourceExpired) {
           const refreshed = await refreshStreamForPlayback(audio, expectedOwner);
@@ -692,6 +722,7 @@ export function Player({
         let interruptedPlayRetries = 0;
         while (playbackOwnerMatches(expectedOwner, audio) && playRequestRef.current === requestId) {
           assertStreamUrlBelongsToSong(expectedOwner.songId, audio.src || audio.currentSrc);
+          restorePendingSeek();
           try {
             // play() can stay unresolved throughout buffering; start the
             // watchdog *before* awaiting it, without assuming delay is failure.
@@ -772,6 +803,9 @@ export function Player({
   }
 
   function pauseCurrent(messageText: string) {
+    if (audioRef.current) {
+      rememberResumePosition(audioRef.current);
+    }
     desiredPlaybackRef.current = false;
     clearStartupStallWatchdog(true);
     playRequestRef.current += 1;
@@ -857,6 +891,8 @@ export function Player({
       }
 
       audio.currentTime = 0;
+      pendingSeekRef.current = null;
+      lastPlaybackPositionRef.current = 0;
       setCurrentTime(0);
       setHasPlaybackHistory(true);
       // Restarting an already playing song at zero is a new listen.
@@ -1011,7 +1047,8 @@ export function Player({
       if (audio) {
         audio.currentTime = 0;
       }
-
+      pendingSeekRef.current = null;
+      lastPlaybackPositionRef.current = 0;
       setCurrentTime(0);
       setHasPlaybackHistory(true);
       // Restarting an already playing song at zero is a new listen.
@@ -1117,6 +1154,8 @@ export function Player({
     }
 
     audioRef.current.currentTime = nextTime;
+    pendingSeekRef.current = null;
+    lastPlaybackPositionRef.current = nextTime;
     setCurrentTime(nextTime);
     setHasPlaybackHistory(true);
 
@@ -1195,6 +1234,7 @@ export function Player({
             restorePendingSeek();
             if (desiredPlaybackRef.current) armStartupStallWatchdog();
           }}
+          onCanPlay={restorePendingSeek}
           onTimeUpdate={() => {
             syncProgressFromAudio();
             noteStartupPlaybackProgress();
@@ -1267,6 +1307,8 @@ export function Player({
             // even if repeat mode is disabled and the source does not change.
             recordedListenEpochRef.current = null;
             desiredPlaybackRef.current = false;
+            pendingSeekRef.current = null;
+            lastPlaybackPositionRef.current = 0;
             clearStartupStallWatchdog(true);
             pauseDiscRotation();
             setIsPlaying(false);
