@@ -235,13 +235,151 @@ describe("Player media-source ownership", () => {
     });
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(760);
+      await vi.advanceTimersByTimeAsync(12_050);
     });
 
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(seekPositions).not.toContain(0.02);
     expect(seekPositions.every((position) => position === 0)).toBe(true);
     expect(audio.currentTime).toBe(0);
+  });
+
+  it("does not stop a normally buffering song at the old 1.45-second deadline", async () => {
+    vi.useFakeTimers();
+    const expires = Math.floor(Date.now() / 1000) + 3600;
+    const first = makeSong("drive-a", `/drive/stream/a?expires=${expires}`);
+    const next = makeSong("drive-b", `/drive/stream/b?expires=${expires}`);
+    const refresh = vi.fn(async (song: Song) => song);
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause");
+    const view = render(<Player {...playerProps(first, 1, refresh)} />);
+    await act(async () => { await Promise.resolve(); });
+
+    // Both a manual Next and an automatic queue advance reach this same
+    // song/source + playSignal transition in Player.
+    view.rerender(<Player {...playerProps(next, 2, refresh)} />);
+    await act(async () => { await Promise.resolve(); });
+    const pausesAfterSourceSwap = pause.mock.calls.length;
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+
+    expect(refresh).not.toHaveBeenCalled();
+    expect(pause).toHaveBeenCalledTimes(pausesAfterSourceSwap);
+    expect(view.getByRole("button", { name: "Pause" })).toBeTruthy();
+    expect(view.queryByText(/Playback error:/)).toBeNull();
+  });
+
+  it("retries once without force-pausing a slow second startup", async () => {
+    vi.useFakeTimers();
+    const expires = Math.floor(Date.now() / 1000) + 3600;
+    const song = makeSong("drive-a", `/drive/stream/a?expires=${expires}`);
+    const refreshed = makeSong("drive-a", `/drive/stream/a?expires=${expires}&signature=retry`);
+    const refresh = vi.fn(async () => refreshed);
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause");
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play");
+    const view = render(<Player {...playerProps(song, 1, refresh)} />);
+    await act(async () => { await Promise.resolve(); });
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_050); });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(play).toHaveBeenCalledTimes(2);
+    const pausesAfterRetry = pause.mock.calls.length;
+
+    // A second 12-second period without any timeupdate isn't evidence that
+    // the user pressed Pause; decoding/network buffering may still complete.
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_050); });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(pause).toHaveBeenCalledTimes(pausesAfterRetry);
+    expect(view.getByRole("button", { name: "Pause" })).toBeTruthy();
+    expect(view.queryByText(/Playback error:/)).toBeNull();
+
+    const audio = view.container.querySelector("audio")!;
+    audio.currentTime = 0.5;
+    fireEvent.timeUpdate(audio);
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    expect(pause).toHaveBeenCalledTimes(pausesAfterRetry);
+  });
+
+  it("keeps the new play intent when a watchdog supersedes an unresolved play promise", async () => {
+    vi.useFakeTimers();
+    const expires = Math.floor(Date.now() / 1000) + 3600;
+    const song = makeSong("drive-a", `/drive/stream/a?expires=${expires}`);
+    const refreshed = makeSong("drive-a", `/drive/stream/a?expires=${expires}&signature=retry`);
+    const firstPlay = deferred<void>();
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play")
+      .mockImplementationOnce(() => firstPlay.promise)
+      .mockResolvedValue(undefined);
+    const refresh = vi.fn(async () => refreshed);
+    const view = render(<Player {...playerProps(song, 1, refresh)} />);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_050); });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(play).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      firstPlay.reject(new DOMException("The play() request was interrupted by a call to pause().", "AbortError"));
+      await firstPlay.promise.catch(() => undefined);
+    });
+    expect(view.getByRole("button", { name: "Pause" })).toBeTruthy();
+    expect(view.queryByText(/Playback error:/)).toBeNull();
+  });
+
+  it("retries an incidental play interruption without clearing playback intent", async () => {
+    const expires = Math.floor(Date.now() / 1000) + 3600;
+    const song = makeSong("drive-a", `/drive/stream/a?expires=${expires}`);
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play")
+      .mockRejectedValueOnce(new DOMException("The play() request was interrupted by a call to pause().", "AbortError"))
+      .mockResolvedValue(undefined);
+    const refresh = vi.fn(async () => song);
+    const view = render(<Player {...playerProps(song, 1, refresh)} />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(refresh).not.toHaveBeenCalled();
+    expect(view.getByRole("button", { name: "Pause" })).toBeTruthy();
+    expect(view.queryByText(/Playback error:/)).toBeNull();
+  });
+
+  it("ignores a delayed pause event from a prior source after the new source plays", async () => {
+    const expires = Math.floor(Date.now() / 1000) + 3600;
+    const first = makeSong("drive-a", `/drive/stream/a?expires=${expires}`);
+    const next = makeSong("drive-b", `/drive/stream/b?expires=${expires}`);
+    const view = render(<Player {...playerProps(first, 1, async song => song)} />);
+    await act(async () => { await Promise.resolve(); });
+    view.rerender(<Player {...playerProps(next, 2, async song => song)} />);
+    await act(async () => { await Promise.resolve(); });
+    const audio = view.container.querySelector("audio")!;
+
+    // The browser can dispatch an older queued pause event even though the
+    // element has already accepted the newly selected song's play request.
+    Object.defineProperty(audio, "paused", { configurable: true, value: false });
+    fireEvent.play(audio);
+    fireEvent.pause(audio);
+
+    expect(view.getByRole("button", { name: "Pause" })).toBeTruthy();
+    expect(view.queryByText(/Playback error:/)).toBeNull();
+  });
+
+  it("reasserts play after an unsolicited media pause without a user Pause action", async () => {
+    const expires = Math.floor(Date.now() / 1000) + 3600;
+    const song = makeSong("drive-a", `/drive/stream/a?expires=${expires}`);
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play");
+    const view = render(<Player {...playerProps(song, 1, async track => track)} />);
+    await act(async () => { await Promise.resolve(); });
+    const audio = view.container.querySelector("audio")!;
+    expect(play).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      fireEvent.play(audio);
+      fireEvent.pause(audio);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(view.getByRole("button", { name: "Pause" })).toBeTruthy();
   });
 
 });
