@@ -1169,7 +1169,9 @@ export function App() {
   }, [playlists, selectedPlaylistId]);
 
   useEffect(() => {
-    if (seededStartupAllContextRef.current) {
+    // A real playback selection establishes its own context and timeline. A
+    // catalog response arriving afterward must never replace that selection.
+    if (seededStartupAllContextRef.current || playRequestIdRef.current > 0) {
       return;
     }
 
@@ -1186,15 +1188,26 @@ export function App() {
     }
 
     function seedStartupAllContext() {
-      if (seededStartupAllContextRef.current || !startupAllSongs.length) {
+      if (seededStartupAllContextRef.current || playRequestIdRef.current > 0 || !startupAllSongs.length) {
         return;
       }
 
-      const lastPlayedSong = lastPlayedSongIdRef.current
-        ? startupAllSongs.find((song) => song.id === lastPlayedSongIdRef.current)
+      // The last song is restored synchronously from wavestack:last-song. It
+      // need not be among the 600 cached tracks or even in the latest catalog.
+      // Never discard it to choose a random library song when loading finishes.
+      const selectedSong = currentSongRef.current;
+      const lastPlayedSongId = lastPlayedSongIdRef.current;
+      const lastPlayedSong = lastPlayedSongId
+        ? (selectedSong?.id === lastPlayedSongId
+          ? selectedSong
+          : startupAllSongs.find((song) => song.id === lastPlayedSongId))
         : null;
+      // Space can begin playing a catalog fallback before the startup context
+      // exists. Preserve that already-playing song as well.
+      const playingSong = nowPlayingStore.getState().isPlaying &&
+        selectedSong?.id !== PLACEHOLDER_SONG_ID ? selectedSong : null;
       const randomIndex = Math.floor(Math.random() * startupAllSongs.length);
-      const startupSong = lastPlayedSong ?? startupAllSongs[randomIndex] ?? startupAllSongs[0];
+      const startupSong = playingSong ?? lastPlayedSong ?? startupAllSongs[randomIndex] ?? startupAllSongs[0];
 
       if (!startupSong) {
         return;
@@ -1204,7 +1217,11 @@ export function App() {
         id: "all:startup",
         label: "All Songs",
         source: "all",
-        songs: startupAllSongs
+        // Saved tracks can fall outside the startup cache. Keep them in the
+        // playback context so Next/Previous still operate on the correct song.
+        songs: startupAllSongs.some((song) => song.id === startupSong.id)
+          ? startupAllSongs
+          : [startupSong, ...startupAllSongs]
       };
 
       seededStartupAllContextRef.current = true;
@@ -2439,7 +2456,17 @@ export function App() {
   // Recording from currentSong changes loses repeat-one loops and misses the
   // cached last song when the user presses Space after a page refresh.
   const handleListenStart = useCallback((song: Song) => {
-    if (!getAuthToken() || song.id === PLACEHOLDER_SONG_ID) return;
+    if (song.id === PLACEHOLDER_SONG_ID || currentSongRef.current?.id !== song.id) return;
+
+    // The first song can be played with Space before the startup context is
+    // seeded. Unlike startSong(), that path has not persisted a selection yet.
+    if (lastPlayedSongIdRef.current !== song.id || !window.localStorage.getItem("wavestack:last-song")) {
+      lastPlayedSongIdRef.current = song.id;
+      window.localStorage.setItem("wavestack:last-song-id", song.id);
+      writeLocalJson("wavestack:last-song", song);
+    }
+
+    if (!getAuthToken()) return;
 
     void recordListen({
       variables: {
