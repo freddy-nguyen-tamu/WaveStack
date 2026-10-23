@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSongPages } from "../../hooks/useSongPages";
 import { LoadingStatus } from "../../components/LoadingStatus";
 import { useStableScrollRegion } from "../../hooks/useStableScrollRegion";
+import { useVirtualSongWindow } from "../../hooks/useVirtualSongWindow";
 import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../../App";
 import { formatSongDisplayName, matchesSongSearch } from "../../song-format";
 import { SongListRow } from "../../components/SongListRow";
@@ -99,6 +100,10 @@ export function SearchPanel({
   const currentPage = Math.min(page, pageCount);
   const pagedResults = results.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
   const displayedResults = backendSearch ? results : pagedResults;
+  const virtual = useVirtualSongWindow<HTMLUListElement>({
+    count: displayedResults.length,
+    resetKey: `${pageKey}:${debouncedQuery}:${backendSearch}`
+  });
   const playbackSource: PlaybackContext["source"] =
     title === "Favorites" ? "favorites" : title === "Recently Played" ? "recent" : "search";
   const playbackContext = useMemo<PlaybackContext>(() => ({
@@ -225,12 +230,14 @@ export function SearchPanel({
       </p>
       {displayedResults.length ? (
         <>
-          <ul className="song-list">
-            {displayedResults.map((song, index) => (
+          <ul ref={virtual.ref} className="song-list">
+            {virtual.topHeight > 0 ? <li className="virtual-song-spacer" style={{ height: virtual.topHeight }} aria-hidden="true" /> : null}
+            {displayedResults.slice(virtual.start, virtual.end).map((song, offset) => (
               <SongListRow
                 key={song.id}
                 song={song}
-                index={backendSearch ? index : (currentPage - 1) * PAGE_SIZE + index}
+                index={backendSearch ? virtual.start + offset : (currentPage - 1) * PAGE_SIZE + virtual.start + offset}
+                virtualIndex={virtual.start + offset}
                 playlists={playlists}
                 favoriteIds={favoriteIds}
                 playbackContext={playbackContext}
@@ -241,6 +248,7 @@ export function SearchPanel({
                 onOpenDetails={onOpenDetails}
               />
             ))}
+            {virtual.bottomHeight > 0 ? <li className="virtual-song-spacer" style={{ height: virtual.bottomHeight }} aria-hidden="true" /> : null}
           </ul>
 
           {!backendSearch && pageCount > 1 ? (

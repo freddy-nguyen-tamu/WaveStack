@@ -8,6 +8,7 @@ import { PaginationBar } from "../../components/PaginationBar";
 import { ToastNotice } from "../../components/ToastNotice";
 import { LoadingStatus } from "../../components/LoadingStatus";
 import { useStableScrollRegion } from "../../hooks/useStableScrollRegion";
+import { useVirtualSongWindow } from "../../hooks/useVirtualSongWindow";
 import { RouteSticker } from "../../components/KeyboardShortcutsMenu";
 
 type PlaylistPanelProps = {
@@ -80,6 +81,10 @@ export function PlaylistPanel({
   const pageCount = Math.max(1, Math.ceil(libraryResults.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
   const pagedSongs = libraryResults.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const selectedVirtual = useVirtualSongWindow<HTMLUListElement>({
+    count: selectedPlaylistSongs.length,
+    resetKey: selectedPlaylist?.id ?? "none"
+  });
   const selectedPlaylistContext = useMemo<PlaybackContext>(() => ({
     id: selectedPlaylist ? `playlist:${selectedPlaylist.id}` : "playlist:none",
     label: selectedPlaylist?.name ?? "Playlist",
@@ -215,12 +220,14 @@ export function PlaylistPanel({
           </button>
 
           {selectedPlaylistSongs.length ? (
-            <ul className="song-list">
-              {selectedPlaylistSongs.map((song, index) => (
+            <ul className="song-list" ref={selectedVirtual.ref}>
+              {selectedVirtual.topHeight > 0 ? <li className="virtual-song-spacer" style={{ height: selectedVirtual.topHeight }} aria-hidden="true" /> : null}
+              {selectedPlaylistSongs.slice(selectedVirtual.start, selectedVirtual.end).map((song, offset) => (
                 <SongListRow
                   key={song.id}
                   song={song}
-                  index={index}
+                  index={selectedVirtual.start + offset}
+                  virtualIndex={selectedVirtual.start + offset}
                   playlists={playlists}
                   favoriteIds={favoriteIds}
                   playbackContext={selectedPlaylistContext}
@@ -236,6 +243,7 @@ export function PlaylistPanel({
                   }
                 />
               ))}
+              {selectedVirtual.bottomHeight > 0 ? <li className="virtual-song-spacer" style={{ height: selectedVirtual.bottomHeight }} aria-hidden="true" /> : null}
             </ul>
           ) : (
             <p>This playlist is empty. Add songs below.</p>

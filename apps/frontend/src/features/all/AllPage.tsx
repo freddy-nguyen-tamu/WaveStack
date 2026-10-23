@@ -11,6 +11,7 @@ import { useSongPages } from "../../hooks/useSongPages";
 import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
 import { LoadingStatus } from "../../components/LoadingStatus";
 import { useStableScrollRegion } from "../../hooks/useStableScrollRegion";
+import { useVirtualSongWindow } from "../../hooks/useVirtualSongWindow";
 import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../../App";
 import { SongListRow } from "../../components/SongListRow";
 import { matchesSongSearch } from "../../song-format";
@@ -59,7 +60,6 @@ export function AllPage({
   onAddToPlaylist,
   onOpenDetails
 }: AllPageProps) {
-  const listRef = useRef<HTMLUListElement | null>(null);
   const fastScrollTrackRef = useRef<HTMLDivElement | null>(null);
   const fastScrollThumbRef = useRef<HTMLButtonElement | null>(null);
   const fastScrollFrameRef = useRef<number | null>(null);
@@ -101,6 +101,11 @@ export function AllPage({
 
   // The server owns ordering. Re-sorting every appended page moves existing rows.
   const visibleSongs = allSongs;
+  const virtual = useVirtualSongWindow<HTMLUListElement>({
+    count: visibleSongs.length,
+    resetKey: `${backendSort}:${debouncedQuery}`
+  });
+  const listRef = virtual.ref;
   const hasMore = hasMoreBackendSongs;
   const playbackContext = useMemo<PlaybackContext>(() => ({
     id: `all:${backendSort}:${debouncedQuery || "all"}`,
@@ -312,11 +317,13 @@ export function AllPage({
 
       {visibleSongs.length ? (
         <ul ref={listRef} className="song-list all-page__list">
-          {visibleSongs.map((song, index) => (
+          {virtual.topHeight > 0 ? <li className="virtual-song-spacer" style={{ height: virtual.topHeight }} aria-hidden="true" /> : null}
+          {visibleSongs.slice(virtual.start, virtual.end).map((song, offset) => (
             <SongListRow
               key={song.id}
               song={song}
-              index={index}
+              index={virtual.start + offset}
+              virtualIndex={virtual.start + offset}
               playlists={playlists}
               favoriteIds={favoriteIds}
               playbackContext={playbackContext}
@@ -327,6 +334,7 @@ export function AllPage({
               onOpenDetails={onOpenDetails}
             />
           ))}
+          {virtual.bottomHeight > 0 ? <li className="virtual-song-spacer" style={{ height: virtual.bottomHeight }} aria-hidden="true" /> : null}
         </ul>
       ) : !loading && !error ? (
         <p>No matching songs.</p>

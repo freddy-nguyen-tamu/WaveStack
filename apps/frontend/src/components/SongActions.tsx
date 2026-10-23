@@ -1,6 +1,6 @@
 
 import { Check, Heart, ListMusic, ListPlus, Play } from "lucide-react";
-import { useId, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import type { ClientPlaylist, PlaybackContext, PlaySongHandler, Song } from "../App";
 import { formatSongDisplayName } from "../song-format";
@@ -29,6 +29,15 @@ export function SongActions({
   className = ""
 }: SongActionsProps) {
   const [playlistPickerOpen, setPlaylistPickerOpen] = useState(false);
+  // Paint a pressed heart immediately, independent of how long the parent takes
+  // to update lists, persist cache entries or complete the account mutation.
+  const [favoritePreview, setFavoritePreview] = useState<boolean | null>(null);
+  const displayedFavorite = favoritePreview ?? isFavorite;
+  useEffect(() => {
+    if (favoritePreview !== null && favoritePreview === isFavorite) {
+      setFavoritePreview(null);
+    }
+  }, [favoritePreview, isFavorite]);
   const [pending, setPending] = useState(false);
   const pendingRef = useRef(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -106,8 +115,11 @@ export function SongActions({
           <ListMusic aria-hidden="true" /> Queue
         </button>
 
-        <button type="button" onClick={() => onToggleFavorite(song)} aria-pressed={isFavorite}>
-          <Heart aria-hidden="true" /> {isFavorite ? "Unfavorite" : "Favorite"}
+        <button type="button" onClick={() => {
+          setFavoritePreview(!displayedFavorite);
+          onToggleFavorite(song);
+        }} aria-pressed={displayedFavorite}>
+          <Heart aria-hidden="true" /> {displayedFavorite ? "Unfavorite" : "Favorite"}
         </button>
 
         <button

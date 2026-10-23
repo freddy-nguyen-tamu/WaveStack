@@ -631,6 +631,10 @@ export function App() {
   });
   const noticeTimerRef = useRef<number | null>(null);
   const favoriteIdsRef = useRef<string[]>(favoriteIds);
+  // Serialize mutations to the same song so fast repeated heart clicks finish
+  // on the server in the order shown immediately by the UI.
+  const favoriteSyncRef = useRef(new Map<string, Promise<void>>());
+  const playlistSyncRef = useRef(new Map<string, Promise<void>>());
   const recentSongIdsRef = useRef<string[]>(recentSongIds);
   const playlistsRef = useRef<ClientPlaylist[]>(playlists);
   const emptyBackendLibraryStateWarningShownRef = useRef(false);
@@ -1980,71 +1984,46 @@ export function App() {
     showNotice(song ? `Removed from queue: ${formatSongDisplayName(song)}` : "Removed song from queue.");
   }
 
-  async function toggleFavorite(song: Song) {
+  function toggleFavorite(song: Song) {
     if (song.id === PLACEHOLDER_SONG_ID) return;
-
-    rememberSongObjects([song]);
 
     const currentFavoriteIds = favoriteIdsRef.current;
     const isFavorite = currentFavoriteIds.includes(song.id);
-    const optimisticFavoriteIds = isFavorite
-      ? currentFavoriteIds.filter((id) => id !== song.id)
-      : [song.id, ...currentFavoriteIds];
+    applyFavoriteIds(isFavorite
+      ? currentFavoriteIds.filter(id => id !== song.id)
+      : [song.id, ...currentFavoriteIds]);
 
-    applyFavoriteIds(optimisticFavoriteIds);
+    showNotice(isFavorite
+      ? `Removed favorite: ${formatSongDisplayName(song)}`
+      : `Added favorite: ${formatSongDisplayName(song)}`);
 
-    showNotice(
-      isFavorite
-        ? `Removed favorite: ${formatSongDisplayName(song)}`
-        : `Added favorite: ${formatSongDisplayName(song)}`
-    );
+    // Song-cache reconciliation can touch hundreds of entries. It must not
+    // compete with the first paint of the favorite/heart button.
+    window.requestAnimationFrame(() => {
+      window.setTimeout(() => rememberSongObjects([song]), 0);
+    });
 
-    if (!authToken) {
-      return;
-    }
+    if (!authToken) return;
 
-    try {
-      const result = await apolloClient.mutate<{
-        favoriteSong?: Song[];
-        unfavoriteSong?: Song[];
-      }>({
-        mutation: isFavorite ? UNFAVORITE_SONG_MUTATION : FAVORITE_SONG_MUTATION,
-        variables: { songId: song.id },
-        fetchPolicy: "no-cache"
-      });
-
-      const favorites = result.data?.favoriteSong ?? result.data?.unfavoriteSong ?? [];
-      const returnedFavoriteIds = favorites.map((item) => item.id);
-
-      if (isFavorite) {
-        applyFavoriteIds(returnedFavoriteIds);
-        rememberSongObjects(favorites);
-      } else if (returnedFavoriteIds.includes(song.id)) {
-        applyFavoriteIds(returnedFavoriteIds);
-        rememberSongObjects(favorites);
-      } else {
-        console.warn(
-          "favoriteSong did not return the added song after adding. Keeping optimistic favorite state."
-        );
-
-        applyFavoriteIds([
-          song.id,
-          ...returnedFavoriteIds,
-          ...optimisticFavoriteIds.filter((id) => id !== song.id)
-        ]);
-
-        rememberSongObjects(favorites);
+    const previous = favoriteSyncRef.current.get(song.id) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(async () => {
+      try {
+        await apolloClient.mutate({
+          mutation: isFavorite ? UNFAVORITE_SONG_MUTATION : FAVORITE_SONG_MUTATION,
+          variables: { songId: song.id },
+          fetchPolicy: "no-cache"
+        });
+        // Do not overwrite newer optimistic clicks with an old full-list
+        // response, or trigger a library-state refetch that races those clicks.
+      } catch (error) {
+        console.error("Failed to sync favorite", error);
+        showNotice("Favorite saved locally, but account sync failed. Please retry the change.");
       }
-
-      await refetchLibraryState();
-    } catch (error) {
-      console.error("Failed to sync favorite", error);
-      showNotice(
-        isFavorite
-          ? "Removed favorite locally, but account sync failed. Sign in again if it reappears."
-          : "Added favorite locally, but account sync failed. Sign in again if it does not sync."
-      );
-    }
+    });
+    favoriteSyncRef.current.set(song.id, next);
+    void next.finally(() => {
+      if (favoriteSyncRef.current.get(song.id) === next) favoriteSyncRef.current.delete(song.id);
+    });
   }
 
   async function createPlaylist(name: string) {
@@ -2131,7 +2110,9 @@ export function App() {
   async function addToPlaylist(playlistId: string, song: Song) {
     if (song.id === PLACEHOLDER_SONG_ID) return;
 
-    rememberSongObjects([song]);
+    // Let the picker and membership indicator repaint before reconciling the
+    // (potentially large) session song cache.
+    window.setTimeout(() => rememberSongObjects([song]), 0);
 
     if (!playlistId) {
       const name = window.prompt("Name your new playlist", "My Playlist");
@@ -2206,7 +2187,7 @@ export function App() {
       }
     }
 
-    const playlist = playlists.find((item) => item.id === playlistId);
+    const playlist = playlistsRef.current.find(item => item.id === playlistId);
 
     if (!playlist) {
       showNotice("Select or create a playlist first.");
@@ -2218,106 +2199,68 @@ export function App() {
       return;
     }
 
-    if (!authToken) {
-      setPlaylists((items) => {
-        const next = items.map((item) => {
-          if (item.id !== playlistId) {
-            return item;
-          }
+    // Membership checkmarks and playlist counts update before network I/O.
+    applyPlaylists(playlistsRef.current.map(item => item.id !== playlistId ? item : ({
+      ...item,
+      songIds: [...item.songIds, song.id],
+      songs: [...(item.songs ?? []), song],
+      songCount: (item.songCount ?? item.songIds.length) + 1
+    })));
+    showNotice(`Added ${formatSongDisplayName(song)} to ${playlist.name}.`);
+    if (!authToken) return;
 
-          return {
-            ...item,
-            songIds: [...item.songIds, song.id],
-            songs: [...(item.songs ?? []), song],
-            songCount: (item.songCount ?? item.songIds.length) + 1
-          };
+    // Mutations to the same playlist are serialized, avoiding old responses
+    // overwriting a later add/remove made while the first request is in flight.
+    const previous = playlistSyncRef.current.get(playlistId) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(async () => {
+      try {
+        await apolloClient.mutate({
+          mutation: ADD_SONG_TO_USER_PLAYLIST_MUTATION,
+          variables: { playlistId, songId: song.id },
+          fetchPolicy: "no-cache"
         });
-
-        writeLocalJson("wavestack:playlists", next);
-        return next;
-      });
-
-      showNotice(`Added ${formatSongDisplayName(song)} to local playlist ${playlist.name}.`);
-      return;
-    }
-
-    try {
-      const result = await apolloClient.mutate<{ addSongToUserPlaylist: ClientPlaylist[] }>({
-        mutation: ADD_SONG_TO_USER_PLAYLIST_MUTATION,
-        variables: {
-          playlistId,
-          songId: song.id
-        },
-        fetchPolicy: "no-cache"
-      });
-
-      const next = result.data?.addSongToUserPlaylist ?? [];
-      applyPlaylists(next);
-      rememberSongObjects(next.flatMap((item) => item.songs ?? []));
-      await refetchLibraryState();
-
-      showNotice(`Added ${formatSongDisplayName(song)} to ${playlist.name}.`);
-    } catch (error) {
-      console.error("Failed to add song to playlist", error);
-      showNotice("Could not add song to your account playlist.");
-    }
+      } catch (error) {
+        console.error("Failed to add song to playlist", error);
+        showNotice("Playlist changed locally, but account sync failed.");
+      }
+    });
+    playlistSyncRef.current.set(playlistId, next);
+    await next;
+    if (playlistSyncRef.current.get(playlistId) === next) playlistSyncRef.current.delete(playlistId);
   }
 
   async function removeFromPlaylist(playlistId: string, songId: string, knownSong?: Song) {
-    const playlist = playlists.find((item) => item.id === playlistId);
+    const playlist = playlistsRef.current.find(item => item.id === playlistId);
     const song = knownSong ?? songById.get(songId);
+    if (!playlist || !playlist.songIds.includes(songId)) return;
 
-    if (!authToken) {
-      setPlaylists((items) => {
-        const next = items.map((item) => {
-          if (item.id !== playlistId) {
-            return item;
-          }
+    applyPlaylists(playlistsRef.current.map(item => item.id !== playlistId ? item : ({
+      ...item,
+      songIds: item.songIds.filter(id => id !== songId),
+      songs: (item.songs ?? []).filter(candidate => candidate.id !== songId),
+      songCount: Math.max(0, (item.songCount ?? item.songIds.length) - 1)
+    })));
+    showNotice(song
+      ? `Removed ${formatSongDisplayName(song)} from ${playlist.name}.`
+      : "Removed song from playlist.");
+    if (!authToken) return;
 
-          return {
-            ...item,
-            songIds: item.songIds.filter((id) => id !== songId),
-            songs: (item.songs ?? []).filter((playlistSong) => playlistSong.id !== songId),
-            songCount: Math.max(0, (item.songCount ?? item.songIds.length) - 1)
-          };
+    const previous = playlistSyncRef.current.get(playlistId) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(async () => {
+      try {
+        await apolloClient.mutate({
+          mutation: REMOVE_SONG_FROM_USER_PLAYLIST_MUTATION,
+          variables: { playlistId, songId },
+          fetchPolicy: "no-cache"
         });
-
-        writeLocalJson("wavestack:playlists", next);
-        return next;
-      });
-
-      showNotice(
-        playlist && song
-          ? `Removed ${formatSongDisplayName(song)} from local playlist ${playlist.name}.`
-          : "Removed song from local playlist."
-      );
-      return;
-    }
-
-    try {
-      const result = await apolloClient.mutate<{ removeSongFromUserPlaylist: ClientPlaylist[] }>({
-        mutation: REMOVE_SONG_FROM_USER_PLAYLIST_MUTATION,
-        variables: {
-          playlistId,
-          songId
-        },
-        fetchPolicy: "no-cache"
-      });
-
-      const next = result.data?.removeSongFromUserPlaylist ?? [];
-      applyPlaylists(next);
-      rememberSongObjects(next.flatMap((item) => item.songs ?? []));
-      await refetchLibraryState();
-
-      showNotice(
-        playlist && song
-          ? `Removed ${formatSongDisplayName(song)} from ${playlist.name}.`
-          : "Removed song from playlist."
-      );
-    } catch (error) {
-      console.error("Failed to remove song from playlist", error);
-      showNotice("Could not remove song from your account playlist.");
-    }
+      } catch (error) {
+        console.error("Failed to remove song from playlist", error);
+        showNotice("Playlist changed locally, but account sync failed.");
+      }
+    });
+    playlistSyncRef.current.set(playlistId, next);
+    await next;
+    if (playlistSyncRef.current.get(playlistId) === next) playlistSyncRef.current.delete(playlistId);
   }
 
   function logout() {

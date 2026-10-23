@@ -5,6 +5,7 @@ import type { ClientPlaylist } from "../../App";
 import { formatSeconds, getSongCardSize } from "../../song-format";
 import { SongArtwork } from "../../components/SongArtwork";
 import { useInfiniteScroll } from "../../hooks/useInfiniteScroll";
+import { useVirtualSongWindow } from "../../hooks/useVirtualSongWindow";
 import { LoadingStatus } from "../../components/LoadingStatus";
 import { SongActions } from "../../components/SongActions";
 import { RouteSticker } from "../../components/KeyboardShortcutsMenu";
@@ -57,6 +58,7 @@ const DashboardSongTile = memo(function DashboardSongTile({
     <article
       className={`song-tile dashboard-song-tile song-tile--${size}`}
       data-dashboard-tile={song.id}
+      data-virtual-index={index}
     >
       <button
         className="song-tile__open"
@@ -128,35 +130,32 @@ export function Dashboard({
   );
 
   const favoriteIdSet = useMemo(() => new Set(favoriteIds), [favoriteIds]);
-  // Keep the recommendation wall static while scrolling. The previous manual
-  // windowing listened to every window scroll, forced layout reads, and replaced
-  // whole rows whenever the visible range crossed a row boundary. That made
-  // already-loaded content stutter because scrolling itself caused React work.
-  // Memoized tiles plus CSS containment keep the DOM stable and let the browser
-  // perform normal compositor-driven scrolling.
-  const recommendationTiles = useMemo(() => recommendations.map((item, index) => (
-    <DashboardSongTile
-      key={item.song.id}
-      item={item}
-      index={index}
-      playlists={playlists}
-      isFavorite={favoriteIdSet.has(item.song.id)}
-      onPlay={stableOnPlay}
-      onOpenDetails={stableOnOpenDetails}
-      onQueue={stableOnQueue}
-      onToggleFavorite={stableOnToggleFavorite}
-      onAddToPlaylist={stableOnAddToPlaylist}
-    />
-  )), [
-    recommendations,
-    playlists,
-    favoriteIdSet,
-    stableOnPlay,
-    stableOnOpenDetails,
-    stableOnQueue,
-    stableOnToggleFavorite,
-    stableOnAddToPlaylist
-  ]);
+  const virtual = useVirtualSongWindow<HTMLElement>({
+    count: recommendations.length,
+    grid: true,
+    resetKey: "dashboard-recommendations",
+    estimatedRowHeight: 350
+  });
+  // Retain loaded recommendations and their indices, but never keep every tile
+  // mounted as the recommendation wall grows. Virtualized tile groups align to
+  // the current responsive grid column count and preserve nth-child styling.
+  const recommendationTiles = useMemo(() => recommendations
+    .slice(virtual.start, virtual.end)
+    .map((item, offset) => (
+      <DashboardSongTile
+        key={item.song.id}
+        item={item}
+        index={virtual.start + offset}
+        playlists={playlists}
+        isFavorite={favoriteIdSet.has(item.song.id)}
+        onPlay={stableOnPlay}
+        onOpenDetails={stableOnOpenDetails}
+        onQueue={stableOnQueue}
+        onToggleFavorite={stableOnToggleFavorite}
+        onAddToPlaylist={stableOnAddToPlaylist}
+      />
+    )), [recommendations, virtual.start, virtual.end, playlists, favoriteIdSet,
+      stableOnPlay, stableOnOpenDetails, stableOnQueue, stableOnToggleFavorite, stableOnAddToPlaylist]);
 
   const recommendationSentinelRef = useInfiniteScroll({
     enabled: Boolean(onLoadMoreRecommendations),
@@ -195,8 +194,11 @@ export function Dashboard({
         <section
           className="song-masonry dashboard-song-masonry"
           aria-label="Suggested songs"
+          ref={virtual.ref}
         >
-          {recommendationTiles}
+          {virtual.topHeight > 0 ? <div className="virtual-song-spacer" style={{ height: virtual.topHeight }} aria-hidden="true" /> : null}
+          <div className="dashboard-song-masonry__virtual-items">{recommendationTiles}</div>
+          {virtual.bottomHeight > 0 ? <div className="virtual-song-spacer" style={{ height: virtual.bottomHeight }} aria-hidden="true" /> : null}
         </section>
       ) : (
         <p>

@@ -52,17 +52,22 @@ describe("song pagination", () => {
     expect(result.current.loading).toBe(false);
   });
 
-  it("keeps All rows mounted as pages grow past 120 and 180", async () => {
+  it("retains all fetched rows while mounting at most 100 nearest songs", async () => {
     const view = render(<AllPage {...props} />);
     await act(async () => pending.shift()!(page(0)));
     const firstRow = view.container.querySelector(".song-list-row");
     for (const start of [60, 120, 180]) {
-      act(() => intersect([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver));
-      expect(view.container.querySelectorAll(".song-list-row")).toHaveLength(start);
+      act(() => {
+        intersect([{ isIntersecting: false } as IntersectionObserverEntry], {} as IntersectionObserver);
+        intersect([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+      });
       await act(async () => pending.shift()!(page(start, 60, start < 180)));
-      expect(view.container.querySelectorAll(".song-list-row")).toHaveLength(start + 60);
+      expect(view.container.querySelectorAll(".song-list-row").length)
+        .toBe(Math.min(start + 60, 100));
       expect(view.container.querySelector(".song-list-row")).toBe(firstRow);
     }
+    expect(view.container.querySelector(".virtual-song-spacer")).toBeTruthy();
+    expect(view.container.querySelectorAll(".song-list-row")).toHaveLength(100);
   }, 20000);
 
   it("keeps the search input mounted through loading, zero results, and recovery", async () => {

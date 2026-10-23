@@ -9,6 +9,7 @@ type SongListRowProps = {
   playlists: ClientPlaylist[];
   favoriteIds: string[];
   index?: number;
+  virtualIndex?: number;
   meta?: string;
   extraActions?: React.ReactNode;
   playbackContext?: PlaybackContext;
@@ -24,6 +25,7 @@ export function SongListRow({
   playlists,
   favoriteIds,
   index,
+  virtualIndex,
   meta,
   playbackContext,
   onPlay,
@@ -41,6 +43,7 @@ export function SongListRow({
 
   return (
     <li
+      data-virtual-index={virtualIndex}
       className={nowPlaying.isNowPlaying ? "song-list-row song-list-row--now-playing" : "song-list-row"}
       aria-current={nowPlaying.isNowPlaying ? "true" : undefined}
     >

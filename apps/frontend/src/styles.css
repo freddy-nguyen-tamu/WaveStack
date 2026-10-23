@@ -7358,13 +7358,10 @@ article.dashboard-page .song-tile,
   cursor: default !important;
 }
 
-/* Dashboard scroll-performance pass. Keep every recommendation card mounted so
-   normal scrolling never runs React work or swaps rows at viewport boundaries.
-   Per-card containment still limits layout/paint invalidation without lying about
-   intrinsic height, so the grid keeps its exact geometry while the compositor
-   moves the already-rendered page. */
+/* Scroll anchoring stabilizes the viewport as measured virtual row heights
+   replace estimates. Far-offscreen dashboard cards are now unmounted. */
 article.dashboard-page .dashboard-song-masonry {
-  overflow-anchor: none;
+  overflow-anchor: auto;
 }
 article.dashboard-page .dashboard-song-tile {
   content-visibility: visible !important;
@@ -7435,4 +7432,30 @@ article.dashboard-page .dashboard-page__load-more .loading-status {
 article.dashboard-page .dashboard-page__recommendation-sentinel {
   height: 1px;
   min-height: 1px;
+}
+
+/* A bounded DOM window replaces offscreen songs, preserving the original
+   list/grid spacing and full scroll height without changing visual styling. */
+.virtual-song-spacer {
+  display: block;
+  grid-column: 1 / -1;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+.dashboard-song-masonry__virtual-items { display: contents; }
+
+/* The virtualizer measures real row heights. Generic content-visibility:auto
+   would report 96px for a far-offscreen item, creating inaccurate spacers and
+   a scroll jump when it becomes visible. Only up to 100 rows are now mounted. */
+.all-page__list .song-list-row,
+.search-panel .song-list-row,
+.playlist-panel .song-list-row {
+  content-visibility: visible;
+  contain: layout style;
+  contain-intrinsic-size: none;
 }

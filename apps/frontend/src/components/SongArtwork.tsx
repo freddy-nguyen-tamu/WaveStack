@@ -18,6 +18,13 @@ type SongArtworkProps = {
 
 const imageStatus = new Map<string, "loaded" | "failed">();
 const normalizedDiscArtwork = new Map<string, string | null>();
+// Small LRU caches prevent a long browsing session from accumulating every
+// artwork state and the (potentially large) generated disc data URLs forever.
+function rememberInCache<T>(cache: Map<string, T>, key: string, value: T, limit: number) {
+  cache.delete(key);
+  cache.set(key, value);
+  if (cache.size > limit) cache.delete(cache.keys().next().value!);
+}
 const DISC_ANALYSIS_MAX_SIZE = 256;
 const DISC_OUTPUT_SIZE = 512;
 const artworkObservers = new Map<Element, (visible: boolean) => void>();
@@ -373,7 +380,7 @@ export const SongArtwork = memo(function SongArtwork({
     }
 
     const normalized = createNormalizedDiscArtwork(image);
-    normalizedDiscArtwork.set(src, normalized);
+    rememberInCache(normalizedDiscArtwork, src, normalized, 24);
 
     if (normalized) {
       setNormalizedDiscImage({ source: src, src: normalized });
@@ -383,7 +390,7 @@ export const SongArtwork = memo(function SongArtwork({
   function handleImageLoad(event: SyntheticEvent<HTMLImageElement>) {
     setLoadedSrc(displaySrc);
     if (src) {
-      imageStatus.set(src, "loaded");
+      rememberInCache(imageStatus, src, "loaded", 400);
     }
 
     normalizeLoadedDiscImage(event.currentTarget);
@@ -423,7 +430,7 @@ export const SongArtwork = memo(function SongArtwork({
           onLoad={handleImageLoad}
           onError={() => {
             if (src) {
-              imageStatus.set(src, "failed");
+              rememberInCache(imageStatus, src, "failed", 400);
             }
 
             setLoadedSrc(undefined);
