@@ -72,6 +72,16 @@ export function createPlaybackTimeline<Song>(maximumEntries = 10_000) {
       if (position >= 0) entries[position] = song;
     },
 
+    /** Remove tracks no longer in the active playlist from history/future. */
+    pruneOtherSongs(keep: (song: Song) => boolean): void {
+      if (position < 0) return;
+      const previous = entries.slice(0, position).filter(keep);
+      const current = entries[position]; // Let a removed song finish playing.
+      const upcoming = entries.slice(position + 1).filter(keep);
+      entries = [...previous, current, ...upcoming];
+      position = previous.length;
+    },
+
     past(): Song[] {
       return entries.slice(0, Math.max(0, position));
     }

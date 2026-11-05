@@ -43,6 +43,7 @@ import { KeyboardShortcutsMenu } from "./components/KeyboardShortcutsMenu";
 import { pickHabitArtworkSong } from "./habit-artwork";
 import { assertStreamUrlBelongsToSong } from "./playback-source-identity";
 import { createPlaybackTimeline } from "./playback-timeline";
+import { mergeEditedPlaylistMembership, recordPlaylistMembershipEdit, sortPlaylistsNewestFirst, type PlaylistMembershipEdits } from "./playlist-state";
 import { releasePageFocus } from "./hooks/pointerFocus";
 
 export type Song = {
@@ -270,11 +271,11 @@ function readStringArray(key: string): string[] {
 }
 
 function sanitizePlaylists(items: ClientPlaylist[]): ClientPlaylist[] {
-  return items.map((playlist) => ({
+  return sortPlaylistsNewestFirst(items.map((playlist) => ({
     ...playlist,
     songIds: playlist.songIds.filter((id) => id !== PLACEHOLDER_SONG_ID),
     songs: playlist.songs?.filter((song) => song.id !== PLACEHOLDER_SONG_ID)
-  }));
+  })));
 }
 
 function readPlaylists(): ClientPlaylist[] {
@@ -635,6 +636,10 @@ export function App() {
   // on the server in the order shown immediately by the UI.
   const favoriteSyncRef = useRef(new Map<string, Promise<void>>());
   const playlistSyncRef = useRef(new Map<string, Promise<void>>());
+  // A playback/listening query can finish with an older library snapshot after a
+  // user removes a song. Keep this session's explicit membership choices on top
+  // of incoming snapshots, including snapshots from in-flight network requests.
+  const playlistMembershipEditsRef = useRef<PlaylistMembershipEdits>(new Map());
   const recentSongIdsRef = useRef<string[]>(recentSongIds);
   const playlistsRef = useRef<ClientPlaylist[]>(playlists);
   const emptyBackendLibraryStateWarningShownRef = useRef(false);
@@ -666,10 +671,38 @@ export function App() {
   }
 
   function applyPlaylists(nextPlaylists: ClientPlaylist[]) {
-    const next = sanitizePlaylists(nextPlaylists);
+    const next = mergeEditedPlaylistMembership(
+      sanitizePlaylists(nextPlaylists),
+      playlistMembershipEditsRef.current
+    );
     playlistsRef.current = next;
     setPlaylists(next);
     writeLocalJson("wavestack:playlists", next);
+
+    // Playback has its own snapshot of the source playlist. Keep Next/Previous
+    // and the details modal aligned with the latest membership, even when the
+    // removed song is still the one currently playing.
+    const context = playbackContextRef.current;
+    if (context?.source === "playlist" && context.id.startsWith("playlist:")) {
+      const playlist = next.find(item => context.id === `playlist:${item.id}`);
+      const songIds = playlist?.songIds ?? [];
+      const allowedIds = new Set(songIds);
+      const knownSongs = new Map([
+        ...allKnownSongsRef.current,
+        ...context.songs,
+        ...(playlist?.songs ?? [])
+      ].map(song => [song.id, song]));
+      const contextSongs = songIds.map(id => knownSongs.get(id)).filter((song): song is Song => Boolean(song));
+      if (context.label !== (playlist?.name ?? context.label) ||
+        context.songs.length !== contextSongs.length ||
+        context.songs.some((song, index) => song.id !== contextSongs[index]?.id)) {
+        const updatedContext = { ...context, label: playlist?.name ?? context.label, songs: contextSongs };
+        playbackContextRef.current = updatedContext;
+        setPlaybackContext(updatedContext);
+      }
+      playbackTimeline.pruneOtherSongs(song => allowedIds.has(song.id));
+      setCanGoBackInTimeline(playbackTimeline.hasPrevious());
+    }
   }
 
   function toggleDarkMode() {
@@ -841,6 +874,11 @@ export function App() {
   const [authToken, setAuthToken] = useState<string | null>(() => {
     return window.localStorage.getItem("wavestack:auth-token");
   });
+
+  useEffect(() => {
+    // Never carry optimistic playlist membership across different accounts.
+    playlistMembershipEditsRef.current.clear();
+  }, [authToken]);
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -1755,6 +1793,14 @@ export function App() {
       return null;
     }
 
+    // Removing the currently playing song must not strand Next on an item that
+    // is no longer in its playlist. Finish that song, then continue with the
+    // remaining playlist instead of resurrecting its old song list.
+    if (latestContext.source === "playlist" &&
+      !contextSongs.some(song => song.id === latestCurrentSong.id)) {
+      return contextSongs[0] ?? null;
+    }
+
     const nextSong = findNextSequentialSong(contextSongs, latestCurrentSong.id);
 
     if (nextSong) {
@@ -2040,11 +2086,12 @@ export function App() {
         name: trimmed,
         songIds: [],
         songs: [],
-        songCount: 0
+        songCount: 0,
+        createdAt: new Date().toISOString()
       };
 
       setPlaylists((items) => {
-        const next = [...items, playlist];
+        const next = [playlist, ...items];
         writeLocalJson("wavestack:playlists", next);
         return next;
       });
@@ -2076,6 +2123,7 @@ export function App() {
 
   async function deletePlaylist(playlistId: string) {
     const playlist = playlists.find((item) => item.id === playlistId);
+    playlistMembershipEditsRef.current.delete(playlistId);
 
     if (!authToken) {
       setPlaylists((items) => {
@@ -2135,11 +2183,12 @@ export function App() {
           name: trimmed,
           songIds: [song.id],
           songs: [song],
-          songCount: 1
+          songCount: 1,
+          createdAt: new Date().toISOString()
         };
 
         setPlaylists((items) => {
-          const next = [...items, playlist];
+          const next = [playlist, ...items];
           writeLocalJson("wavestack:playlists", next);
           return next;
         });
@@ -2200,10 +2249,11 @@ export function App() {
     }
 
     // Membership checkmarks and playlist counts update before network I/O.
+    recordPlaylistMembershipEdit(playlistMembershipEditsRef.current, playlistId, song.id, true, song);
     applyPlaylists(playlistsRef.current.map(item => item.id !== playlistId ? item : ({
       ...item,
-      songIds: [...item.songIds, song.id],
-      songs: [...(item.songs ?? []), song],
+      songIds: [song.id, ...item.songIds],
+      songs: [song, ...(item.songs ?? [])],
       songCount: (item.songCount ?? item.songIds.length) + 1
     })));
     showNotice(`Added ${formatSongDisplayName(song)} to ${playlist.name}.`);
@@ -2234,6 +2284,7 @@ export function App() {
     const song = knownSong ?? songById.get(songId);
     if (!playlist || !playlist.songIds.includes(songId)) return;
 
+    recordPlaylistMembershipEdit(playlistMembershipEditsRef.current, playlistId, songId, false);
     applyPlaylists(playlistsRef.current.map(item => item.id !== playlistId ? item : ({
       ...item,
       songIds: item.songIds.filter(id => id !== songId),
@@ -2573,11 +2624,12 @@ export function App() {
       const playlist: ClientPlaylist = {
         id: `playlist-${Date.now()}`,
         name,
-        songIds
+        songIds,
+        createdAt: new Date().toISOString()
       };
 
       setPlaylists((items) => {
-        const next = [...items, playlist];
+        const next = [playlist, ...items];
         writeLocalJson("wavestack:playlists", next);
         return next;
       });

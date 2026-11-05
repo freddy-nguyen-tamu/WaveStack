@@ -45,6 +45,21 @@ describe("playback timeline", () => {
     expect(timeline.next()).toBe("song 5");
   });
 
+  it("prunes removed playlist songs from future and history without stopping the current song", () => {
+    const timeline = createPlaybackTimeline<string>();
+    timeline.reset("removed-earlier");
+    timeline.append("current");
+    timeline.append("removed-ahead");
+    timeline.append("still-ahead");
+    expect(timeline.previous()).toBe("removed-ahead");
+    expect(timeline.previous()).toBe("current");
+    timeline.pruneOtherSongs(item => item === "still-ahead");
+    expect(timeline.current()).toBe("current");
+    expect(timeline.hasPrevious()).toBe(false);
+    expect(timeline.peekNext()).toBe("still-ahead");
+    expect(timeline.next()).toBe("still-ahead");
+  });
+
   it("stores refreshed metadata for the current history entry", () => {
     const timeline = createPlaybackTimeline<{ id: string; url: string }>();
     timeline.reset({ id: "a", url: "old" });

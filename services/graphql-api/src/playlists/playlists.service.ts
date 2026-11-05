@@ -116,7 +116,7 @@ export class PlaylistsService {
          p.updated_at,
          COUNT(ps.song_id)::int AS song_count,
          COALESCE(
-           ARRAY_AGG(ps.song_id ORDER BY ps.position ASC, ps.added_at ASC)
+           ARRAY_AGG(ps.song_id ORDER BY ps.position DESC, ps.added_at DESC)
              FILTER (WHERE ps.song_id IS NOT NULL),
            ARRAY[]::text[]
          ) AS song_ids
@@ -126,7 +126,7 @@ export class PlaylistsService {
         AND ps.song_id <> '${PLACEHOLDER_SONG_ID}'
        WHERE p.user_id = $1
        GROUP BY p.id
-       ORDER BY p.updated_at DESC, p.created_at DESC`,
+       ORDER BY p.created_at DESC, p.id DESC`,
       [userId]
     );
 
