@@ -8,6 +8,8 @@ COPY . .
 RUN npm run build
 
 FROM node:22-alpine AS runtime
+# ALAC is converted to lossless FLAC only when the browser cannot decode it.
+RUN apk add --no-cache ffmpeg
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=deps /app/node_modules ./node_modules

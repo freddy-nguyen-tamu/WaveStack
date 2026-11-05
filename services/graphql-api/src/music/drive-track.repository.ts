@@ -1,11 +1,10 @@
-
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { randomUUID } from "crypto";
 import { DatabaseService } from "../database/database.service";
 import { SignedUrlService } from "../storage/signed-url.service";
 import { DriveSyncStatus, Song, SongConnection, UserSongAttributeInput, UserSongInput } from "./music.models";
-import { CURRENT_THUMBNAIL_CACHE_SUFFIX } from "./thumbnail-cache.service";
+import { CURRENT_THUMBNAIL_CACHE_SUFFIX, M4A_EMBEDDED_THUMBNAIL_SUFFIX } from "./thumbnail-cache.service";
 
 type DriveTrackRow = {
   id: string;
@@ -148,7 +147,10 @@ export class DriveTrackRepository {
         -- sync instead of overwriting it with a fresh filename guess.
         title = CASE WHEN drive_tracks.title_locked THEN drive_tracks.title ELSE EXCLUDED.title END,
         artist_name = CASE WHEN drive_tracks.title_locked THEN drive_tracks.artist_name ELSE EXCLUDED.artist_name END,
-        album_title = EXCLUDED.album_title,
+        album_title = CASE
+          WHEN drive_tracks.title_locked AND lower(COALESCE(drive_tracks.file_name, '')) LIKE '%.m4a'
+          THEN drive_tracks.album_title
+          ELSE EXCLUDED.album_title END,
         duration_seconds = EXCLUDED.duration_seconds,
         stream_url = EXCLUDED.stream_url,
         genre_names = EXCLUDED.genre_names,
@@ -216,6 +218,18 @@ export class DriveTrackRepository {
     );
   }
 
+  async updateEmbeddedAlbum(trackId: string, album: string): Promise<void> {
+    const current = await this.getSong(trackId);
+    if (!current || !album.trim()) return;
+    const search = this.normalizeSearchText([
+      current.fileName, current.title, current.artistName, album, current.lyrics
+    ].filter(Boolean).join(" "));
+    await this.database.query(
+      `UPDATE drive_tracks SET album_title = $2, normalized_search = $3 WHERE id = $1`,
+      [trackId, album.trim(), search]
+    );
+  }
+
   async markTitleArtistChecked(trackId: string): Promise<void> {
     await this.database.query(
       `
@@ -239,7 +253,8 @@ export class DriveTrackRepository {
         FROM drive_tracks
         WHERE id = ANY($1)
           AND deleted_at IS NULL
-          AND (title_locked = false OR embedded_search_version < 1)
+          AND (title_locked = false OR embedded_search_version < 1 OR
+              (lower(COALESCE(file_name, '')) LIKE '%.m4a' AND embedded_search_version < 2))
         `,
         [ids]
       )
@@ -262,10 +277,13 @@ export class DriveTrackRepository {
           AND deleted_at IS NULL
           AND (
             local_thumbnail_url IS NULL
-            OR local_thumbnail_url NOT LIKE $2
+            OR (lower(COALESCE(file_name, '')) LIKE '%.m4a'
+                AND local_thumbnail_url NOT LIKE $3)
+            OR (lower(COALESCE(file_name, '')) NOT LIKE '%.m4a'
+                AND local_thumbnail_url NOT LIKE $2)
           )
         `,
-        [ids, `%${CURRENT_THUMBNAIL_CACHE_SUFFIX}`]
+        [ids, `%${CURRENT_THUMBNAIL_CACHE_SUFFIX}`, `%${M4A_EMBEDDED_THUMBNAIL_SUFFIX}`]
       )
     ).rows;
 
@@ -281,7 +299,8 @@ export class DriveTrackRepository {
         SELECT *
         FROM drive_tracks
         WHERE deleted_at IS NULL
-          AND ((source_type = 'drive' AND (title_locked = false OR embedded_search_version < 1))
+          AND ((source_type = 'drive' AND (title_locked = false OR embedded_search_version < 1 OR
+              (lower(COALESCE(file_name, '')) LIKE '%.m4a' AND embedded_search_version < 2)))
             OR (source_type = 'user' AND stream_url LIKE '/api/uploads/%' AND embedded_search_version < 1))
         ORDER BY synced_at DESC, id ASC
         LIMIT $1
@@ -320,10 +339,10 @@ export class DriveTrackRepository {
     );
   }
 
-  async updateEmbeddedSearch(trackId: string, searchText: string): Promise<void> {
+  async updateEmbeddedSearch(trackId: string, searchText: string, m4a = false): Promise<void> {
     await this.database.query(
-      `UPDATE drive_tracks SET embedded_search = $2, embedded_search_version = 1 WHERE id = $1`,
-      [trackId, searchText]
+      `UPDATE drive_tracks SET embedded_search = $2, embedded_search_version = $3 WHERE id = $1`,
+      [trackId, searchText, m4a ? 2 : 1]
     );
   }
 
@@ -726,12 +745,15 @@ export class DriveTrackRepository {
         WHERE deleted_at IS NULL
           AND (
             local_thumbnail_url IS NULL
-            OR local_thumbnail_url NOT LIKE $2
+            OR (lower(COALESCE(file_name, '')) LIKE '%.m4a'
+                AND local_thumbnail_url NOT LIKE $3)
+            OR (lower(COALESCE(file_name, '')) NOT LIKE '%.m4a'
+                AND local_thumbnail_url NOT LIKE $2)
           )
         ORDER BY synced_at DESC, id ASC
         LIMIT $1
         `,
-        [safeLimit, `%${CURRENT_THUMBNAIL_CACHE_SUFFIX}`]
+        [safeLimit, `%${CURRENT_THUMBNAIL_CACHE_SUFFIX}`, `%${M4A_EMBEDDED_THUMBNAIL_SUFFIX}`]
       )
     ).rows;
 

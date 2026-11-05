@@ -1,4 +1,4 @@
-import { Controller, Get, Header, NotFoundException, Param, Query, Req, Res, UnauthorizedException } from "@nestjs/common";
+import { Controller, Get, Header, Logger, NotFoundException, Param, Query, Req, Res, UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Request, Response } from "express";
 import { createReadStream, existsSync } from "node:fs";
@@ -8,15 +8,21 @@ import { SignedUrlService } from "../storage/signed-url.service";
 import { DriveArtworkService } from "./drive-artwork.service";
 import { DriveDownloadService } from "./drive-download.service";
 import { GoogleDriveService } from "./google-drive.service";
+import { DriveTrackRepository } from "./drive-track.repository";
+import { LosslessPlaybackService } from "./lossless-playback.service";
 
 @Controller("drive")
 export class GoogleDriveController {
+  private readonly logger = new Logger(GoogleDriveController.name);
+
   constructor(
     private readonly googleDriveService: GoogleDriveService,
     private readonly driveArtworkService: DriveArtworkService,
     private readonly config: ConfigService,
     private readonly driveDownloadService: DriveDownloadService,
-    private readonly signedUrlService: SignedUrlService
+    private readonly signedUrlService: SignedUrlService,
+    private readonly driveTrackRepository: DriveTrackRepository,
+    private readonly losslessPlaybackService: LosslessPlaybackService
   ) {}
 
   @Get("debug")
@@ -50,6 +56,28 @@ export class GoogleDriveController {
   ) {
     if (!this.signedUrlService.verifySignedStreamUrl(`/drive/stream/${fileId}`, Number(expires), signature ?? "")) {
       throw new UnauthorizedException("This playback link expired.");
+    }
+
+    // Native browser playback cannot reliably decode ALAC-in-M4A. Keep the
+    // existing signed URL and serve a losslessly converted, seekable FLAC only
+    // for ALAC; all other media uses the original byte-for-byte proxy below.
+    const song = await this.driveTrackRepository.getSong(`drive-${fileId}`);
+    if (song && /\.m4a$/i.test(song.fileName ?? "")) {
+      try {
+        const flac = await this.losslessPlaybackService.prepareDrive(fileId, song.modifiedTime);
+        if (flac) {
+          const frontendOrigin = this.config.get<string>("FRONTEND_PUBLIC_ORIGIN") ??
+            this.config.get<string>("FRONTEND_ORIGIN") ?? "https://wavestack.duckdns.org";
+          response.setHeader("Access-Control-Allow-Origin", frontendOrigin);
+          await this.losslessPlaybackService.serveFlac(flac, request, response);
+          return;
+        }
+      } catch (error) {
+        this.logger.warn(`ALAC playback failed for ${fileId}: ${error instanceof Error ? error.message : String(error)}`);
+        response.status(502).setHeader("Cache-Control", "no-store")
+          .send("Could not prepare lossless playback for this M4A file.");
+        return;
+      }
     }
 
     const upstream = await this.driveDownloadService.fetchMedia(

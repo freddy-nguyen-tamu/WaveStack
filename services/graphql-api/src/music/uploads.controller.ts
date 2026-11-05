@@ -12,6 +12,8 @@ import { SignedUrlService } from "../storage/signed-url.service";
 import { DriveTrackRepository } from "./drive-track.repository";
 import { AudioJobsProducer } from "./audio-jobs.producer";
 import { embeddedSearchText } from "./embedded-search-text";
+import { LosslessPlaybackService } from "./lossless-playback.service";
+import { ThumbnailCacheService } from "./thumbnail-cache.service";
 
 const UPLOADS_DIR = "/app/uploads";
 const MAX_UPLOAD_BYTES = 250 * 1024 * 1024;
@@ -42,6 +44,7 @@ type UploadedAudioMetadata = {
   albumTitle?: string;
   genreNames?: string[];
   lyrics?: string;
+  artwork?: Buffer;
 };
 
 type FilenameMetadata = {
@@ -70,7 +73,9 @@ export class UploadsController {
     private readonly authService: AuthService,
     private readonly driveTrackRepository: DriveTrackRepository,
     private readonly audioJobsProducer: AudioJobsProducer,
-    private readonly signedUrlService: SignedUrlService
+    private readonly signedUrlService: SignedUrlService,
+    private readonly losslessPlaybackService: LosslessPlaybackService,
+    private readonly thumbnailCacheService: ThumbnailCacheService
   ) {}
 
   @Post("upload")
@@ -173,6 +178,20 @@ export class UploadsController {
       throw new BadRequestException("Could not create song record.");
     }
 
+    // M4A artwork is inside the MP4 cover atom, not Google Drive thumbnailLink.
+    // Cache it using the same thumbnail pipeline as all other WaveStack art.
+    if (/\.m4a$/i.test(file.originalname) && metadata.artwork?.length) {
+      try {
+        const url = await this.thumbnailCacheService.writeEmbeddedArtwork(created.id, metadata.artwork, true);
+        if (url) {
+          await this.driveTrackRepository.updateLocalThumbnail(created.id, url);
+          created = (await this.driveTrackRepository.getSong(created.id)) ?? created;
+        }
+      } catch (error) {
+        this.logger.warn(`Could not cache uploaded M4A cover: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
     try {
       await this.audioJobsProducer.enqueueAudioProcessing({
         songId: created.id,
@@ -188,7 +207,7 @@ export class UploadsController {
 
   @Get("uploads/:fileName")
   @Header("Accept-Ranges", "bytes")
-  streamUpload(
+  async streamUpload(
     @Param("fileName") fileName: string,
     @Query("expires") expires: string | undefined,
     @Query("signature") signature: string | undefined,
@@ -209,6 +228,21 @@ export class UploadsController {
 
     if (!existsSync(filePath)) {
       throw new NotFoundException("Uploaded file not found.");
+    }
+
+    if (/\.m4a$/i.test(safeName)) {
+      try {
+        const flac = await this.losslessPlaybackService.prepareUpload(filePath);
+        if (flac) {
+          await this.losslessPlaybackService.serveFlac(flac, request, response);
+          return;
+        }
+      } catch (error) {
+        this.logger.warn(`Could not prepare uploaded ALAC audio: ${error instanceof Error ? error.message : String(error)}`);
+        response.status(502).setHeader("Cache-Control", "no-store")
+          .send("Could not prepare lossless playback for this M4A file.");
+        return;
+      }
     }
 
     const fileSize = statSync(filePath).size;
@@ -282,7 +316,10 @@ export class UploadsController {
       artistName: this.cleanText(metadata.common.artist) ?? (artists?.length ? artists.join(", ") : undefined),
       albumTitle: this.cleanText(metadata.common.album),
       genreNames: genres,
-      lyrics: this.readLyrics(metadata.common.lyrics as Array<string | { text?: string }> | undefined)
+      lyrics: this.readLyrics(metadata.common.lyrics as Array<string | { text?: string }> | undefined),
+      artwork: /\.m4a$/i.test(filePath) && metadata.common.picture?.[0]?.data?.length
+        ? Buffer.from(metadata.common.picture[0].data)
+        : undefined
     };
   }
 

@@ -7,6 +7,8 @@ import { embeddedSearchText } from "./embedded-search-text";
 export type EmbeddedTitleArtist = {
   title: string | null;
   artist: string | null;
+  album: string | null;
+  lyrics: string | null;
   searchText: string;
 };
 
@@ -32,7 +34,7 @@ export class DriveTitleArtistService {
 
   constructor(private readonly driveDownloadService: DriveDownloadService) {}
 
-  async getEmbeddedTitleArtist(fileId: string, modifiedTime?: string, streamUrl?: string): Promise<EmbeddedTitleArtist | null> {
+  async getEmbeddedTitleArtist(fileId: string, modifiedTime?: string, streamUrl?: string, isM4a = false): Promise<EmbeddedTitleArtist | null> {
     const cacheKey = `${fileId}:${modifiedTime ?? ""}`;
     const cached = this.cache.get(cacheKey);
 
@@ -47,7 +49,7 @@ export class DriveTitleArtistService {
       const uploadName = streamUrl?.match(/(?:^|https?:\/\/[^/]+)\/api\/uploads\/([a-zA-Z0-9_.-]+)(?:\?|$)/)?.[1];
       const value = uploadName && uploadName !== "." && uploadName !== ".."
         ? this.readTags(await parseFile(join("/app/uploads", uploadName), { duration: false, skipCovers: true }))
-        : await this.loadEmbeddedTitleArtist(fileId);
+        : await this.loadEmbeddedTitleArtist(fileId, isM4a);
 
       // Search text can include long lyrics; don't retain the entire library in RAM.
       this.cache.delete(cacheKey);
@@ -63,8 +65,8 @@ export class DriveTitleArtistService {
     return request;
   }
 
-  private async loadEmbeddedTitleArtist(fileId: string): Promise<EmbeddedTitleArtist | null> {
-    const signal = AbortSignal.timeout(30000);
+  private async loadEmbeddedTitleArtist(fileId: string, isM4a: boolean): Promise<EmbeddedTitleArtist | null> {
+    const signal = AbortSignal.timeout(isM4a ? 60000 : 30000);
     const upstream = await this.driveDownloadService.fetchMedia(fileId, undefined, signal);
 
     if (!upstream.ok) {
@@ -81,7 +83,8 @@ export class DriveTitleArtistService {
     try {
       // skipCovers: true -- we only need text frames (TIT2/TPE1) here, so
       // there's no reason to also decode the embedded picture frame.
-      const metadata = await parseBuffer(buffer, contentType, {
+      const mediaType = buffer.subarray(4, 8).toString("ascii") === "ftyp" ? "audio/mp4" : contentType;
+      const metadata = await parseBuffer(buffer, mediaType, {
         duration: false,
         skipCovers: true
       });
@@ -99,10 +102,21 @@ export class DriveTitleArtistService {
     return trimmed ? trimmed : null;
   }
 
+  private readLyrics(value: unknown): string | null {
+    const entries = Array.isArray(value) ? value : value ? [value] : [];
+    const lines = entries.map(entry => typeof entry === "string" ? entry
+      : entry && typeof entry === "object" && "text" in entry
+        ? (entry as { text?: unknown }).text : null)
+      .filter((text): text is string => typeof text === "string" && Boolean(text.trim()));
+    return lines.length ? lines.join("\n\n").trim() : null;
+  }
+
   private readTags(metadata: IAudioMetadata): EmbeddedTitleArtist {
     return {
       title: this.clean(metadata.common.title),
       artist: this.clean(metadata.common.artist) ?? this.clean(metadata.common.artists?.join(", ")),
+      album: this.clean(metadata.common.album),
+      lyrics: this.readLyrics(metadata.common.lyrics),
       searchText: embeddedSearchText(metadata)
     };
   }

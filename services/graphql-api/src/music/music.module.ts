@@ -19,6 +19,7 @@ import { LyricsRepairService } from "./lyrics-repair.service";
 import { DriveTitleArtistService } from "./drive-title-artist.service";
 import { TitleArtistRepairService } from "./title-artist-repair.service";
 import { UploadsController } from "./uploads.controller";
+import { LosslessPlaybackService } from "./lossless-playback.service";
 
 @Module({
   imports: [ConfigModule, StorageModule, DatabaseModule, AuthModule],
@@ -34,6 +35,7 @@ import { UploadsController } from "./uploads.controller";
     ThumbnailCacheService,
     ThumbnailRepairService,
     DriveDownloadService,
+    LosslessPlaybackService,
     DriveLyricsService,
     LyricsRepairService,
     DriveTitleArtistService,

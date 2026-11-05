@@ -8,6 +8,7 @@ import { Song } from "./music.models";
 import { DriveArtworkService } from "./drive-artwork.service";
 
 export const CURRENT_THUMBNAIL_CACHE_SUFFIX = "-cover-v2.webp";
+export const M4A_EMBEDDED_THUMBNAIL_SUFFIX = "-cover-m4a-v1.webp";
 
 type RgbaColor = {
   r: number;
@@ -26,12 +27,29 @@ export class ThumbnailCacheService {
   ) {}
 
   async generateForSong(song: Song): Promise<string | null> {
-    const fileName = `${this.safeFileName(song.id)}${CURRENT_THUMBNAIL_CACHE_SUFFIX}`;
+    const isM4a = /\.m4a$/i.test(song.fileName ?? "");
+    const suffix = isM4a ? M4A_EMBEDDED_THUMBNAIL_SUFFIX : CURRENT_THUMBNAIL_CACHE_SUFFIX;
+    const fileName = `${this.safeFileName(song.id)}${suffix}`;
     const outputPath = join(this.thumbnailDir, fileName);
     const publicUrl = `${this.publicPath}/${fileName}`;
 
     if (existsSync(outputPath)) {
       return publicUrl;
+    }
+
+    // MP4 cover atoms should be the source of truth for M4A artwork. The
+    // separate suffix upgrades previously cached generic Drive thumbnails
+    // without invalidating any existing MP3 or FLAC thumbnail cache.
+    if (isM4a && song.id.startsWith("drive-")) {
+      try {
+        const artwork = await this.driveArtworkService.getEmbeddedArtwork(song.id.slice("drive-".length));
+        if (artwork?.buffer?.length) {
+          await this.writeWebp(outputPath, artwork.buffer);
+          return publicUrl;
+        }
+      } catch (error) {
+        this.logger.debug(`Could not read M4A cover for ${song.id}: ${String(error)}`);
+      }
     }
 
     const fallbackUrl = this.firstUsableUrl([
@@ -105,8 +123,9 @@ export class ThumbnailCacheService {
     }
   }
 
-  async writeEmbeddedArtwork(songId: string, buffer: Buffer): Promise<string | null> {
-    const fileName = `${this.safeFileName(songId)}${CURRENT_THUMBNAIL_CACHE_SUFFIX}`;
+  async writeEmbeddedArtwork(songId: string, buffer: Buffer, isM4a = false): Promise<string | null> {
+    const suffix = isM4a ? M4A_EMBEDDED_THUMBNAIL_SUFFIX : CURRENT_THUMBNAIL_CACHE_SUFFIX;
+    const fileName = `${this.safeFileName(songId)}${suffix}`;
     const outputPath = join(this.thumbnailDir, fileName);
     const publicUrl = `${this.publicPath}/${fileName}`;
 

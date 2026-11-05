@@ -41,7 +41,7 @@ export class LyricsRepairService {
     try {
       const lyrics = await this.withTimeout(
         this.driveLyricsService.getEmbeddedLyrics(rawFileId),
-        20000
+        /\.m4a$/i.test(song.fileName ?? "") ? 60000 : 20000
       );
 
       if (!lyrics?.trim()) {
@@ -110,7 +110,7 @@ export class LyricsRepairService {
       try {
         const lyrics = await this.withTimeout(
           this.driveLyricsService.getEmbeddedLyrics(rawFileId),
-          20000
+          /\.m4a$/i.test(song.fileName ?? "") ? 60000 : 20000
         );
 
         if (!lyrics?.trim()) {

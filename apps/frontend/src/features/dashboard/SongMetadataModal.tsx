@@ -1,4 +1,3 @@
-
 import { createPortal } from "react-dom";
 import { LyricSearch } from "./LyricSearch";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -139,7 +138,7 @@ export function SongMetadataModal({
       return;
     }
 
-    setLyricsRepairMessage(manual ? "Checking this MP3 for embedded lyrics..." : "");
+    setLyricsRepairMessage(manual ? "Checking this audio file for embedded lyrics..." : "");
 
     try {
       const result = await repairLyrics({

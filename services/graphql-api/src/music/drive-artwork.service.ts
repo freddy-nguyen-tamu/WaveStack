@@ -68,7 +68,8 @@ export class DriveArtworkService {
     const audioBuffer = Buffer.from(arrayBuffer);
 
     try {
-      const metadata = await parseBuffer(audioBuffer, contentType, {
+      const mediaType = audioBuffer.subarray(4, 8).toString("ascii") === "ftyp" ? "audio/mp4" : contentType;
+      const metadata = await parseBuffer(audioBuffer, mediaType, {
         duration: false,
         skipCovers: false
       });

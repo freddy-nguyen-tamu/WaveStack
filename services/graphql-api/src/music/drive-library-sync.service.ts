@@ -142,8 +142,10 @@ export class DriveLibrarySyncService {
       const rawFileId = song.id.replace(/^drive-/, "");
 
       try {
-        const tags = await this.driveTitleArtistService.getEmbeddedTitleArtist(rawFileId, song.modifiedTime, song.streamUrl);
-        if (tags) await this.driveTrackRepository.updateEmbeddedSearch(song.id, tags.searchText);
+        const tags = await this.driveTitleArtistService.getEmbeddedTitleArtist(rawFileId, song.modifiedTime, song.streamUrl, /\.m4a$/i.test(song.fileName ?? ""));
+        if (tags) await this.driveTrackRepository.updateEmbeddedSearch(
+          song.id, tags.searchText, /\.m4a$/i.test(song.fileName ?? "")
+        );
 
         if (!tags) { failedCount += 1; return; }
         if (!tags.title && !tags.artist) {
@@ -156,6 +158,14 @@ export class DriveLibrarySyncService {
         const nextArtist = song.id.startsWith("drive-") ? tags.artist ?? song.artistName : song.artistName;
 
         await this.driveTrackRepository.updateTitleArtist(song.id, nextTitle, nextArtist);
+        // M4A can carry album and timestamped lyrics in MP4 atoms. Reuse the
+        // same metadata read; don't download the full lossless track again.
+        if (song.id.startsWith("drive-") && /\.m4a$/i.test(song.fileName ?? "")) {
+          if (tags.album) await this.driveTrackRepository.updateEmbeddedAlbum(song.id, tags.album);
+          if (tags.lyrics && !song.lyrics?.trim()) {
+            await this.driveTrackRepository.updateLyrics(song.id, tags.lyrics);
+          }
+        }
         repairedCount += 1;
       } catch (error) {
         failedCount += 1;

@@ -30,11 +30,13 @@ export class TitleArtistRepairService {
 
     try {
       const tags = await this.withTimeout(
-        this.driveTitleArtistService.getEmbeddedTitleArtist(rawFileId, song.modifiedTime, song.streamUrl),
-        20000
+        this.driveTitleArtistService.getEmbeddedTitleArtist(rawFileId, song.modifiedTime, song.streamUrl, /\.m4a$/i.test(song.fileName ?? "")),
+        /\.m4a$/i.test(song.fileName ?? "") ? 65000 : 20000
       );
 
-      if (tags) await this.driveTrackRepository.updateEmbeddedSearch(song.id, tags.searchText);
+      if (tags) await this.driveTrackRepository.updateEmbeddedSearch(
+          song.id, tags.searchText, /\.m4a$/i.test(song.fileName ?? "")
+        );
       if (!tags || (!tags.title && !tags.artist)) {
         return {
           ok: true,
@@ -49,6 +51,7 @@ export class TitleArtistRepairService {
       const nextArtist = song.id.startsWith("drive-") ? tags.artist ?? song.artistName : song.artistName;
 
       await this.driveTrackRepository.updateTitleArtist(song.id, nextTitle, nextArtist);
+      await this.updateM4aAttributes(song, tags);
 
       return {
         ok: true,
@@ -103,11 +106,13 @@ export class TitleArtistRepairService {
 
       try {
         const tags = await this.withTimeout(
-          this.driveTitleArtistService.getEmbeddedTitleArtist(rawFileId, song.modifiedTime, song.streamUrl),
-          20000
+          this.driveTitleArtistService.getEmbeddedTitleArtist(rawFileId, song.modifiedTime, song.streamUrl, /\.m4a$/i.test(song.fileName ?? "")),
+          /\.m4a$/i.test(song.fileName ?? "") ? 65000 : 20000
         );
 
-        if (tags) await this.driveTrackRepository.updateEmbeddedSearch(song.id, tags.searchText);
+        if (tags) await this.driveTrackRepository.updateEmbeddedSearch(
+          song.id, tags.searchText, /\.m4a$/i.test(song.fileName ?? "")
+        );
         if (!tags) { failedCount += 1; continue; }
         if (!tags.title && !tags.artist) {
           // No usable tags -- lock it anyway so this track isn't
@@ -122,6 +127,7 @@ export class TitleArtistRepairService {
         const nextArtist = song.id.startsWith("drive-") ? tags.artist ?? song.artistName : song.artistName;
 
         await this.driveTrackRepository.updateTitleArtist(song.id, nextTitle, nextArtist);
+        await this.updateM4aAttributes(song, tags);
         repairedCount += 1;
       } catch (error) {
         failedCount += 1;
@@ -141,6 +147,17 @@ export class TitleArtistRepairService {
       repairedCount,
       failedCount
     };
+  }
+
+  private async updateM4aAttributes(
+    song: import("./music.models").Song,
+    tags: import("./drive-title-artist.service").EmbeddedTitleArtist
+  ): Promise<void> {
+    if (!song.id.startsWith("drive-") || !/\.m4a$/i.test(song.fileName ?? "")) return;
+    if (tags.album) await this.driveTrackRepository.updateEmbeddedAlbum(song.id, tags.album);
+    if (tags.lyrics && !song.lyrics?.trim()) {
+      await this.driveTrackRepository.updateLyrics(song.id, tags.lyrics);
+    }
   }
 
   private async withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

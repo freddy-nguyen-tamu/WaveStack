@@ -57,7 +57,8 @@ export class ThumbnailRepairService {
 
         const localThumbnailUrl = await this.thumbnailCacheService.writeEmbeddedArtwork(
           song.id,
-          embedded.buffer
+          embedded.buffer,
+          /\.m4a$/i.test(song.fileName ?? "")
         );
 
         if (!localThumbnailUrl) {

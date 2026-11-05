@@ -72,9 +72,11 @@ export class DriveLyricsService {
     }
 
     const id3Length = this.id3v2Length(prefixBuffer);
-    const looksLikeMp3 =
+    const looksLikeMp4 = prefixBuffer.subarray(4, 8).toString("ascii") === "ftyp";
+    const looksLikeMp3 = !looksLikeMp4 && (
       id3Length !== null ||
-      /(?:audio\/(?:mpeg|mp3)|application\/octet-stream)/i.test(contentType);
+      /(?:audio\/(?:mpeg|mp3)|application\/octet-stream)/i.test(contentType)
+    );
 
     if (looksLikeMp3) {
       if (id3Length === null) {
@@ -112,7 +114,7 @@ export class DriveLyricsService {
     const upstream = await this.driveDownloadService.fetchMedia(
       fileId,
       undefined,
-      AbortSignal.timeout(20000)
+      AbortSignal.timeout(prefixBuffer.indexOf("ftyp") >= 0 ? 45000 : 20000)
     );
 
     if (!upstream.ok) {
@@ -140,7 +142,8 @@ export class DriveLyricsService {
 
   private async parseLyrics(buffer: Buffer, contentType: string, fileId: string): Promise<string | null> {
     try {
-      const metadata = await parseBuffer(buffer, contentType, {
+      const mediaType = buffer.subarray(4, 8).toString("ascii") === "ftyp" ? "audio/mp4" : contentType;
+      const metadata = await parseBuffer(buffer, mediaType, {
         duration: false,
         skipCovers: true
       });
@@ -202,6 +205,7 @@ export class DriveLyricsService {
       return (
         id === "USLT" ||
         id === "SYLT" ||
+        id === "©LYR" ||
         id.includes("UNSYNCEDLYRICS") ||
         id.includes("SYNCEDLYRICS") ||
         id.includes("LYRICS")
