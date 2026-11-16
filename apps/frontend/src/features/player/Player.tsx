@@ -72,7 +72,13 @@ export function Player({
   onPrevious,
   onEnded
 }: PlayerProps) {
+  // Two persistent audio decks keep a *real* media element playing while the next
+  // stream buffers. MediaSession.playbackState alone does not keep Chromium's
+  // Windows media session active when its only audio element is paused/emptied.
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const firstAudioDeckRef = useRef<HTMLAudioElement | null>(null);
+  const secondAudioDeckRef = useRef<HTMLAudioElement | null>(null);
+  const holdoverAudioRef = useRef<HTMLAudioElement | null>(null);
   const discAngleRef = useRef(0);
   const discTimestampRef = useRef<number | null>(null);
   const playRequestRef = useRef(0);
@@ -89,6 +95,9 @@ export function Player({
   const recordedListenEpochRef = useRef<number | null>(null);
   const expectedSourceUrlRef = useRef(activeSong.streamUrl);
   const latestActiveSongRef = useRef(activeSong);
+  // A selected track is not necessarily ready for the OS media flyout. Keep
+  // publishing the previous track until the new audio resource can play.
+  const publishedMediaSongRef = useRef<Song | null>(null);
   const recoveryAttemptsRef = useRef(0);
   const startupStallTimerRef = useRef<number | null>(null);
   const startupStallBaselineRef = useRef(0);
@@ -127,9 +136,21 @@ export function Player({
   const RepeatIcon = repeatMode === "one" ? Repeat1 : Repeat;
 
   useEffect(() => {
-    if (!audioRef.current) return;
-    audioRef.current.volume = volume;
+    // Both decks need the same user volume: the outgoing deck must not jump in
+    // loudness while we prebuffer its replacement on the other deck.
+    if (firstAudioDeckRef.current) firstAudioDeckRef.current.volume = volume;
+    if (secondAudioDeckRef.current) secondAudioDeckRef.current.volume = volume;
   }, [volume]);
+
+  function releaseHoldover() {
+    const outgoing = holdoverAudioRef.current;
+    if (!outgoing) return;
+    holdoverAudioRef.current = null;
+    // The replacement is already playing (or the user explicitly paused).
+    // Do not clear/reload the outgoing resource here: doing so can evict the
+    // browser media session during the same Windows flyout update.
+    outgoing.pause();
+  }
 
   useEffect(() => {
     onPlaybackStateChange({
@@ -143,11 +164,28 @@ export function Player({
   }, [discSnapshot.baseAngleDeg, discSnapshot.startedAtMs, hasPlaybackHistory, playbackUiActive, onPlaybackStateChange]);
 
   useLayoutEffect(() => {
-    const audio = audioRef.current;
-
+    if (!audioRef.current) audioRef.current = firstAudioDeckRef.current;
+    let audio = audioRef.current;
     if (!audio) return;
 
     const songChanged = currentSourceSongIdRef.current !== activeSong.id;
+    // Do not stop/reload the currently playing resource at song selection.
+    // Keep it sounding and owning the browser's native media session while the
+    // other <audio> element acquires a valid stream and reaches `playing`.
+    if (songChanged && playSignal > 0 && !holdoverAudioRef.current && !audio.paused && !audio.ended) {
+      const spare = audio === firstAudioDeckRef.current
+        ? secondAudioDeckRef.current
+        : firstAudioDeckRef.current;
+      if (spare) {
+        spare.pause();
+        spare.volume = volume;
+        holdoverAudioRef.current = audio;
+        audioRef.current = spare;
+        audio = spare;
+      }
+    }
+    // If B is still buffering when the user selects C, reuse B's staging deck
+    // and keep A alive; never promote the unready intermediate B into the OS UI.
     const explicitPlayRequest = sourcePlaySignalRef.current !== playSignal;
     const resetForNewPlay = songChanged || explicitPlayRequest;
     const nextSource = resolveMediaUrl(activeSong.streamUrl);
@@ -185,7 +223,10 @@ export function Player({
       // refresh promise. The old async work is fenced by sourceEpochRef below.
       playPromiseRef.current = null;
       playPromiseRequestIdRef.current = 0;
-      desiredPlaybackRef.current = false;
+      // A track change is a continuation of playback, not a user Pause.
+      // Do not report a paused media session while the replacement buffers:
+      // Windows can otherwise promote an unrelated application's last session.
+      desiredPlaybackRef.current = playSignal > 0;
       pendingSeekRef.current = null;
       lastPlaybackPositionRef.current = 0;
       audio.pause();
@@ -195,7 +236,13 @@ export function Player({
         // The fresh source may not have metadata yet; load() below starts at zero anyway.
       }
       setIsPlaying(false);
-      setIsPlaybackPending(false);
+      setIsPlaybackPending(playSignal > 0);
+      if (playSignal > 0) {
+        setHasPlaybackHistory(true);
+        if ("mediaSession" in navigator) {
+          navigator.mediaSession.playbackState = "playing";
+        }
+      }
       setCurrentTime(0);
       setDuration(activeSong.durationSeconds || 0);
       setPlayError("");
@@ -211,7 +258,9 @@ export function Player({
       audio.removeAttribute("src");
       audio.load();
       setIsPlaying(false);
-      setIsPlaybackPending(false);
+      // playCurrent() will acquire a fresh URL without losing the active media
+      // session in the meantime.
+      setIsPlaybackPending(desiredPlaybackRef.current);
       return;
     }
 
@@ -787,6 +836,7 @@ export function Player({
         // A failed play attempt is no longer "pending". Leaving this true makes
         // the next click behave like Pause, which is why playback can feel stuck.
         desiredPlaybackRef.current = false;
+        releaseHoldover();
         setPlayError(errorMessage);
       } finally {
         // A stale request may finish after a newer song has already started.
@@ -811,6 +861,7 @@ export function Player({
     playRequestRef.current += 1;
     pauseDiscRotation();
     audioRef.current?.pause();
+    releaseHoldover();
     setIsPlaying(false);
     setIsPlaybackPending(false);
     setMessage(messageText);
@@ -1068,14 +1119,14 @@ export function Player({
     setMessage(isFavorite ? `Removed favorite: ${displayName}` : `Added favorite: ${displayName}`);
   }
 
-  function resolveArtworkUrl(url: string): string {
+  function resolveArtworkUrl(url: string, song: Song): string {
     if (/^(?:https?:|blob:|data:)/i.test(url)) {
       return url;
     }
 
     if (url.startsWith("/drive/") || url.startsWith("/api/")) {
       try {
-        return new URL(url, new URL(activeSong.streamUrl, window.location.href).origin).href;
+        return new URL(url, new URL(song.streamUrl, window.location.href).origin).href;
       } catch {
         // Fall through to the WaveStack frontend origin.
       }
@@ -1084,16 +1135,16 @@ export function Player({
     return new URL(url, window.location.origin).href;
   }
 
-  function getMediaSessionArtwork(): MediaImage[] {
+  function getMediaSessionArtwork(song: Song): MediaImage[] {
     const artworkSource = [
-      activeSong.localThumbnailUrl,
-      activeSong.thumbnailUrl,
-      activeSong.driveThumbnailUrl,
-      activeSong.embeddedArtworkUrl
+      song.localThumbnailUrl,
+      song.thumbnailUrl,
+      song.driveThumbnailUrl,
+      song.embeddedArtworkUrl
     ].find((candidate) => Boolean(candidate?.trim()));
 
     if (artworkSource) {
-      return [{ src: resolveArtworkUrl(artworkSource) }];
+      return [{ src: resolveArtworkUrl(artworkSource, song) }];
     }
 
     return [{
@@ -1103,22 +1154,56 @@ export function Player({
     }];
   }
 
+  function publishReadyMediaSessionSong(playbackConfirmed = false) {
+    const audio = audioRef.current;
+    const song = latestActiveSongRef.current;
+
+    // The URL must still belong to the selected song. A loadedmetadata event
+    // alone is not sufficient: the browser may not have fetched playable bytes.
+    // An old event queued before a source swap must not publish the next song.
+    if (
+      !audio ||
+      (!hasPlaybackHistory && !desiredPlaybackRef.current) ||
+      !audioMatchesExpectedSource(audio) ||
+      audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA ||
+      (holdoverAudioRef.current !== null && !playbackConfirmed) ||
+      !("mediaSession" in navigator) ||
+      typeof MediaMetadata === "undefined"
+    ) return;
+
+    publishedMediaSongRef.current = song;
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: song.title?.trim() || "Untitled Track",
+      artist: song.artistName?.trim() || "Unknown Artist",
+      album: song.albumTitle,
+      artwork: getMediaSessionArtwork(song)
+    });
+  }
+
+  // Media actions must not be unregistered/re-registered on every track change.
+  // On Windows that cleanup can cause the system media flyout to lose WaveStack
+  // and fall back to a completely unrelated previously active media player.
+  const mediaActionsRef = useRef({
+    play: () => { void playCurrent(); },
+    pause: () => pauseCurrent(`Paused: ${displayName}`),
+    next: () => { if (!resolvingNext) onNext(); },
+    previous
+  });
+  mediaActionsRef.current = {
+    play: () => { void playCurrent(); },
+    pause: () => pauseCurrent(`Paused: ${displayName}`),
+    next: () => { if (!resolvingNext) onNext(); },
+    previous
+  };
+
   useEffect(() => {
     if (!("mediaSession" in navigator) || !hasPlaybackHistory) return;
     const session = navigator.mediaSession;
-    if (typeof MediaMetadata !== "undefined") {
-      session.metadata = new MediaMetadata({
-        title: songTitle,
-        artist: songArtist,
-        album: activeSong.albumTitle,
-        artwork: getMediaSessionArtwork()
-      });
-    }
     const handlers: Partial<Record<MediaSessionAction, MediaSessionActionHandler>> = {
-      play: () => { void playCurrent(); },
-      pause: () => pauseCurrent(`Paused: ${displayName}`),
-      nexttrack: () => { if (!resolvingNext) onNext(); },
-      previoustrack: previous
+      play: () => mediaActionsRef.current.play(),
+      pause: () => mediaActionsRef.current.pause(),
+      nexttrack: () => mediaActionsRef.current.next(),
+      previoustrack: () => mediaActionsRef.current.previous()
     };
     const registered: MediaSessionAction[] = [];
     for (const [action, handler] of Object.entries(handlers)) {
@@ -1130,16 +1215,26 @@ export function Player({
     return () => {
       registered.forEach(action => session.setActionHandler(action, null));
     };
-  }, [activeSong, hasPlaybackHistory, onNext, onPrevious, resolvingNext]);
+  }, [hasPlaybackHistory]);
+
+  // The current Song object can be enriched with an artwork URL after it
+  // starts. Refresh the already-published song without publishing a *new*
+  // selected song prematurely. The first publication happens at canplay/playing.
+  useEffect(() => {
+    if (!hasPlaybackHistory || publishedMediaSongRef.current?.id !== activeSong.id) return;
+    publishReadyMediaSessionSong();
+  }, [activeSong, hasPlaybackHistory]);
 
   useEffect(() => {
     if (!("mediaSession" in navigator) || !hasPlaybackHistory) return;
-    navigator.mediaSession.playbackState = playbackUiActive ? "playing" : "paused";
-  }, [hasPlaybackHistory, playbackUiActive]);
+    navigator.mediaSession.playbackState =
+      playbackUiActive || resolvingNext ? "playing" : "paused";
+  }, [hasPlaybackHistory, playbackUiActive, resolvingNext]);
 
   useEffect(() => {
     return () => {
       clearStartupStallWatchdog(true);
+      holdoverAudioRef.current = null;
       if (!("mediaSession" in navigator)) return;
       navigator.mediaSession.playbackState = "none";
       navigator.mediaSession.metadata = null;
@@ -1190,6 +1285,7 @@ export function Player({
       desiredPlaybackRef.current = false;
       setIsPlaying(false);
       setIsPlaybackPending(false);
+      releaseHoldover();
       setPlayError("Playback failed after WaveStack refreshed the stream link.");
       return;
     }
@@ -1226,26 +1322,39 @@ export function Player({
           <p title={songArtist}>{songArtist}</p>
         </div>
 
+        {([0, 1] as const).map((deck) => (
         <audio
-          ref={audioRef}
-          preload="metadata"
+          key={deck}
+          ref={deck === 0 ? firstAudioDeckRef : secondAudioDeckRef}
+          preload={deck === 0 ? "metadata" : "none"}
           controlsList="nodownload noplaybackrate noremoteplayback"
-          onLoadedMetadata={() => {
+          onLoadedMetadata={(event) => {
+            if (event.currentTarget !== audioRef.current) return;
             restorePendingSeek();
             if (desiredPlaybackRef.current) armStartupStallWatchdog();
           }}
-          onCanPlay={restorePendingSeek}
-          onTimeUpdate={() => {
+          onCanPlay={(event) => {
+            if (event.currentTarget !== audioRef.current) return;
+            restorePendingSeek();
+            publishReadyMediaSessionSong();
+          }}
+          onTimeUpdate={(event) => {
+            if (event.currentTarget !== audioRef.current) return;
             syncProgressFromAudio();
             noteStartupPlaybackProgress();
             if ((audioRef.current?.currentTime ?? 0) > 3) {
               recoveryAttemptsRef.current = 0;
             }
           }}
-          onDurationChange={restorePendingSeek}
-          onError={handleAudioError}
-          onPlay={() => {
-            const audio = audioRef.current;
+          onDurationChange={(event) => {
+            if (event.currentTarget === audioRef.current) restorePendingSeek();
+          }}
+          onError={(event) => {
+            if (event.currentTarget === audioRef.current) handleAudioError();
+          }}
+          onPlay={(event) => {
+            const audio = event.currentTarget;
+            if (audio !== audioRef.current) return;
             // A queued play event from the previous source cannot claim the
             // player after Next or another manual song selection.
             if (!audio || !desiredPlaybackRef.current || !audioMatchesExpectedSource(audio)) return;
@@ -1259,10 +1368,14 @@ export function Player({
             setMessage(`Playing: ${displayName}`);
             armStartupStallWatchdog();
           }}
-          onPlaying={() => {
-            const audio = audioRef.current;
-            if (!audio || !desiredPlaybackRef.current || !audioMatchesExpectedSource(audio)) return;
+          onPlaying={(event) => {
+            const audio = event.currentTarget;
+            if (audio !== audioRef.current || !desiredPlaybackRef.current || !audioMatchesExpectedSource(audio)) return;
             reportListenStart();
+            // Commit title, artist and artwork together, then retire the old
+            // deck only once the replacement is actually emitting audio.
+            publishReadyMediaSessionSong(true);
+            if (audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) releaseHoldover();
             startDiscRotation();
             setHasPlaybackHistory(true);
             setIsPlaybackPending(false);
@@ -1270,10 +1383,15 @@ export function Player({
             setMessage(`Playing: ${displayName}`);
             armStartupStallWatchdog();
           }}
-          onWaiting={handleStartupBuffering}
-          onStalled={handleStartupBuffering}
-          onPause={() => {
-            const audio = audioRef.current;
+          onWaiting={(event) => {
+            if (event.currentTarget === audioRef.current) handleStartupBuffering();
+          }}
+          onStalled={(event) => {
+            if (event.currentTarget === audioRef.current) handleStartupBuffering();
+          }}
+          onPause={(event) => {
+            const audio = event.currentTarget;
+            if (audio !== audioRef.current) return;
             // pause() from an earlier source can enqueue its event after a new
             // play() succeeds. Do not let that stale event hide active playback.
             if (!audio || !audio.paused || !audioMatchesExpectedSource(audio)) return;
@@ -1302,7 +1420,9 @@ export function Player({
             }
             syncProgressFromAudio();
           }}
-          onEnded={() => {
+          onEnded={(event) => {
+            if (event.currentTarget !== audioRef.current) return;
+            releaseHoldover();
             // A Space replay after the end is another complete playback cycle
             // even if repeat mode is disabled and the source does not change.
             recordedListenEpochRef.current = null;
@@ -1316,6 +1436,7 @@ export function Player({
             onEnded();
           }}
         />
+        ))}
 
         {message ? <p className="sr-only" role="status">{message}</p> : null}
         {playError ? <p role="alert">Playback error: {playError}</p> : null}
