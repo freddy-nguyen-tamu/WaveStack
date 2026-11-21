@@ -59,6 +59,31 @@ class Tests(unittest.TestCase):
     p=SimPage(permuted=True);saved,seq,callback=self.callback(p)
     with self.assertRaisesRegex(RuntimeError,'not in exact'):
       scan(p,max_steps=25,stability=2,on_progress=callback)
+  def test_transient_browser_recovery_stall_is_deferred_and_retry_succeeds(self):
+    p=SimPage(late=True);attempts=[]
+    def recover(key,url):
+      attempts.append(key)
+      if len(attempts)==1:
+        raise RuntimeError('Browser recover_image failed: Selected-tab browser API stalled')
+      p.recovered.append(key)
+      return {'loaded':True,'reason':'loaded on next attempt'}
+    p.recover_unloaded_image=recover
+    saved,_,callback=self.callback(p)
+    pages=scan(p,max_steps=30,stability=2,on_progress=callback)
+    self.assertEqual(attempts,['2','2'])
+    self.assertEqual([x[0] for x in pages],['1','2','3'])
+    self.assertEqual(set(saved),{'1','2','3'})
+  def test_persistent_browser_recovery_stall_never_publishes_missing_image(self):
+    p=SimPage(late=True);attempts=[]
+    def recover(key,url):
+      attempts.append(key)
+      raise RuntimeError('Browser recover_image failed: Selected-tab browser API stalled')
+    p.recover_unloaded_image=recover
+    saved,_,callback=self.callback(p)
+    with self.assertRaisesRegex(RuntimeError,'Images still missing after targeted retries: 2'):
+      scan(p,max_steps=30,stability=2,on_progress=callback)
+    self.assertEqual(attempts,['2','2','2'])
+    self.assertEqual(set(saved),{'1','3'})
   def test_failed_image_cannot_be_marked_complete(self):
     p=SimPage(late=True)
     def on_progress(info,slot_order,seen,bottom):return {'1','3'}

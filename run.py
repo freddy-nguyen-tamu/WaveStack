@@ -163,17 +163,18 @@ def _initial_github_check_choice(args, *, interactive=None, prompt=None):
 # Fail-closed, always-on safety gate for automatic Comic Bridge runs.
 # Keep this in run.py: a partial ZIP must not silently skip regression tests.
 # Tests are local and simulated; they never download, publish, or shut down Windows.
-_PREFLIGHT_RELEASE = '1.5.8'
+_PREFLIGHT_RELEASE = '1.5.10'
 _PREFLIGHT_PYTHON = (
     ('test_browser_autobootstrap.py', 2),
     ('test_regression_release_v154.py', 3),
-    ('test_streaming_order.py', 5),
+    ('test_streaming_order.py', 7),
     ('test_optimized_bridge.py', 4),
     ('test_image_checkpoint_resume.py', 8),
     ('test_site_separation.py', 3),
     ('test_github_fast_verification.py', 5),
     ('test_challenge_passive_resume.py', 6),
     ('test_startup_compatibility_and_check_choice.py', 5),
+    ('test_normal_chrome_autolaunch.py', 7),
 )
 _PREFLIGHT_JAVASCRIPT = (
     'extension_persistent_autoconnect.js',
@@ -181,6 +182,8 @@ _PREFLIGHT_JAVASCRIPT = (
     'extension_fast_path_and_watchdog.js',
     'extension_tile_stall_recovery.js',
     'extension_next_chapter_recovery.js',
+    'extension_auto_tab_launch.js',
+    'extension_recovery_transport_fallback.js',
 )
 
 
@@ -220,7 +223,8 @@ def _run_preflight(*, run_tests=True) -> None:
         # Detect missing/corrupt prerequisite files, and accidental old-protocol
         # overlays before they can start a 96-chapter run or touch remote archives.
         required_bridge = ('X-Comic-Bridge-Bootstrap', 'X-Comic-Bridge-Client',
-                           'extension_client', 'def recover_unloaded_image')
+                           'extension_client', 'def recover_unloaded_image',
+                           "'startup_url': bridge.initial_chapter_url")
         required_engine = ('ChapterImageCheckpoint(', 'checkpoint=checkpoint',
                            'IMAGE_REUSED_FROM_CHECKPOINT',
                            'on_progress=save_as_scroll_reveals',
@@ -228,7 +232,9 @@ def _run_preflight(*, run_tests=True) -> None:
         required_background = (b'bridgeContentProtocol===6', b'RECOVER_IMAGE',
                                b"'X-Comic-Bridge-Bootstrap':'1'",
                                b"'X-Comic-Bridge-Client':chrome.runtime.id",
-                               b"screenshotBackend !== 'debugger'")
+                               b"screenshotBackend !== 'debugger'",
+                           b"pickComicTab(config.site,config.startup_url)",
+                           b"chrome.tabs.onCreated?.addListener(()=>autoConnect())")
         for marker in required_bridge:
             if marker not in bridge:
                 fail('Python bridge missing compatibility feature: ' + marker)
@@ -240,6 +246,10 @@ def _run_preflight(*, run_tests=True) -> None:
         for marker in required_background:
             if marker not in background:
                 fail('extension missing compatibility feature: ' + marker.decode('utf-8'))
+        if b'recover_image existing-listener fallback' not in background:
+            fail('extension lacks fallback when Chrome recovery injection stalls')
+        if 'SOURCE_IMAGE_RECOVERY_DEFERRED' not in engine:
+            fail('scanner would abort on a transient single-image recovery error')
         if b'RECOVER_IMAGE' not in content:
             fail('extension missing targeted per-image recovery')
         if b'function waitForPaintOrTimer(' not in content or b'paintReady=await waitForPaintOrTimer()' not in content:

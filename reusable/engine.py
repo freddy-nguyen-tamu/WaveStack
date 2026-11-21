@@ -490,9 +490,20 @@ def scan_browser_images(page, max_steps=1500, stability=5, *, guard=None, visibl
                 event('SOURCE_IMAGE_TARGETED_RETRY', image_key=target,
                       attempt=revisit_attempts[target], decoded=bool(selected.get('loaded')))
                 if callable(action) and (selected.get('loaded') is False or not selected.get('url')):
-                    result = action(target, selected.get('url') or '')
-                    event('SOURCE_IMAGE_TARGETED_RESULT', image_key=target,
-                          loaded=bool(result.get('loaded')), reason=result.get('reason',''))
+                    try:
+                        result = action(target, selected.get('url') or '')
+                    except RuntimeError as exc:
+                        # A Chrome scripting/receiver timeout affects one
+                        # ordinal, not the integrity of the other downloaded
+                        # images. Keep its checkpoint incomplete and revisit
+                        # it on the next targeted attempt/restart. Never mark
+                        # it saved or publish an incomplete chapter.
+                        event('SOURCE_IMAGE_RECOVERY_DEFERRED', image_key=target,
+                              attempt=revisit_attempts[target],
+                              error_type=type(exc).__name__, reason=str(exc)[:240])
+                    else:
+                        event('SOURCE_IMAGE_TARGETED_RESULT', image_key=target,
+                              loaded=bool(result.get('loaded')), reason=result.get('reason',''))
                 page.wait_for_timeout(300)
             stable_unloaded = 0
             last_unloaded = None
@@ -1566,7 +1577,8 @@ def _archive_run_once(db, source_html: Path | None, source_url: str | None, max_
               traversal_skipped=True, lazy_scrolling_only_for_missing=True)
     with source_browser_context(DATA, seed, headless=source_headless,
                                 browser=source_browser,
-                                reader_selectors=ADAPTER.READER_SELECTORS) as ctx:
+                                reader_selectors=ADAPTER.READER_SELECTORS,
+                                initial_chapter_url=(remaining[0].url if remaining else seed)) as ctx:
         guard = SourceRequestGuard(
             DATA, min_interval_seconds=CONFIG.get("source_min_host_interval_seconds", 1.5),
             max_inline_wait_seconds=CONFIG.get("source_max_inline_wait_seconds", 25), emit=event)

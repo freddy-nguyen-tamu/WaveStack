@@ -30,14 +30,25 @@ async function directTabCommand(id, payload) {
         await sleep(250); continue;
       }
       const target={tabId:id};
-      await chrome.scripting.executeScript({target,files:['content.js']});
-      const reply=await chrome.scripting.executeScript({target,
-        func: command => {
-          if(typeof window.__comicBridgeDirect !== 'function')
-            return {__bridgeError:'Page command transport not initialized'};
-          return window.__comicBridgeDirect(command);
-        },args:[payload]});
-      const result=reply?.[0]?.result;
+      // Most normal chapter documents already have the content script. Do not
+      // inject the same file for every missing image: the redundant scripting
+      // call itself can stall, especially in a busy/background Chrome tab.
+      const dispatch = async () => {
+        const reply=await chrome.scripting.executeScript({target,
+          func: command => {
+            if(window.__comicBridgeContentLoadedVersion !== 7 ||
+               typeof window.__comicBridgeDirect !== 'function')
+              return {__bridgeError:'Page command transport not initialized'};
+            return window.__comicBridgeDirect(command);
+          },args:[payload]});
+        return reply?.[0]?.result;
+      };
+      let result=await dispatch();
+      if (result?.__bridgeError==='Page command transport not initialized') {
+        // A newly navigated tab or old extension content needs one injection.
+        await chrome.scripting.executeScript({target,files:['content.js']});
+        result=await dispatch();
+      }
       if (result === undefined || result === null)
         throw Error('Page command transport returned no result');
       if(result?.__bridgeError) throw Error(result.__bridgeError);
@@ -351,13 +362,13 @@ const SCREENSHOT_GAP_MS = 560; // Chrome tabs capture API rate limit; NOT used f
 // A hanging Chrome API must fail this ONE image, not block later scroll jobs.
 // This is a per-I/O inactivity watchdog, never a chapter/run time limit.
 const BROWSER_IO_STALL_MS = 18000;
-async function checkedIO(task, name) {
+async function checkedIO(task, name, timeoutMs=BROWSER_IO_STALL_MS) {
   let timeout;
   try {
     return await Promise.race([
       Promise.resolve(task),
       new Promise((_, reject) => {timeout=setTimeout(() => reject(
-        Error('Selected-tab browser API stalled: '+name)), BROWSER_IO_STALL_MS);})
+        Error('Selected-tab browser API stalled: '+name)), timeoutMs);})
     ]);
   } finally { clearTimeout(timeout); }
 }
@@ -649,7 +660,25 @@ async function execute(job) {
   if (!type) throw Error('Unsupported command');
   // Also watch ordinary scroll/snapshot commands. A stalled content-script
   // message must not block the single extension command queue indefinitely.
-  const result=await checkedIO(send(state.tabId,{type,payload}), action+' page command');
+  let result;
+  try {
+    // recoverImage waits at most ~7 seconds for a lazy-loaded DOM image. A
+    // longer scripting wait means the Chrome API/transport is stalled, not
+    // that we should abandon every other image in this chapter.
+    result=await checkedIO(send(state.tabId,{type,payload}), action+' page command',
+      action==='recover_image' ? 11000 : BROWSER_IO_STALL_MS);
+  } catch(error) {
+    if(action!=='recover_image' ||
+       !String(error).includes('Selected-tab browser API stalled: recover_image page command')) throw error;
+    // The scripting API may hang independently from tabs.sendMessage. Fall
+    // back once to the already-installed content listener in this SAME tab.
+    // This command targets one absolute ordinal, not forward scroll or nav.
+    console.warn('Comic Bridge: recovery injection stalled; trying existing tab listener once');
+    const tab=await tabsGet(state.tabId);
+    if(!sourceMatches(tab.url) || tab.status==='loading') throw error;
+    result=await checkedIO(sendRaw(state.tabId,{type,payload}),
+      'recover_image existing-listener fallback', 8500);
+  }
   if (result?.error) throw Error(result.error);
   return result;
 }
@@ -657,12 +686,37 @@ async function execute(job) {
 // serves a per-run token only to browser-extension origins (never web pages).
 const AUTO_PORT=18765;
 let autoConnecting=false;
-async function pickComicTab(site) {
-  const tabs=await call(chrome.tabs,'query',{});
-  const candidates=(tabs||[]).filter(tab => {
+function trustedStartupUrl(site, startupUrl) {
+  try {
+    const u=new URL(startupUrl);
+    if(u.protocol!=='https:' || u.hostname!==site || !sourceMatches(u.href) ||
+       u.username || u.password) return '';
+    return u.href;
+  } catch {return '';}
+}
+async function pickComicTab(site, startupUrl='') {
+  const requested=trustedStartupUrl(site,startupUrl);
+  let tabs=await call(chrome.tabs,'query',{});
+  let candidates=(tabs||[]).filter(tab => {
     if(!sourceMatches(tab.url)) return false;
     try {return new URL(tab.url).hostname===site;} catch{return false;}
   });
+  const exact=requested && candidates.find(tab=>canonicalPage(tab.url)===canonicalPage(requested));
+  if(exact) return exact;
+  if(requested) {
+    // The ordinary Chrome process may be opening this URL simultaneously.
+    // Give its tab creation a moment before creating a duplicate.
+    await sleep(800);
+    tabs=await call(chrome.tabs,'query',{});
+    candidates=(tabs||[]).filter(tab=>sourceMatches(tab.url) &&
+      (()=>{try{return new URL(tab.url).hostname===site;}catch{return false;}})());
+    const pending=candidates.find(tab=>canonicalPage(tab.url)===canonicalPage(requested));
+    if(pending) return pending;
+    // Do NOT take over an unrelated reading tab. Create a separate tab on
+    // the same explicitly granted site using normal chrome.tabs API.
+    return call(chrome.tabs,'create',{url:requested,active:true});
+  }
+  // Backward compatibility with an older Python bridge without startup_url.
   if(!candidates.length) return null;
   let preferred={};
   try {preferred=await storageGet(['selectedTabId']);} catch {}
@@ -686,8 +740,8 @@ async function autoConnect() {
 
     if(config.protocol!=='visual-transfer-2'||!Number.isInteger(config.port)||
        !/^[A-Za-z0-9_-]{20,100}$/.test(config.token)) throw Error('Unexpected local bridge protocol');
-    const tab=await pickComicTab(config.site);
-    if(!tab) { lastError='Open the supported comic in a normal browser tab';return;}
+    const tab=await pickComicTab(config.site,config.startup_url);
+    if(!tab) { lastError='No authorized comic tab or startup URL available';return;}
     state={tabId:tab.id,port:config.port,token:config.token};
     try {
       // No debugger requirement: pixel capture is available in normal Chrome.
@@ -713,6 +767,10 @@ if(chrome.alarms?.create) {
 chrome.runtime.onStartup?.addListener(()=>autoConnect());
 chrome.runtime.onInstalled?.addListener(()=>autoConnect());
 chrome.tabs.onActivated?.addListener(()=>autoConnect());
+chrome.tabs.onCreated?.addListener(()=>autoConnect());
+chrome.tabs.onUpdated?.addListener((_tabId,changeInfo)=>{
+  if(changeInfo?.url || changeInfo?.status==='complete') autoConnect();
+});
 setTimeout(()=>autoConnect(),200);
 // The Python RPC may run for an arbitrarily long healthy image/chapter job.
 // Heartbeats allow it to distinguish real browser work from a dead MV3 worker.

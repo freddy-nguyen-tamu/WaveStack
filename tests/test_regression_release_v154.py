@@ -27,7 +27,7 @@ class ReleaseGuard(unittest.TestCase):
   def test_versions_match_and_site_adapters_unmodified(self):
     for name in ('reusable/browser_bridge_extension/manifest.chrome.json','reusable/browser_bridge_extension/manifest.firefox.json','browser_bridge/chrome/manifest.json','browser_bridge/firefox/manifest.json'):
       manifest=json.loads((ROOT/name).read_text(encoding='utf-8'))
-      self.assertEqual(manifest['version'],'1.5.8', name)
+      self.assertEqual(manifest['version'],'1.5.10', name)
       if name.endswith('chrome.json') or name == 'browser_bridge/chrome/manifest.json':
         self.assertIn('debugger',manifest['permissions'])
         self.assertIn('http://127.0.0.1:18765/*',manifest['host_permissions'])
