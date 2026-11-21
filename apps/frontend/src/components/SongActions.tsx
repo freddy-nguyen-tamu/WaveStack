@@ -1,9 +1,11 @@
 
+
 import { Check, Heart, ListMusic, ListPlus, Play } from "lucide-react";
-import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import type { ClientPlaylist, PlaybackContext, PlaySongHandler, Song } from "../App";
 import { formatSongDisplayName } from "../song-format";
+import { sortPlaylistsNewestFirst } from "../playlist-state";
 
 type SongActionsProps = {
   song: Song;
@@ -45,6 +47,7 @@ export function SongActions({
   const [position, setPosition] = useState<CSSProperties>({ visibility: "hidden" });
   const pickerId = useId();
   const songName = formatSongDisplayName(song);
+  const newestFirstPlaylists = useMemo(() => sortPlaylistsNewestFirst(playlists), [playlists]);
 
   useLayoutEffect(() => {
     if (!playlistPickerOpen) return;
@@ -157,7 +160,7 @@ export function SongActions({
           }}
         >
           {playlists.length ? (
-            playlists.map((playlist) => (
+            newestFirstPlaylists.map((playlist) => (
               <button
                 key={playlist.id}
                 type="button"

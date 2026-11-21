@@ -295,4 +295,58 @@ describe("WaveStack Windows/Chromium media-session continuity", () => {
     expect(session.metadata?.title).toBe("Title c");
     expect(audio.src).toContain("/drive/stream/c?");
   });
+
+  it("keeps the old OS title, artist and cover through automatic end and async next resolution", async () => {
+    const { session } = fakeMediaSession();
+    let finishAdvance!: (advanced: boolean) => void;
+    const onEnded = vi.fn(() => new Promise<boolean>(resolve => { finishAdvance = resolve; }));
+    const view = render(<Player {...props(song("a"), 1)} onEnded={onEnded} />);
+    await flush();
+    const oldDeck = view.container.querySelector("audio")!;
+    setMediaReadyState(oldDeck, HTMLMediaElement.HAVE_FUTURE_DATA);
+    fireEvent.playing(oldDeck);
+    expect(session.metadata?.title).toBe("Title a");
+
+    Object.defineProperty(oldDeck, "ended", { configurable: true, get: () => true });
+    fireEvent.pause(oldDeck); // Chrome may emit pause before ended.
+    expect(session.playbackState).toBe("playing");
+    fireEvent.ended(oldDeck);
+    await flush();
+    expect(onEnded).toHaveBeenCalledTimes(1);
+    expect(session.playbackState).toBe("playing");
+    expect(session.metadata?.title).toBe("Title a");
+    expect(session.metadata?.artist).toBe("Artist a");
+    expect(session.metadata?.artwork?.[0]?.src).toContain("a.jpg");
+
+    view.rerender(<Player {...props(song("b"), 2)} onEnded={onEnded} />);
+    await flush();
+    expect(session.playbackState).toBe("playing");
+    expect(session.metadata?.title).toBe("Title a");
+    expect(session.metadata?.artwork?.[0]?.src).toContain("a.jpg");
+    // Even a stale async completion from A must not affect B's pending session.
+    await act(async () => { finishAdvance(false); });
+    expect(session.playbackState).toBe("playing");
+    setMediaReadyState(oldDeck, HTMLMediaElement.HAVE_FUTURE_DATA);
+    fireEvent.playing(oldDeck);
+    expect(session.metadata?.title).toBe("Title b");
+    expect(session.metadata?.artist).toBe("Artist b");
+    expect(session.metadata?.artwork?.[0]?.src).toContain("b.jpg");
+  });
+
+  it("returns to paused when natural playback ends and no next track exists", async () => {
+    const { session } = fakeMediaSession();
+    const onEnded = vi.fn(async () => false);
+    const view = render(<Player {...props(song("last"), 1)} onEnded={onEnded} />);
+    await flush();
+    const audio = view.container.querySelector("audio")!;
+    setMediaReadyState(audio, HTMLMediaElement.HAVE_FUTURE_DATA);
+    fireEvent.playing(audio);
+    Object.defineProperty(audio, "ended", { configurable: true, get: () => true });
+    fireEvent.ended(audio);
+    await flush();
+    expect(onEnded).toHaveBeenCalledTimes(1);
+    expect(session.playbackState).toBe("paused");
+    expect(session.metadata?.title).toBe("Title last");
+  });
+
 });

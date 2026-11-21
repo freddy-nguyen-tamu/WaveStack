@@ -1,3 +1,4 @@
+
 import {
   ApolloClient,
   InMemoryCache,
@@ -682,6 +683,7 @@ export const LIBRARY_STATE_QUERY = gql`
         }
         createdAt
         updatedAt
+        lastSongAddedAt
       }
     }
   }
@@ -721,6 +723,7 @@ export const CREATE_USER_PLAYLIST_MUTATION = gql`
       }
       createdAt
       updatedAt
+      lastSongAddedAt
     }
   }
 `;
@@ -739,6 +742,7 @@ export const DELETE_USER_PLAYLIST_MUTATION = gql`
       }
       createdAt
       updatedAt
+      lastSongAddedAt
     }
   }
 `;
@@ -757,6 +761,7 @@ export const ADD_SONG_TO_USER_PLAYLIST_MUTATION = gql`
       }
       createdAt
       updatedAt
+      lastSongAddedAt
     }
   }
 `;
@@ -775,6 +780,7 @@ export const REMOVE_SONG_FROM_USER_PLAYLIST_MUTATION = gql`
       }
       createdAt
       updatedAt
+      lastSongAddedAt
     }
   }
 `;

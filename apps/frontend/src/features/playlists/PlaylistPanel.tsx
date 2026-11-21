@@ -1,8 +1,10 @@
 
+
 import { ListPlus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ClientPlaylist, OpenSongDetailsHandler, PlaybackContext, PlaySongHandler, Song } from "../../App";
 import { formatSongDisplayName, matchesSongSearch } from "../../song-format";
+import { sortPlaylistsNewestFirst } from "../../playlist-state";
 import { SongListRow } from "../../components/SongListRow";
 import { PaginationBar } from "../../components/PaginationBar";
 import { ToastNotice } from "../../components/ToastNotice";
@@ -55,6 +57,7 @@ export function PlaylistPanel({
   const [page, setPage] = useState(1);
   const [message, setMessage] = useState("");
 
+  const newestFirstPlaylists = useMemo(() => sortPlaylistsNewestFirst(playlists), [playlists]);
   const selectedPlaylist = playlists.find((playlist) => playlist.id === selectedPlaylistId);
   const songById = useMemo(() => new Map(songs.map((song) => [song.id, song])), [songs]);
 
@@ -204,7 +207,7 @@ export function PlaylistPanel({
           }}
         >
           <option value="" disabled>{playlists.length ? "Choose playlist" : "No playlists yet"}</option>
-          {playlists.map(playlist => (
+          {newestFirstPlaylists.map(playlist => (
             <option key={playlist.id} value={playlist.id}>
               {playlist.name} ({playlist.songIds.length})
             </option>

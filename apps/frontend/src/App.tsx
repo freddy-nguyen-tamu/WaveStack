@@ -1,3 +1,4 @@
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ApolloQueryResult, useApolloClient, useMutation, useQuery } from "@apollo/client";
 import { Activity, Clock, Heart, ListMusic, Music2, RefreshCw, TrendingUp, Upload } from "lucide-react";
@@ -126,6 +127,7 @@ export type ClientPlaylist = {
   songCount?: number;
   createdAt?: string;
   updatedAt?: string;
+  lastSongAddedAt?: string | null;
 };
 
 type SongPageQueryData = {
@@ -671,10 +673,10 @@ export function App() {
   }
 
   function applyPlaylists(nextPlaylists: ClientPlaylist[]) {
-    const next = mergeEditedPlaylistMembership(
+    const next = sortPlaylistsNewestFirst(mergeEditedPlaylistMembership(
       sanitizePlaylists(nextPlaylists),
       playlistMembershipEditsRef.current
-    );
+    ));
     playlistsRef.current = next;
     setPlaylists(next);
     writeLocalJson("wavestack:playlists", next);
@@ -1814,10 +1816,10 @@ export function App() {
     return null;
   }
 
-  async function playNextFromPolicy(reason: PlaybackAdvanceReason = "manual") {
+  async function playNextFromPolicy(reason: PlaybackAdvanceReason = "manual"): Promise<boolean> {
     // The imperative lock also covers media-session and keyboard Next callbacks,
     // which can fire before React has rerendered the resolvingNext prop.
-    if (advanceInFlightRef.current) return;
+    if (advanceInFlightRef.current) return true;
     advanceInFlightRef.current = true;
     setIsResolvingNextSong(true);
 
@@ -1838,11 +1840,11 @@ export function App() {
 
       // A user may select another song, go Previous or change context while a
       // network randomSong query is pending. Never resurrect that stale result.
-      if (playRequestIdRef.current !== requestId) return;
+      if (playRequestIdRef.current !== requestId) return false;
 
       if (!nextSong) {
         showNotice("No next song available.");
-        return;
+        return false;
       }
 
       if (replaySong) {
@@ -1858,11 +1860,13 @@ export function App() {
       markPlayed(nextSong);
 
       if (nextSong.id !== latestCurrentSong?.id) rememberRecent(nextSong);
+      return true;
     } catch (error) {
       if (playRequestIdRef.current === requestId) {
         console.error("Failed to advance playback", error);
         showNotice("Could not play the next song.");
       }
+      return false;
     } finally {
       if (playRequestIdRef.current === requestId) {
         advanceInFlightRef.current = false;
@@ -2184,7 +2188,8 @@ export function App() {
           songIds: [song.id],
           songs: [song],
           songCount: 1,
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          lastSongAddedAt: new Date().toISOString()
         };
 
         setPlaylists((items) => {
@@ -2252,6 +2257,7 @@ export function App() {
     recordPlaylistMembershipEdit(playlistMembershipEditsRef.current, playlistId, song.id, true, song);
     applyPlaylists(playlistsRef.current.map(item => item.id !== playlistId ? item : ({
       ...item,
+      lastSongAddedAt: new Date().toISOString(),
       songIds: [song.id, ...item.songIds],
       songs: [song, ...(item.songs ?? [])],
       songCount: (item.songCount ?? item.songIds.length) + 1
@@ -2625,7 +2631,8 @@ export function App() {
         id: `playlist-${Date.now()}`,
         name,
         songIds,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        lastSongAddedAt: songIds.length ? new Date().toISOString() : null
       };
 
       setPlaylists((items) => {
@@ -2827,7 +2834,7 @@ export function App() {
             resolvingNext={isResolvingNextSong}
             onNext={() => { void playNextFromPolicy("manual"); }}
             onPrevious={playPreviousFromHistory}
-            onEnded={() => { void playNextFromPolicy("ended"); }}
+            onEnded={() => playNextFromPolicy("ended")}
         />
         </section>
         </aside>

@@ -1,3 +1,4 @@
+
 import { Injectable } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
 import { Song } from "../music/music.models";
@@ -17,6 +18,7 @@ type PlaylistRow = {
   song_ids: string[] | null;
   created_at: Date | string;
   updated_at: Date | string;
+  last_song_added_at: Date | string | null;
 };
 
 @Injectable()
@@ -114,6 +116,7 @@ export class PlaylistsService {
          p.name,
          p.created_at,
          p.updated_at,
+         COALESCE(p.last_song_added_at, MAX(ps.added_at)) AS last_song_added_at,
          COUNT(ps.song_id)::int AS song_count,
          COALESCE(
            ARRAY_AGG(ps.song_id ORDER BY ps.position DESC, ps.added_at DESC)
@@ -126,7 +129,7 @@ export class PlaylistsService {
         AND ps.song_id <> '${PLACEHOLDER_SONG_ID}'
        WHERE p.user_id = $1
        GROUP BY p.id
-       ORDER BY p.created_at DESC, p.id DESC`,
+       ORDER BY COALESCE(p.last_song_added_at, MAX(ps.added_at), p.created_at) DESC, p.id DESC`,
       [userId]
     );
 
@@ -144,7 +147,8 @@ export class PlaylistsService {
           songIds,
           songs,
           createdAt: this.iso(row.created_at),
-          updatedAt: this.iso(row.updated_at)
+          updatedAt: this.iso(row.updated_at),
+          lastSongAddedAt: row.last_song_added_at ? this.iso(row.last_song_added_at) : null
         };
       })
     );
@@ -204,14 +208,24 @@ export class PlaylistsService {
       this.rows<{ next_position: string | number }>(positionResult)[0]?.next_position ?? 0
     );
 
-    await this.database.query(
+    const inserted = await this.database.query(
       `INSERT INTO app_user_playlist_songs (playlist_id, song_id, position)
        VALUES ($1, $2, $3)
-       ON CONFLICT (playlist_id, song_id) DO NOTHING`,
+       ON CONFLICT (playlist_id, song_id) DO NOTHING
+       RETURNING song_id`,
       [playlistId, songId, nextPosition]
     );
 
-    await this.touchPlaylist(playlistId, userId);
+    // Only an actual addition moves the playlist to the top. Removing a song,
+    // refreshing metadata or clicking an already-present song must not do so.
+    if (this.rows(inserted).length) {
+      await this.database.query(
+        `UPDATE app_user_playlists
+         SET last_song_added_at = now(), updated_at = now()
+         WHERE id = $1 AND user_id = $2`,
+        [playlistId, userId]
+      );
+    }
 
     return this.getPlaylists(userId);
   }

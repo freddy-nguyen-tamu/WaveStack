@@ -1,3 +1,4 @@
+
 import { Injectable, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Pool, QueryResult, QueryResultRow } from "pg";
@@ -91,8 +92,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         user_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
         name TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        last_song_added_at TIMESTAMPTZ
       )
+    `);
+
+    // Existing installations keep their playlist history; no destructive rebuild.
+    await this.pool.query(`
+      ALTER TABLE app_user_playlists
+      ADD COLUMN IF NOT EXISTS last_song_added_at TIMESTAMPTZ
     `);
 
     await this.pool.query(`
@@ -118,6 +126,20 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     await this.pool.query(`
       CREATE INDEX IF NOT EXISTS idx_app_user_playlist_songs_song
       ON app_user_playlist_songs (song_id)
+    `);
+
+    // Backfill once from the newest retained membership for legacy playlists.
+    // Future removals do not erase the stored last-addition timestamp.
+    await this.pool.query(`
+      UPDATE app_user_playlists p
+      SET last_song_added_at = latest.added_at
+      FROM (
+        SELECT playlist_id, MAX(added_at) AS added_at
+        FROM app_user_playlist_songs
+        GROUP BY playlist_id
+      ) latest
+      WHERE p.id = latest.playlist_id
+        AND p.last_song_added_at IS NULL
     `);
   }
 

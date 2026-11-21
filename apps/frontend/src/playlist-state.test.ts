@@ -1,3 +1,4 @@
+
 import { describe, expect, it } from "vitest";
 import type { ClientPlaylist, Song } from "./App";
 import { mergeEditedPlaylistMembership, recordPlaylistMembershipEdit, sortPlaylistsNewestFirst, type PlaylistMembershipEdits } from "./playlist-state";
@@ -49,10 +50,24 @@ describe("playlist membership against stale playback-related refreshes", () => {
 });
 
 describe("newest-first playlists", () => {
-  it("orders server timestamps newest-first, independently of update time", () => {
-    const older = { ...playlist([]), id: "older", createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-11-03T00:00:00Z" };
-    const newer = { ...playlist([]), id: "newer", createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-01T00:00:00Z" };
-    expect(sortPlaylistsNewestFirst([older, newer]).map(item => item.id)).toEqual(["newer", "older"]);
+  it("uses last song additions rather than creation dates or unrelated removals", () => {
+    const older = { ...playlist([]), id: "older", createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-11-18T00:00:00Z", lastSongAddedAt: "2026-11-17T00:00:00Z" };
+    const newer = { ...playlist([]), id: "newer", createdAt: "2026-11-01T00:00:00Z", updatedAt: "2026-11-04T00:00:00Z", lastSongAddedAt: "2026-11-03T00:00:00Z" };
+    expect(sortPlaylistsNewestFirst([older, newer]).map(item => item.id)).toEqual(["older", "newer"]);
+  });
+
+  it("orders pending membership adds newest-first even with an older backend snapshot", () => {
+    const edits: PlaylistMembershipEdits = new Map();
+    const older = { ...playlist([]), id: "older", createdAt: "2026-10-01T00:00:00Z", lastSongAddedAt: "2026-11-01T00:00:00Z" };
+    const newer = { ...playlist([]), id: "newer", createdAt: "2026-11-10T00:00:00Z" };
+    recordPlaylistMembershipEdit(edits, "older", "new", true, song("new"));
+    const merged = mergeEditedPlaylistMembership([newer, older], edits);
+    expect(sortPlaylistsNewestFirst(merged).map(item => item.id)).toEqual(["older", "newer"]);
+    expect(merged[1].lastSongAddedAt).toBeDefined();
+    // A later removal does not fabricate another addition timestamp.
+    const stamp = merged[1].lastSongAddedAt;
+    recordPlaylistMembershipEdit(edits, "older", "other", false);
+    expect(mergeEditedPlaylistMembership([newer, older], edits)[1].lastSongAddedAt).toBe(stamp);
   });
 
   it("sorts legacy local playlist IDs by timestamp", () => {

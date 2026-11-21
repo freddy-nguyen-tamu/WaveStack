@@ -48,7 +48,7 @@ type PlayerProps = {
   onListenStart: (song: Song) => void;
   onNext: () => void;
   onPrevious: () => void;
-  onEnded: () => void;
+  onEnded: () => void | boolean | Promise<void | boolean>;
 };
 
 export function Player({
@@ -79,6 +79,7 @@ export function Player({
   const firstAudioDeckRef = useRef<HTMLAudioElement | null>(null);
   const secondAudioDeckRef = useRef<HTMLAudioElement | null>(null);
   const holdoverAudioRef = useRef<HTMLAudioElement | null>(null);
+  const autoAdvanceEpochRef = useRef<number | null>(null);
   const discAngleRef = useRef(0);
   const discTimestampRef = useRef<number | null>(null);
   const playRequestRef = useRef(0);
@@ -203,6 +204,7 @@ export function Player({
     // A layout effect closes that input window before the browser can paint.
     if (resetForNewPlay) {
       sourceEpochRef.current += 1;
+      autoAdvanceEpochRef.current = null;
     }
 
     currentSourceSongIdRef.current = activeSong.id;
@@ -857,6 +859,7 @@ export function Player({
       rememberResumePosition(audioRef.current);
     }
     desiredPlaybackRef.current = false;
+    autoAdvanceEpochRef.current = null;
     clearStartupStallWatchdog(true);
     playRequestRef.current += 1;
     pauseDiscRotation();
@@ -1397,6 +1400,12 @@ export function Player({
             if (!audio || !audio.paused || !audioMatchesExpectedSource(audio)) return;
             pauseDiscRotation();
             setIsPlaying(false);
+            if (audio.ended && desiredPlaybackRef.current) {
+              // Native pause may precede ended. Never expose a paused frame
+              // while the player is handing off to the automatic successor.
+              setIsPlaybackPending(true);
+              return;
+            }
             if (desiredPlaybackRef.current && !audio.ended) {
               // A browser-initiated pause is not a user Pause request. Preserve
               // intent through a source change / pending signed-URL refresh.
@@ -1421,19 +1430,61 @@ export function Player({
             syncProgressFromAudio();
           }}
           onEnded={(event) => {
-            if (event.currentTarget !== audioRef.current) return;
+            const endedAudio = event.currentTarget;
+            if (endedAudio !== audioRef.current ||
+                !desiredPlaybackRef.current ||
+                autoAdvanceEpochRef.current === sourceEpochRef.current) return;
             releaseHoldover();
-            // A Space replay after the end is another complete playback cycle
-            // even if repeat mode is disabled and the source does not change.
+            // A natural end is a handoff, not Pause. Keep the *same* OS song
+            // metadata and the active media-session state throughout the policy
+            // lookup (which can await the network for shuffle). The next source
+            // publishes its own metadata only when it starts playing.
             recordedListenEpochRef.current = null;
-            desiredPlaybackRef.current = false;
             pendingSeekRef.current = null;
             lastPlaybackPositionRef.current = 0;
             clearStartupStallWatchdog(true);
             pauseDiscRotation();
+            desiredPlaybackRef.current = true;
             setIsPlaying(false);
-            setIsPlaybackPending(false);
-            onEnded();
+            setIsPlaybackPending(true);
+            setHasPlaybackHistory(true);
+            if ("mediaSession" in navigator) {
+              navigator.mediaSession.playbackState = "playing";
+            }
+            const endedEpoch = sourceEpochRef.current;
+            autoAdvanceEpochRef.current = endedEpoch;
+            // The parent returns false when there is no successor (end of list,
+            // backend error, etc.). Do not leave the player stuck in Loading.
+            // An older completion cannot pause a later manual or auto selection.
+            try {
+              void Promise.resolve(onEnded()).then(
+                (advanced) => {
+                  if (advanced !== false && advanced !== undefined) return;
+                  if (autoAdvanceEpochRef.current !== endedEpoch ||
+                      sourceEpochRef.current !== endedEpoch ||
+                      audioRef.current !== endedAudio) return;
+                  autoAdvanceEpochRef.current = null;
+                  desiredPlaybackRef.current = false;
+                  setIsPlaying(false);
+                  setIsPlaybackPending(false);
+                },
+                () => {
+                  if (autoAdvanceEpochRef.current !== endedEpoch ||
+                      sourceEpochRef.current !== endedEpoch ||
+                      audioRef.current !== endedAudio) return;
+                  autoAdvanceEpochRef.current = null;
+                  desiredPlaybackRef.current = false;
+                  setIsPlaying(false);
+                  setIsPlaybackPending(false);
+                }
+              );
+            } catch {
+              if (sourceEpochRef.current === endedEpoch) {
+                autoAdvanceEpochRef.current = null;
+                desiredPlaybackRef.current = false;
+                setIsPlaybackPending(false);
+              }
+            }
           }}
         />
         ))}

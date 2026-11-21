@@ -1,3 +1,4 @@
+
 import { Field, Int, ObjectType } from "@nestjs/graphql";
 import { Song } from "../music/music.models";
 
@@ -23,6 +24,9 @@ export class UserPlaylist {
 
   @Field()
   updatedAt!: string;
+
+  @Field({ nullable: true })
+  lastSongAddedAt!: string | null;
 }
 
 @ObjectType()
