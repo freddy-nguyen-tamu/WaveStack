@@ -80,6 +80,8 @@ export function Player({
   const secondAudioDeckRef = useRef<HTMLAudioElement | null>(null);
   const holdoverAudioRef = useRef<HTMLAudioElement | null>(null);
   const autoAdvanceEpochRef = useRef<number | null>(null);
+  const networkRetryTimerRef = useRef<number | null>(null);
+  const networkRetryCountRef = useRef(0);
   const discAngleRef = useRef(0);
   const discTimestampRef = useRef<number | null>(null);
   const playRequestRef = useRef(0);
@@ -229,6 +231,7 @@ export function Player({
       // Do not report a paused media session while the replacement buffers:
       // Windows can otherwise promote an unrelated application's last session.
       desiredPlaybackRef.current = playSignal > 0;
+      clearNetworkRetry(true);
       pendingSeekRef.current = null;
       lastPlaybackPositionRef.current = 0;
       audio.pause();
@@ -681,6 +684,17 @@ export function Player({
       return;
     }
 
+    const resumingPublishedSong =
+      !desiredPlaybackRef.current &&
+      publishedMediaSongRef.current?.id === expectedOwner.songId;
+    if (resumingPublishedSong) {
+      // The requested song is still the paused song. Do not publish a different
+      // song or create a competing <audio> element just to retain the media UI.
+      reclaimPausedMediaSession(expectedOwner.songId);
+    }
+
+    if (!desiredPlaybackRef.current) networkRetryCountRef.current = 0;
+    clearNetworkRetry();
     desiredPlaybackRef.current = true;
     // Reflect the user's playback intent before any signed-URL refresh or media
     // buffering. The previous implementation waited for `playing`, making both
@@ -757,6 +771,24 @@ export function Player({
           restorePendingSeek();
           currentSource = audio.src;
         } else if (forceRefresh || sourceIdentityMismatch || sourceExpired) {
+          // A paused song may already have enough buffered bytes to resume even
+          // after its URL expiry timestamp. Try those bytes before asking a
+          // temporarily unavailable API for a new signed URL. A real media
+          // error/stall still goes through the normal signed-link recovery.
+          const mayResumeBuffer = !forceRefresh && !sourceIdentityMismatch && sourceExpired &&
+            resumingPublishedSong && !audio.error &&
+            audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA;
+          if (mayResumeBuffer) {
+            try {
+              armStartupStallWatchdog();
+              await audio.play();
+              if (!playbackOwnerMatches(expectedOwner, audio) || playRequestRef.current !== requestId) return;
+              return;
+            } catch {
+              clearStartupStallWatchdog();
+              // Buffered resource was evicted or rejected: refresh normally.
+            }
+          }
           const refreshed = await refreshStreamForPlayback(audio, expectedOwner);
           if (!refreshed || !playbackOwnerMatches(expectedOwner, audio) || playRequestRef.current !== requestId) {
             return;
@@ -831,12 +863,31 @@ export function Player({
           return;
         }
 
-        setIsPlaying(false);
-        setIsPlaybackPending(false);
         const errorMessage = error instanceof Error ? error.message : "Browser blocked playback.";
+        setIsPlaying(false);
+        if (isTemporaryApiFailure(error) && networkRetryCountRef.current < 3) {
+          // A short outage is not a user Pause. Retain the requested song and
+          // its media metadata while a bounded background retry runs. Each
+          // retry is fenced by both the exact song/epoch and the play request.
+          const delayMs = [2_000, 5_000, 10_000][networkRetryCountRef.current++];
+          clearStartupStallWatchdog();
+          setIsPlaybackPending(true);
+          setPlayError(`WaveStack API is unreachable. Retrying playback (${networkRetryCountRef.current}/3)…`);
+          networkRetryTimerRef.current = window.setTimeout(() => {
+            networkRetryTimerRef.current = null;
+            if (!desiredPlaybackRef.current ||
+                !playbackOwnerMatches(expectedOwner, audio) ||
+                playRequestRef.current !== requestId) return;
+            void playCurrent(true, true);
+          }, delayMs);
+          return;
+        }
 
-        // A failed play attempt is no longer "pending". Leaving this true makes
-        // the next click behave like Pause, which is why playback can feel stuck.
+        // No playable media is available after bounded network recovery, or
+        // this is a non-recoverable error. Show Play again instead of pretending
+        // to play indefinitely, and retain the specific failure text.
+        clearNetworkRetry(true);
+        setIsPlaybackPending(false);
         desiredPlaybackRef.current = false;
         releaseHoldover();
         setPlayError(errorMessage);
@@ -860,6 +911,7 @@ export function Player({
     }
     desiredPlaybackRef.current = false;
     autoAdvanceEpochRef.current = null;
+    clearNetworkRetry(true);
     clearStartupStallWatchdog(true);
     playRequestRef.current += 1;
     pauseDiscRotation();
@@ -1157,6 +1209,48 @@ export function Player({
     }];
   }
 
+  function writeMediaSessionSong(song: Song) {
+    if (!("mediaSession" in navigator) || typeof MediaMetadata === "undefined") return;
+    publishedMediaSongRef.current = song;
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: song.title?.trim() || "Untitled Track",
+      artist: song.artistName?.trim() || "Unknown Artist",
+      album: song.albumTitle,
+      artwork: getMediaSessionArtwork(song)
+    });
+  }
+
+  function clearNetworkRetry(resetAttempts = false) {
+    if (networkRetryTimerRef.current !== null) {
+      window.clearTimeout(networkRetryTimerRef.current);
+      networkRetryTimerRef.current = null;
+    }
+    if (resetAttempts) networkRetryCountRef.current = 0;
+  }
+
+  function isTemporaryApiFailure(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    // Do not retry authorization, malformed song identity or media decoder errors.
+    // Apollo forwards browser fetch failures and gateway outages in this form.
+    return /failed to fetch|networkerror|network request failed|fetch failed|\b(?:502|503|504)\b|network timeout/i.test(message);
+  }
+
+  function reclaimPausedMediaSession(songId: string) {
+    // Only reclaim a song which WaveStack previously published. A different
+    // selected song must not claim the flyout before its stream is playable.
+    const published = publishedMediaSongRef.current;
+    if (!published || published.id !== songId || !("mediaSession" in navigator)) return;
+
+    // Windows may hand the system media flyout to another app after an extended
+    // pause. Restore title, artist, cover and playback intent synchronously with
+    // the Play gesture, BEFORE waiting for GraphQL/Drive or audio.play().
+    writeMediaSessionSong(latestActiveSongRef.current);
+    navigator.mediaSession.playbackState = "playing";
+
+    // The real song element is the only playback owner. A synthetic silent
+    // element can compete with it for Windows media keys and audio focus.
+  }
+
   function publishReadyMediaSessionSong(playbackConfirmed = false) {
     const audio = audioRef.current;
     const song = latestActiveSongRef.current;
@@ -1174,13 +1268,7 @@ export function Player({
       typeof MediaMetadata === "undefined"
     ) return;
 
-    publishedMediaSongRef.current = song;
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: song.title?.trim() || "Untitled Track",
-      artist: song.artistName?.trim() || "Unknown Artist",
-      album: song.albumTitle,
-      artwork: getMediaSessionArtwork(song)
-    });
+    writeMediaSessionSong(song);
   }
 
   // Media actions must not be unregistered/re-registered on every track change.
@@ -1237,7 +1325,7 @@ export function Player({
   useEffect(() => {
     return () => {
       clearStartupStallWatchdog(true);
-      holdoverAudioRef.current = null;
+        holdoverAudioRef.current = null;
       if (!("mediaSession" in navigator)) return;
       navigator.mediaSession.playbackState = "none";
       navigator.mediaSession.metadata = null;
@@ -1288,7 +1376,7 @@ export function Player({
       desiredPlaybackRef.current = false;
       setIsPlaying(false);
       setIsPlaybackPending(false);
-      releaseHoldover();
+        releaseHoldover();
       setPlayError("Playback failed after WaveStack refreshed the stream link.");
       return;
     }
@@ -1378,6 +1466,7 @@ export function Player({
             // Commit title, artist and artwork together, then retire the old
             // deck only once the replacement is actually emitting audio.
             publishReadyMediaSessionSong(true);
+            clearNetworkRetry(true);
             if (audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) releaseHoldover();
             startDiscRotation();
             setHasPlaybackHistory(true);
@@ -1418,7 +1507,8 @@ export function Player({
                   audio.paused &&
                   !audio.ended &&
                   audioMatchesExpectedSource(audio) &&
-                  !playPromiseRef.current
+                  !playPromiseRef.current &&
+                  networkRetryTimerRef.current === null
                 ) {
                   void playCurrent();
                 }
@@ -1488,7 +1578,6 @@ export function Player({
           }}
         />
         ))}
-
         {message ? <p className="sr-only" role="status">{message}</p> : null}
         {playError ? <p role="alert">Playback error: {playError}</p> : null}
 

@@ -39,9 +39,17 @@ describe("playlist last-addition ordering", () => {
     expect((await insert(false)).some(sql => sql.includes("SET last_song_added_at = now()"))).toBe(false);
   });
 
-  it("removals do not change the last-addition timestamp", async () => {
+  it("snapshots legacy addition time before removal rather than during startup", async () => {
     const query = jest.fn().mockResolvedValue({ rows: [] });
     await makeService(query).removeSongFromPlaylist("user", "playlist", "song");
-    expect(query.mock.calls.some(([sql]) => String(sql).includes("last_song_added_at"))).toBe(false);
+    const calls = query.mock.calls.map(([sql, params]) => ({ sql: String(sql), params }));
+    const snapshot = calls.findIndex(({ sql }) => sql.includes("SET last_song_added_at ="));
+    const removal = calls.findIndex(({ sql }) => sql.includes("DELETE FROM app_user_playlist_songs"));
+    expect(snapshot).toBeGreaterThanOrEqual(0);
+    expect(removal).toBeGreaterThan(snapshot);
+    expect(calls[snapshot].sql).toContain("p.last_song_added_at IS NULL");
+    expect(calls[snapshot].sql).toContain("MAX(ps.added_at)");
+    expect(calls[snapshot].params).toEqual(["playlist", "user", "song"]);
+    expect(calls.filter(({ sql }) => sql.includes("SET last_song_added_at ="))).toHaveLength(1);
   });
 });

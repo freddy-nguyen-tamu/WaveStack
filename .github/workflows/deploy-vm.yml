@@ -234,6 +234,74 @@ jobs:
           sudo docker compose ps
           REMOTE
 
+      - name: Verify public API and browser CORS
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_VM_HOST }}
+          ORACLE_USER: ${{ secrets.ORACLE_VM_USER }}
+        run: |
+          set -euo pipefail
+
+          # The internal service may be healthy while Caddy still returns 502.
+          # Validate from the external Actions runner, just like a real browser.
+          response_file="$(mktemp)"
+          header_file="$(mktemp)"
+          trap 'rm -f "$response_file" "$header_file"' EXIT
+          healthy=false
+
+          for attempt in $(seq 1 12); do
+            status="$(curl --silent --show-error --max-time 10 \
+              --output "$response_file" --write-out '%{http_code}' \
+              -H 'Origin: https://wavestack.duckdns.org' \
+              -H 'Content-Type: application/json' \
+              --data '{"query":"{ __typename }"}' \
+              https://api.wavestack.duckdns.org/graphql)" || status="000"
+
+            if [ "$status" = "200" ] && node -e '
+              const fs = require("node:fs");
+              try {
+                const payload = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+                process.exit(payload.data?.__typename === "Query" ? 0 : 1);
+              } catch { process.exit(1); }
+            ' "$response_file"; then
+              preflight_status="$(curl --silent --show-error --max-time 10 \
+                --dump-header "$header_file" --output /dev/null \
+                --write-out '%{http_code}' --request OPTIONS \
+                -H 'Origin: https://wavestack.duckdns.org' \
+                -H 'Access-Control-Request-Method: POST' \
+                -H 'Access-Control-Request-Headers: content-type' \
+                https://api.wavestack.duckdns.org/graphql)" || preflight_status="000"
+              if [[ "$preflight_status" =~ ^2[0-9][0-9]$ ]] && \
+                 tr -d '\r' < "$header_file" | grep -Eiq '^access-control-allow-origin:[[:space:]]*(\*|https://wavestack\.duckdns\.org)[[:space:]]*$'; then
+                healthy=true
+                break
+              fi
+              echo "Public CORS preflight failed (HTTP $preflight_status), attempt $attempt/12"
+            else
+              echo "Public GraphQL check failed (HTTP $status), attempt $attempt/12"
+            fi
+            sleep 5
+          done
+
+          if [ "$healthy" != true ]; then
+            echo "ERROR: public API is not reachable or fails CORS despite the internal deployment checks."
+            echo "=== Oracle service and upstream diagnostics ==="
+            ssh -i ~/.ssh/wavestack_oracle_actions \
+              -o BatchMode=yes -o ConnectTimeout=15 \
+              "$ORACLE_USER@$ORACLE_HOST" <<'REMOTE' || true
+          set -eu
+          cd ~/WaveStack
+          sudo docker compose ps -a
+          sudo docker compose logs --tail=70 graphql-api postgres
+          echo '=== Active reverse proxies and Docker networks ==='
+          sudo docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
+          sudo docker inspect -f '{{.Name}} {{range $name, $_ := .NetworkSettings.Networks}}{{$name}} {{end}}' \
+            "$(sudo docker compose ps -q graphql-api)" 2>/dev/null || true
+          REMOTE
+            exit 1
+          fi
+
+          echo 'Public GraphQL, upstream routing, and browser CORS all healthy.'
+
       - name: Remove deployment key
         if: always()
         run: |

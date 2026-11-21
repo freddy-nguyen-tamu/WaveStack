@@ -152,7 +152,7 @@ describe("WaveStack Windows/Chromium media-session continuity", () => {
     const view = render(<Player {...props(first, 1)} />);
     await flush();
 
-    const [oldDeck, newDeck] = Array.from(view.container.querySelectorAll("audio"));
+    const [oldDeck, newDeck] = Array.from(view.container.querySelectorAll("audio") as NodeListOf<HTMLAudioElement>);
     // In jsdom play() is mocked and paused never becomes false automatically.
     // Explicitly model a genuinely playing HTMLAudioElement, as in Chromium.
     let oldPaused = false;
@@ -195,7 +195,7 @@ describe("WaveStack Windows/Chromium media-session continuity", () => {
     const onEnded = vi.fn();
     const view = render(<Player {...props(song("a"), 1)} onEnded={onEnded} />);
     await flush();
-    const [oldDeck, stagingDeck] = Array.from(view.container.querySelectorAll("audio"));
+    const [oldDeck, stagingDeck] = Array.from(view.container.querySelectorAll("audio") as NodeListOf<HTMLAudioElement>);
     let oldPaused = false;
     Object.defineProperty(oldDeck, "paused", { configurable: true, get: () => oldPaused });
     const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(function (this: HTMLMediaElement) {
@@ -226,7 +226,7 @@ describe("WaveStack Windows/Chromium media-session continuity", () => {
     const { session } = fakeMediaSession();
     const view = render(<Player {...props(song("a"), 1)} />);
     await flush();
-    const [oldDeck, stagingDeck] = Array.from(view.container.querySelectorAll("audio"));
+    const [oldDeck, stagingDeck] = Array.from(view.container.querySelectorAll("audio") as NodeListOf<HTMLAudioElement>);
     let oldPaused = false;
     Object.defineProperty(oldDeck, "paused", { configurable: true, get: () => oldPaused });
     const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(function (this: HTMLMediaElement) {
@@ -349,4 +349,142 @@ describe("WaveStack Windows/Chromium media-session continuity", () => {
     expect(session.metadata?.title).toBe("Title last");
   });
 
+  it("keeps the paused song identity during signed-link renewal without a competing audio element", async () => {
+    const { session } = fakeMediaSession();
+    const old = song("a");
+    let finishRefresh!: (song: Song) => void;
+    const refresh = vi.fn(() => new Promise<Song>(resolve => { finishRefresh = resolve; }));
+    const view = render(<Player {...props(old, 1)} onRefreshStreamUrl={refresh} />);
+    await flush();
+    const [audio] = Array.from(view.container.querySelectorAll("audio") as NodeListOf<HTMLAudioElement>);
+    expect(view.container.querySelectorAll("audio")).toHaveLength(2);
+    setMediaReadyState(audio, HTMLMediaElement.HAVE_FUTURE_DATA);
+    fireEvent.playing(audio);
+    audio.currentTime = 36;
+    fireEvent.timeUpdate(audio);
+    fireEvent.click(view.getByRole("button", { name: "Pause" }));
+    await flush();
+
+    const pausedAt = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(pausedAt + 2 * 60 * 60 * 1000);
+    // Simulate the browser discarding an idle resource over a long pause.
+    setMediaReadyState(audio, HTMLMediaElement.HAVE_NOTHING);
+    session.playbackState = "none";
+    session.metadata = new MediaMetadata({ title: "Other app" });
+
+    fireEvent.click(view.getByRole("button", { name: "Play" }));
+    expect(session.playbackState).toBe("playing");
+    expect(session.metadata?.title).toBe("Title a");
+    expect(session.metadata?.artist).toBe("Artist a");
+    expect(session.metadata?.artwork?.[0]?.src).toContain("a.jpg");
+    await flush();
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finishRefresh({ ...old, streamUrl: `/drive/stream/a?expires=${Math.floor(Date.now() / 1000) + 3600}` });
+    });
+    setMediaReadyState(audio, HTMLMediaElement.HAVE_FUTURE_DATA);
+    fireEvent.playing(audio);
+    expect(session.metadata?.title).toBe("Title a");
+    expect(session.metadata?.artist).toBe("Artist a");
+  });
+
+  it("resumes buffered audio immediately after URL expiry without depending on the API", async () => {
+    const { session } = fakeMediaSession();
+    const old = song("buffered");
+    const refresh = vi.fn(async (item: Song) => item);
+    const view = render(<Player {...props(old, 1)} onRefreshStreamUrl={refresh} />);
+    await flush();
+    const audio = view.container.querySelector("audio")!;
+    setMediaReadyState(audio, HTMLMediaElement.HAVE_FUTURE_DATA);
+    fireEvent.playing(audio);
+    fireEvent.click(view.getByRole("button", { name: "Pause" }));
+    await flush();
+
+    const pausedAt = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(pausedAt + 2 * 60 * 60 * 1000);
+    session.playbackState = "none";
+    session.metadata = new MediaMetadata({ title: "Other app" });
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play");
+    fireEvent.click(view.getByRole("button", { name: "Play" }));
+    await flush();
+    expect(play.mock.contexts).toContain(audio);
+    expect(refresh).not.toHaveBeenCalled();
+    expect(session.metadata?.title).toBe("Title buffered");
+    expect(session.metadata?.artist).toBe("Artist buffered");
+    expect(session.playbackState).toBe("playing");
+  });
+
+  it("keeps metadata while a real audio play() remains pending and honors hardware Pause", async () => {
+    const { session, actions } = fakeMediaSession();
+    const view = render(<Player {...props(song("a"), 1)} />);
+    await flush();
+    const audio = view.container.querySelector("audio")!;
+    setMediaReadyState(audio, HTMLMediaElement.HAVE_FUTURE_DATA);
+    fireEvent.playing(audio);
+    fireEvent.click(view.getByRole("button", { name: "Pause" }));
+    await flush();
+
+    let finishPlay!: () => void;
+    const delayedPlay = new Promise<void>(resolve => { finishPlay = resolve; });
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => delayedPlay);
+    session.playbackState = "none";
+    session.metadata = new MediaMetadata({ title: "Other app" });
+    act(() => { actions.get("play")?.(); });
+    await flush();
+    expect(session.playbackState).toBe("playing");
+    expect(session.metadata?.title).toBe("Title a");
+    expect(view.container.querySelectorAll("audio")).toHaveLength(2);
+    fireEvent.waiting(audio);
+    act(() => { actions.get("pause")?.(); });
+    expect(session.playbackState).toBe("paused");
+    await act(async () => { finishPlay(); });
+    expect(session.playbackState).toBe("paused");
+    expect(session.metadata?.title).toBe("Title a");
+  });
+
+  it("retains Play intent and retries a transient API outage without an immediate false Pause", async () => {
+    fakeMediaSession();
+    const expired = { ...song("offline"), streamUrl: "/drive/stream/offline?expires=1" };
+    const refresh = vi.fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce({ ...expired, streamUrl: `/drive/stream/offline?expires=${Math.floor(Date.now() / 1000) + 3600}` });
+    const view = render(<Player {...props(expired, 0)} onRefreshStreamUrl={refresh} />);
+    const audio = view.container.querySelector("audio")!;
+    setMediaReadyState(audio, HTMLMediaElement.HAVE_NOTHING);
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(view.getByRole("button", { name: "Play" }));
+      await flush();
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(view.getByRole("button", { name: "Pause" })).toBeTruthy();
+      expect(view.getByRole("alert").textContent).toContain("Retrying playback");
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      await flush();
+      expect(refresh).toHaveBeenCalledTimes(2);
+      expect(view.getByRole("button", { name: "Pause" })).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels network recovery when Pause is pressed; no stale retry can restart music", async () => {
+    const { session } = fakeMediaSession();
+    const expired = { ...song("offline"), streamUrl: "/drive/stream/offline?expires=1" };
+    const refresh = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    const view = render(<Player {...props(expired, 0)} onRefreshStreamUrl={refresh} />);
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(view.getByRole("button", { name: "Play" }));
+      await flush();
+      expect(refresh).toHaveBeenCalledTimes(1);
+      fireEvent.click(view.getByRole("button", { name: "Pause" }));
+      expect(session.playbackState).toBe("paused");
+      await act(async () => { await vi.advanceTimersByTimeAsync(25000); });
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(view.getByRole("button", { name: "Play" })).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

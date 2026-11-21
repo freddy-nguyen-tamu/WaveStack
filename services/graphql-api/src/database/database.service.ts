@@ -128,19 +128,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       ON app_user_playlist_songs (song_id)
     `);
 
-    // Backfill once from the newest retained membership for legacy playlists.
-    // Future removals do not erase the stored last-addition timestamp.
-    await this.pool.query(`
-      UPDATE app_user_playlists p
-      SET last_song_added_at = latest.added_at
-      FROM (
-        SELECT playlist_id, MAX(added_at) AS added_at
-        FROM app_user_playlist_songs
-        GROUP BY playlist_id
-      ) latest
-      WHERE p.id = latest.playlist_id
-        AND p.last_song_added_at IS NULL
-    `);
+    // Do not backfill every playlist on every API process startup. The playlist
+    // query already uses MAX(added_at) for legacy rows. Persist that value only
+    // when a legacy playlist is about to lose a membership (see PlaylistsService).
+    // A global UPDATE here previously held startup and locks behind an
+    // unnecessary data migration, taking the entire streaming API offline.
   }
 
   async onModuleDestroy(): Promise<void> {

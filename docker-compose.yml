@@ -12,6 +12,9 @@ services:
       - graphql-api
 
   graphql-api:
+    # Keep the public streaming/API upstream available after transient crashes.
+    # Docker volumes and database data remain untouched.
+    restart: unless-stopped
     build:
       context: ./services/graphql-api
     ports:

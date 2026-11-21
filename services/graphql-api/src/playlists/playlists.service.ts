@@ -231,6 +231,28 @@ export class PlaylistsService {
   }
 
   async removeSongFromPlaylist(userId: string, playlistId: string, songId: string): Promise<UserPlaylist[]> {
+    // Preserve the actual last-addition time for older playlists that predate
+    // the new column. Do this only for the affected playlist, while its song
+    // still exists, rather than scanning/updating every account during startup.
+    // Already-migrated playlists retain their original timestamp on removal.
+    await this.database.query(
+      `UPDATE app_user_playlists p
+       SET last_song_added_at = (
+         SELECT MAX(ps.added_at)
+         FROM app_user_playlist_songs ps
+         WHERE ps.playlist_id = p.id
+           AND ps.song_id <> '${PLACEHOLDER_SONG_ID}'
+       )
+       WHERE p.id = $1
+         AND p.user_id = $2
+         AND p.last_song_added_at IS NULL
+         AND EXISTS (
+           SELECT 1 FROM app_user_playlist_songs ps
+           WHERE ps.playlist_id = p.id AND ps.song_id = $3
+         )`,
+      [playlistId, userId, songId]
+    );
+
     await this.database.query(
       `DELETE FROM app_user_playlist_songs
        WHERE playlist_id = $1

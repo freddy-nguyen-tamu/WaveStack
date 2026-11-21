@@ -25,7 +25,7 @@ export class UserPlaylist {
   @Field()
   updatedAt!: string;
 
-  @Field({ nullable: true })
+  @Field(() => String, { nullable: true })
   lastSongAddedAt!: string | null;
 }
 
