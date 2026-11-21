@@ -126,6 +126,40 @@ def _shutdown_choice(args, *, platform=None, interactive=None, prompt=None):
 
 
 
+def _initial_github_check_choice(args, *, interactive=None, prompt=None):
+    """Ask once about optional *full* startup checks for this interactive run.
+
+    A no skips slow test suites and historical GitHub reconciliation, but the
+    release/manifest compatibility contract is ALWAYS verified. New uploads
+    retain their mandatory remote verification and safe local cleanup gates.
+    """
+    args = list(args)
+    if '--skip-initial-github-check' in args:
+        # Explicit flag only skips remote reconciliation, not local tests.
+        print('Initial full GitHub archive check skipped (explicit command-line choice).', flush=True)
+        return args, True
+    # The normal no-arg invocation is effectively --resume.
+    if not args:
+        args = ['--resume']
+    if not ({'--archive', '--resume'} & set(args)):
+        return args, True
+    interactive = sys.stdin.isatty() if interactive is None else interactive
+    if not interactive:
+        return args, True  # Unattended mode retains all checks.
+    prompt = input if prompt is None else prompt
+    try:
+        answer = prompt('Run full startup checks (regression tests + GitHub history audit)? [Y/n]: ').strip().lower()
+    except EOFError:
+        answer = ''
+    if answer in ('n', 'no'):
+        args.append('--skip-initial-github-check')
+        print('Skipping optional regression suites and old GitHub manifest scan for THIS run. '
+              'Required compatibility checks and new-upload verification remain enforced.', flush=True)
+        return args, False
+    print('Full startup checks enabled.', flush=True)
+    return args, True
+
+
 # Fail-closed, always-on safety gate for automatic Comic Bridge runs.
 # Keep this in run.py: a partial ZIP must not silently skip regression tests.
 # Tests are local and simulated; they never download, publish, or shut down Windows.
@@ -138,6 +172,8 @@ _PREFLIGHT_PYTHON = (
     ('test_image_checkpoint_resume.py', 8),
     ('test_site_separation.py', 3),
     ('test_github_fast_verification.py', 5),
+    ('test_challenge_passive_resume.py', 6),
+    ('test_startup_compatibility_and_check_choice.py', 5),
 )
 _PREFLIGHT_JAVASCRIPT = (
     'extension_persistent_autoconnect.js',
@@ -148,7 +184,7 @@ _PREFLIGHT_JAVASCRIPT = (
 )
 
 
-def _run_preflight() -> None:
+def _run_preflight(*, run_tests=True) -> None:
     """Check release compatibility and run every required regression before work."""
     def fail(problem: str) -> None:
         print('\nPREFLIGHT FAILED: ' + problem, file=sys.stderr, flush=True)
@@ -163,7 +199,11 @@ def _run_preflight() -> None:
     try:
         from site_specific import site_adapter
         from reusable.bridge_manifest import generate_installed_manifests
-        generated = generate_installed_manifests(ROOT, site_adapter)
+        # Use the same port-bearing API that source_extension_context() uses;
+        # a portless preflight previously missed incompatible installed files.
+        from reusable.browser_bridge import BRIDGE_PORT
+        port = int(os.environ.get('COMIC_ARCHIVER_BRIDGE_PORT') or BRIDGE_PORT)
+        generated = generate_installed_manifests(ROOT, site_adapter, port=port)
         if generated:
             print('  Regenerated site-specific manifests: ' + ', '.join(generated) +
                   ' (reload this unpacked extension in Chrome/Firefox)', flush=True)
@@ -225,7 +265,7 @@ def _run_preflight() -> None:
             manifest_installed = json.loads((installed / 'manifest.json').read_text(encoding='utf-8'))
             if manifest_source['version'] != version or manifest_installed['version'] != version:
                 fail(f'{browser} extension manifest/version mismatch')
-            if 'http://127.0.0.1:18765/*' not in (manifest_installed.get('host_permissions', [])
+            if f'http://127.0.0.1:{port}/*' not in (manifest_installed.get('host_permissions', [])
                                                     + manifest_installed.get('permissions', [])):
                 fail(f'{browser} extension missing loopback host permission')
             if browser == 'chrome' and 'debugger' not in manifest_installed.get('permissions', []):
@@ -238,6 +278,10 @@ def _run_preflight() -> None:
         print('  PASS release contracts and generated extension parity', flush=True)
     except (OSError, ValueError, KeyError, SyntaxError) as exc:
         fail('missing, broken, or incompatible source file: ' + str(exc))
+
+    if not run_tests:
+        print('PREFLIGHT COMPATIBILITY PASSED: optional regression suites skipped by user.\n', flush=True)
+        return
 
     node = shutil.which('node')
     if node is None:
@@ -284,9 +328,13 @@ def _run_preflight() -> None:
 def main() -> None:
     os.chdir(ROOT)
     _relaunch_project_venv()
-    # Mandatory before any setup, authorization prompts, source requests or
-    # publication. No flag bypasses this gate. --self-test-only runs it alone.
-    _run_preflight()
+    # Always run quick, fail-closed release/manifest contract checks. The
+    # expensive local suites and old GitHub audit may be explicitly skipped
+    # for this interactive run; --self-test-only ALWAYS runs all tests.
+    self_test_only = '--self-test-only' in sys.argv[1:]
+    chosen, run_full_tests = (list(sys.argv[1:]), True) if self_test_only else (
+        _initial_github_check_choice(sys.argv[1:]))
+    _run_preflight(run_tests=run_full_tests)
     if '--self-test-only' in sys.argv[1:]:
         if len(sys.argv) != 2:
             raise SystemExit('--self-test-only cannot be combined with other arguments')
@@ -302,6 +350,8 @@ def main() -> None:
     if not args:
         _preferences()
         args = ['--resume', '--authorized']
+    if '--skip-initial-github-check' in chosen and '--skip-initial-github-check' not in args:
+        args.append('--skip-initial-github-check')
     # Also cover explicit `python run.py --deploy --authorized`: the old code
     # silently skipped the shutdown question whenever command-line args existed.
     args = _shutdown_choice(args)

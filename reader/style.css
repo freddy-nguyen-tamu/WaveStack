@@ -25,3 +25,5 @@
 .panel-chapter:hover,.panel-chapter:focus-visible{background:#292929;color:#fff}
 .panel-chapter.active{background:#303030;color:#fff;border-left:3px solid #ddd;padding-left:8px}
 @media(prefers-reduced-motion:reduce){#reader-panel{scroll-behavior:auto}}
+
+.panel-library{flex:none;color:#b8bac4;text-decoration:none;font-weight:500;font-size:13px}.panel-library:hover,.panel-library:focus-visible{color:#fff;text-decoration:underline}

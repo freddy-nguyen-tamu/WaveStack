@@ -9,8 +9,8 @@
   "content_scripts": [
     {
       "matches": [
-        "https://www.webtoons.com/*",
-        "https://m.webtoons.com/*"
+        "https://www.toongod.org/webtoon/annoying-alice/*",
+        "https://toongod.org/webtoon/annoying-alice/*"
       ],
       "js": [
         "content.js"

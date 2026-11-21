@@ -81,7 +81,8 @@ class ResumeInventoryTests(unittest.TestCase):
                 self.assertEqual(result['recovered'],2)
                 self.assertTrue(engine.archive_is_complete(db))
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM chapters WHERE status='ARCHIVED_PENDING_DEPLOYMENT'").fetchone()[0],2)
-                with patch('playwright.sync_api.sync_playwright',side_effect=AssertionError('browser must stay closed')):
+                with patch('playwright.sync_api.sync_playwright',side_effect=AssertionError('browser must stay closed')), \
+                     patch.object(archive_inventory, 'remote_tip', return_value='ab'*20):
                     engine.archive_run(db,None,None,1000,True)
             db.close()
 
@@ -179,6 +180,7 @@ class ResumeInventoryTests(unittest.TestCase):
                 seen.append(ch.chapter_id)
                 raise RuntimeError('missing chapter was selected without discovery')
             with patch.object(engine,'reconcile_github_archive',return_value={}), \
+                 patch.object(engine,'credential_for_selected',return_value=('owner','test-token')), \
                  patch('playwright.sync_api.sync_playwright',return_value=CM()), \
                  patch.object(engine,'open_source_context',return_value=fake_ctx), \
                  patch.object(engine,'discover_from_live',side_effect=AssertionError('no rediscovery')), \

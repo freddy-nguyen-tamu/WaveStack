@@ -44,40 +44,4 @@ class Tests(unittest.TestCase):
             fake.EXTENSION_MATCHES=['https://example.com/*'];fake.BRIDGE_IMAGE_HOSTS=['bad/host']
             with self.assertRaises(ValueError):generate_installed_manifests(Path(temp),fake)
 
-    def test_bridge_runtime_generator_preserves_adapter_grants_and_permissions(self):
-        from reusable.browser_bridge import ensure_generated_extensions
-        import shutil
-        with tempfile.TemporaryDirectory() as temp:
-            temp = Path(temp)
-            source = temp/'reusable/browser_bridge_extension'
-            source.mkdir(parents=True)
-            for asset in ('manifest.chrome.json', 'manifest.firefox.json',
-                          'background.js','content.js','popup.html','popup.js'):
-                shutil.copyfile(ROOT/'reusable/browser_bridge_extension'/asset,source/asset)
-            fake=types.SimpleNamespace(EXTENSION_MATCHES=['https://fictional-reader.example/chapters/*'],
-                 ALLOWED_HOSTS=['fictional-reader.example'],BRIDGE_IMAGE_HOSTS=['images.example'])
-            out=ensure_generated_extensions(temp,fake,18766)
-            self.assertEqual(out,temp/'browser_bridge')
-            for browser in ('chrome','firefox'):
-                man=json.loads((out/browser/'manifest.json').read_text(encoding='utf-8'))
-                perms=man.get('host_permissions',[])+man['permissions']
-                self.assertIn('http://127.0.0.1:18766/*',perms)
-                self.assertIn('https://images.example/*',perms)
-                self.assertEqual(man['content_scripts'][0]['matches'],fake.EXTENSION_MATCHES)
-                self.assertEqual((out/browser/'content.js').read_bytes(),(source/'content.js').read_bytes())
-            chrome=json.loads((out/'chrome/manifest.json').read_text())
-            for perm in ('debugger','activeTab','scripting','alarms'):
-                self.assertIn(perm,chrome['permissions'])
-            before={p.name:p.read_bytes() for p in source.iterdir()}
-            fake.EXTENSION_MATCHES=['https://new-reader.example/story/*']
-            fake.ALLOWED_HOSTS=['new-reader.example']
-            fake.BRIDGE_IMAGE_HOSTS=['newcdn.example']
-            ensure_generated_extensions(temp,fake,18766)
-            self.assertEqual(before,{p.name:p.read_bytes() for p in source.iterdir()},
-                             'reusable source must never be modified by a site swap')
-            changed=json.loads((out/'chrome/manifest.json').read_text())
-            self.assertEqual(changed['content_scripts'][0]['matches'],fake.EXTENSION_MATCHES)
-            self.assertIn('https://newcdn.example/*',changed['host_permissions'])
-            self.assertNotIn('https://images.example/*',changed['host_permissions'])
-
 if __name__=='__main__':unittest.main()

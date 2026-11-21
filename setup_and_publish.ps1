@@ -126,8 +126,9 @@ Write-Host 'All system prerequisites are now available. Continuing with librarie
 if (-not (Test-Path '.venv/Scripts/python.exe')) { & python -m venv .venv; if ($LASTEXITCODE -ne 0) { throw 'Python virtual environment creation failed' } }
 & .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 if ($LASTEXITCODE -ne 0) { throw 'Python dependencies failed to install' }
-& .\.venv\Scripts\python.exe -m playwright install firefox
-if ($LASTEXITCODE -ne 0) { throw 'Playwright Firefox installation failed' }
+# Default source driver uses the computer's INSTALLED Mozilla Firefox.
+# Do not download Playwright's patched Firefox (or alter personal profiles).
+# Selenium Manager automatically provisions GeckoDriver on first native launch.
 if (-not (Test-Path 'node_modules/.bin/wrangler.cmd')) {
   & npm.cmd install --no-audit --no-fund
   if ($LASTEXITCODE -ne 0) { throw 'Wrangler installation failed' }

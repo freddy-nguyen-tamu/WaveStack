@@ -53,6 +53,19 @@ class LazyScrollTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'placeholder'):
                 app.scan_browser_images(p, max_steps=9, stability=2)
 
+    def test_visible_browser_images_required_before_completion(self):
+        class UnloadedReader(MockReader):
+            def evaluate(self, script):
+                result = super().evaluate(script)
+                if isinstance(result, dict):
+                    result['unloadedSlots'] = 1
+                return result
+        p = UnloadedReader()
+        with patch.object(app, 'classify_browser_page', return_value=None), patch.object(app, 'event'):
+            with self.assertRaisesRegex(RuntimeError, 'not visibly loaded'):
+                app.scan_browser_images(p, max_steps=50, stability=2)
+        self.assertTrue(p.scrolls >= 2)
+
     def test_recycled_ordinal_is_rejected(self):
         p = MockReader(change_ordinal=True)
         with patch.object(app, 'classify_browser_page', return_value=None), patch.object(app, 'event'):

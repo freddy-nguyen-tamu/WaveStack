@@ -30,25 +30,117 @@ class SourceManualActionRequired(SourceAccessPaused):
     """A headless source session must be reopened visibly for human action."""
 
 
+CHALLENGE_OBSERVATION_SECONDS = 20.0
+
+
+def _operator_requested_stop():
+    """Nonblocking console check: Q is optional; Ctrl+C always works.
+
+    Never call input() while a challenge might clear on its own. This reads
+    only the local terminal, not the website or browser.
+    """
+    if not sys.stdin.isatty():
+        return False
+    if os.name == 'nt':
+        try:
+            import msvcrt
+            while msvcrt.kbhit():
+                if msvcrt.getwch().lower() == 'q':
+                    return True
+        except (ImportError, OSError):
+            pass
+    else:
+        try:
+            import select
+            if select.select([sys.stdin], [], [], 0)[0]:
+                return sys.stdin.readline().strip().lower() in ('q', 'quit', 'stop', 'exit')
+        except (OSError, ValueError):
+            pass
+    return False
+
+
+def _passive_reader_ready(page, requested_url):
+    """One read-only observation of the existing document, NEVER navigation.
+
+    Calling content() also updates the cached URL of the extension's BridgePage
+    after a browser-initiated redirect. Neither content(), classify, nor
+    reader_ready() requests the source website or changes its scroll position.
+    """
+    page.content()
+    requested = urlsplit(requested_url)
+    landed = urlsplit(getattr(page, 'url', '') or '')
+    if (landed.scheme not in ('http', 'https') or
+            requested.hostname != landed.hostname or
+            requested.path.rstrip('/') != landed.path.rstrip('/')):
+        return False, 'browser is not showing the requested chapter'
+    state = classify_browser_page(page)
+    if state is not None:
+        return False, f'page still reports {state}'
+    checker = getattr(page, 'reader_ready', None)
+    if callable(checker):
+        return (True, 'reader DOM is ready') if checker() else (False, 'reader is not ready')
+    # Other Playwright page implementations lack reader_ready(). Inspect
+    # document structure and decoded content without clicking or scrolling.
+    ready = page.evaluate(r"""() => {
+      const root=document.querySelector('main,article,[role="main"]');
+      if(!root) return false;
+      return [...root.querySelectorAll('img')].some(im =>
+        im.complete && im.naturalWidth>0 && im.naturalHeight>0);
+    }""")
+    return (True, 'reader content is present') if ready else (False, 'reader image not decoded')
+
+
 def wait_for_manual_source_access(page, url, guard, *, visible=True, reason='human verification'):
-    """Historical release: a blocking human prompt (known previous behavior)."""
+    """Wait, then passively inspect the already-open browser every 20 seconds.
+
+    During each whole sleep interval Python performs NO browser RPC, page
+    navigation, scroll, fetch, or image capture. The next single observation
+    reads the current DOM; it cannot reset an automatically clearing challenge.
+    Actual 429/Retry-After and denied network requests are never retried here.
+    """
     host = safe_host(url)
     if not visible:
         guard.emit('SOURCE_VISIBLE_BROWSER_REQUIRED', host=host, reason=reason)
-        raise SourceManualActionRequired(f'{host} requires manual interaction ({reason})')
+        raise SourceManualActionRequired(
+            f'{host} requires manual interaction ({reason}); reopen the saved profile visibly')
     guard.emit('SOURCE_HUMAN_INTERVENTION_REQUIRED', host=host, reason=reason)
-    print('\n'+'='*70, flush=True)
+    print('\n' + '=' * 70, flush=True)
     print('SOURCE WEBSITE NEEDS YOUR ATTENTION:', host, flush=True)
     print('Reason:', reason, flush=True)
-    print('Complete any normal sign-in or human-verification check yourself', flush=True)
-    print('in the OPEN Firefox/Chromium window. The archiver will wait here.', flush=True)
-    print('Do not close the browser. If the site denies normal access, type Q.', flush=True)
-    print('='*70, flush=True)
-    reply = input('When the chapter is accessible, press ENTER (or Q to stop): ').strip().lower()
-    if reply == 'q':
-        raise SourceAccessPaused('Operator stopped challenge wait; checkpoint preserved')
-    from types import SimpleNamespace
-    return SimpleNamespace(url=page.url, status=200, headers={})
+    print('Browser left completely alone for 20 seconds at a time.', flush=True)
+    print('The archiver checks ONLY the existing tab DOM between pauses.', flush=True)
+    print('It resumes automatically when the requested chapter is ready.', flush=True)
+    print('If manual verification is required, complete it normally in the tab.', flush=True)
+    print('Press Q to stop at the next check, or Ctrl+C immediately.', flush=True)
+    print('=' * 70, flush=True)
+    check = 0
+    while True:
+        try:
+            # No periodic callback, browser manipulation, or source requests.
+            time.sleep(CHALLENGE_OBSERVATION_SECONDS)
+        except KeyboardInterrupt as exc:
+            raise SourceAccessPaused('Challenge wait stopped; checkpoint preserved') from exc
+        if _operator_requested_stop():
+            raise SourceAccessPaused('Operator stopped challenge wait; checkpoint preserved')
+        check += 1
+        try:
+            ready, detail = _passive_reader_ready(page, url)
+        except Exception as exc:
+            # A transient browser navigation can invalidate the old document.
+            # Do NOT navigate again or turn it into a source traffic loop.
+            ready, detail = False, f'page observation unavailable: {type(exc).__name__}'
+        if ready:
+            guard.emit('SOURCE_PASSIVE_CHALLENGE_CLEARED', host=host,
+                       checks=check, verification='existing-tab-reader-dom')
+            print(f'Chapter ready after {check} passive check(s). Continuing without reloading.',
+                  flush=True)
+            # This represents confirmed in-tab document readiness, NOT a new
+            # HTTP response. The original 200 challenge response is obsolete.
+            from types import SimpleNamespace
+            return SimpleNamespace(url=page.url, status=200, headers={})
+        guard.emit('SOURCE_PASSIVE_CHALLENGE_PENDING', host=host,
+                   checks=check, reason=detail)
+        print(f'Passive check {check}: {detail}; sleeping another 20 seconds.', flush=True)
 
 
 def safe_host(url: str) -> str:

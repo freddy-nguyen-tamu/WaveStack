@@ -7,8 +7,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import queue
+import re
 import subprocess
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 from .progress import Progress, stop_progress
@@ -18,51 +23,174 @@ class ArchiveInventoryError(RuntimeError):
     pass
 
 
+# Git normally suppresses transfer statistics when stderr is a pipe. Explicit
+# --progress is necessary for a useful Windows CMD progress display.
+_PROGRESS_LINE = re.compile(
+    r"(?:remote:\s*)?(Enumerating objects|Counting objects|Compressing objects|"
+    r"Receiving objects|Resolving deltas|Updating files|Finding sources|Checking objects)"
+    r":\s*(?:(\d{1,3})%\s*\(\s*([\d,]+)/([\d,]+)\s*\))?",
+    re.I,
+)
+_TRANSFER_RATE = re.compile(
+    r"([\d.]+\s*[KMGT]?i?B)\s*\|\s*([\d.]+\s*[KMGT]?i?B/s)", re.I
+)
+
+
 def _git(work: Path, env: dict, *args: str, binary: bool = False,
          progress_label: str | None = None) -> bytes | str:
-    if progress_label:
-        proc = subprocess.Popen(['git', *args], cwd=work, env=env,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        progress = Progress(progress_label, interval=3.0)
-        try:
-            while True:
-                try:
-                    stdout, stderr = proc.communicate(timeout=3)
-                    break
-                except subprocess.TimeoutExpired:
-                    progress.heartbeat(force=True)
-            for stream in (proc.stdout, proc.stderr):
-                if stream:
-                    stream.close()
-            result = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
-            if result.returncode == 0:
-                progress.complete('Git operation complete')
-            else:
-                stop_progress(progress, f'FAILED ({result.returncode})')
-            proc = result
-        except BaseException:
-            if proc.poll() is None:
-                proc.terminate()
-            stop_progress(progress, 'INTERRUPTED')
-            raise
-        finally:
-            for stream in (proc.stdout, proc.stderr):
-                if stream and hasattr(stream, 'close'):
-                    stream.close()
-    else:
+    if not progress_label:
         proc = subprocess.run(['git', *args], cwd=work, env=env,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    else:
+        command = ['git', *args]
+        if args and args[0] == 'fetch' and '--progress' not in args:
+            # Git doesn't show transfer progress through a pipe by default.
+            command.insert(2, '--progress')
+        child_env = dict(env)
+        child_env.setdefault('GIT_PROGRESS_DELAY', '0')
+        proc = _git_with_live_progress(command, work, child_env, progress_label)
     if proc.returncode:
-        reason = proc.stderr.decode("utf-8", "replace")[-1200:]
+        reason = proc.stderr.decode('utf-8', 'replace')[-1200:]
         raise ArchiveInventoryError(f"Git archive inspection failed ({args[0]}): {reason}")
-    return proc.stdout if binary else proc.stdout.decode("utf-8", "replace").strip()
+    return proc.stdout if binary else proc.stdout.decode('utf-8', 'replace').strip()
 
+
+def _git_with_live_progress(command: list[str], work: Path, env: dict,
+                            label: str) -> subprocess.CompletedProcess:
+    """Display Git's *real* object/byte progress while draining both pipes.
+
+    Reading Popen.communicate only after completion hides all progress for long
+    filtered fetches. Separate pipe-draining threads work on Windows as well as
+    POSIX and prevent stdout/stderr pipe deadlocks. The display is deliberately
+    limited to Git's recognized progress events (not remote URLs or secrets).
+    """
+    proc = subprocess.Popen(command, cwd=work, env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            bufsize=0)
+    display = Progress(label, interval=3.0)
+    chunks = {'out': bytearray(), 'err': bytearray()}
+    updates = queue.Queue()
+
+    def consume(pipe, channel):
+        try:
+            pending = bytearray()
+            # read(1) is deliberate: Windows buffered pipe.read(4096) can wait
+            # for a full block, while Git emits short carriage-return updates.
+            while True:
+                raw = pipe.read(1)
+                if not raw:
+                    break
+                chunks[channel].extend(raw)
+                if channel == 'err':
+                    if raw in (b'\r', b'\n'):
+                        if pending:
+                            updates.put(('line', bytes(pending).decode('utf-8', 'replace')))
+                            pending.clear()
+                    elif len(pending) < 8192:
+                        pending.extend(raw)
+            if pending:
+                updates.put(('line', bytes(pending).decode('utf-8', 'replace')))
+        finally:
+            pipe.close()
+            updates.put(('end', channel))
+
+    threads = [threading.Thread(target=consume, args=(proc.stdout, 'out'), daemon=True),
+               threading.Thread(target=consume, args=(proc.stderr, 'err'), daemon=True)]
+    for thread in threads:
+        thread.start()
+
+    last_activity = time.monotonic()
+    stages = {}
+    current_stage = ''
+    latest_detail = f'Git PID {proc.pid}; awaiting transfer reports'
+    ended = set()
+    # An unresponsive Git connection should not keep an unattended archive
+    # running forever. Override with COMIC_GIT_METADATA_IDLE_SECONDS if needed.
+    try:
+        max_idle = max(60, int(env.get('COMIC_GIT_METADATA_IDLE_SECONDS', '480')))
+    except (ValueError, TypeError):
+        max_idle = 480
+    try:
+        while len(ended) < 2:
+            try:
+                kind, item = updates.get(timeout=3)
+            except queue.Empty:
+                kind, item = '', None
+            now = time.monotonic()
+            if kind == 'end':
+                ended.add(item)
+            elif kind == 'line':
+                line = item.strip()
+                if line:
+                    last_activity = now
+                    match = _PROGRESS_LINE.search(line)
+                    if match:
+                        stage = match.group(1)
+                        if stage != current_stage:
+                            current_stage = stage
+                            display.label = f'{label} — {stage}'
+                            display.total = None
+                            display.current = 0
+                            display.last_percent = -1
+                        if match.group(2) and match.group(4):
+                            completed = int(match.group(3).replace(',', ''))
+                            total = int(match.group(4).replace(',', ''))
+                            if total > 0:
+                                display.total = total
+                                display.unit = 'objects'
+                                detail = _TRANSFER_RATE.search(line)
+                                latest_detail = (f'{detail.group(1)} at {detail.group(2)}' if detail
+                                                 else f'Git PID {proc.pid}; transfer active')
+                                display.update(completed, latest_detail)
+                                stages[stage] = (completed, total)
+                        else:
+                            latest_detail = f'Git PID {proc.pid}; {stage.lower()}'
+                    else:
+                        # Don't print arbitrary stderr (which can include URLs,
+                        # headers or token-bearing error messages) to the UI.
+                        latest_detail = f'Git PID {proc.pid}; transport responded'
+            if not kind:
+                silent = int(now - last_activity)
+                if silent >= 30:
+                    detail = (f'no Git transfer reports for {silent}s; '
+                              f'Git PID {proc.pid}; check network/login')
+                else:
+                    detail = latest_detail
+                display.heartbeat(force=True, detail=detail)
+                if silent >= max_idle and proc.poll() is None:
+                    proc.terminate()
+                    raise ArchiveInventoryError(
+                        f'Git metadata fetch made no observable progress for {silent}s. '
+                        'Existing GitHub archives are unchanged. Check internet/GCM login '
+                        'and rerun; set COMIC_GIT_METADATA_IDLE_SECONDS to adjust the limit.')
+        proc.wait()
+        for thread in threads:
+            thread.join(timeout=3)
+        if proc.returncode == 0:
+            display.complete('Git metadata fetched successfully')
+        else:
+            stop_progress(display, f'Git fetch failed (exit {proc.returncode})')
+        return subprocess.CompletedProcess(command, proc.returncode,
+                                           bytes(chunks['out']), bytes(chunks['err']))
+    except BaseException:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        for thread in threads:
+            thread.join(timeout=3)
+        stop_progress(display, 'INTERRUPTED')
+        raise
 
 def remote_tip(owner: str, repo: str, env: dict) -> str:
     """Cheap existence/branch check; does not download comic image contents."""
     with tempfile.TemporaryDirectory(prefix="comic-inventory-tip-") as tmp:
         work = Path(tmp)
-        out = _git(work, env, "ls-remote", f"https://github.com/{owner}/{repo}.git", "refs/heads/main")
+        out = _git(work, env, "ls-remote", f"https://github.com/{owner}/{repo}.git", "refs/heads/main",
+                   progress_label=f'GitHub checking remote commit: {repo}')
         if not out:
             raise ArchiveInventoryError(f"The expected GitHub repo {owner}/{repo} has no main branch")
         return out.split()[0]

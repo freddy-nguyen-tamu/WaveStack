@@ -1,3 +1,15 @@
+<!-- VERIFIED_COMIC_READER_URLS_START -->
+## Verified deployed reader
+
+**[The Stories of Those Around Me — open reader](https://the-stories-of-those-around-me-reader.pages.dev)**
+
+GitHub reader repository: source code, chapter index and homepage README.
+- [Reader source repository](https://github.com/avchatbot1-commits/the-stories-of-those-around-me-reader)
+- [Image archive `the-stories-of-those-around-me-vol-001`](https://github.com/avchatbot1-commits/the-stories-of-those-around-me-vol-001) — assets at https://the-stories-of-those-around-me-vol-001.pages.dev; this is not a separate reader homepage
+
+This section is updated only after a verified Cloudflare deployment.
+<!-- VERIFIED_COMIC_READER_URLS_END -->
+
 # Quick start — `python run.py`
 
 Run from the **project root directory** after extraction:
@@ -468,3 +480,8 @@ If desired, run `python run.py --deploy --authorized` to retry publication
 metadata without the full archive preflight. The regular command remains
 `python run.py`. All website-specific extraction remains in the ONE editable
 `site_specific/site_adapter.py`; this fix is reusable infrastructure only.
+
+<!-- shared-open-reader-url -->
+
+Shared Cloudflare Worker library: https://open-reader.av-chatbot1.workers.dev/
+<!-- /shared-open-reader-url -->

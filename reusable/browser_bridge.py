@@ -367,7 +367,43 @@ class BridgePage:
     def content(self):
         data = self.context.bridge.rpc('page', timeout=90)
         self.url = data.get('url', self.url)
+        self._last_html = data['html']
         return data['html']
+
+    def reader_ready(self):
+        """Read-only proof that the active tab contains a decoded reader image.
+
+        Site selectors/hosts are injected from the single site adapter. No
+        navigation, image request, forced loading, or scroll occurs here.
+        """
+        from urllib.parse import urljoin
+        from bs4 import BeautifulSoup
+        if self.context.reader_selectors:
+            # content() has just refreshed this snapshot in the passive loop.
+            current_html = getattr(self, '_last_html', '')
+            if not current_html:
+                return False
+            try:
+                soup = BeautifulSoup(current_html, 'html.parser')
+                if not any(soup.select_one(selector) is not None
+                           for selector in self.context.reader_selectors):
+                    return False
+            except Exception:
+                return False
+        data = self.context.bridge.rpc('snapshot', {
+            'reader_selectors': self.context.reader_selectors,
+            'image_attributes': self.context.image_attributes,
+        }, timeout=30)
+        for im in data.get('imgs') or []:
+            if not (im.get('loaded') and int(im.get('width') or 0) > 0 and
+                    int(im.get('height') or 0) > 0 and im.get('url')):
+                continue
+            try:
+                self.context.bridge.validate_image(urljoin(self.url, im['url']))
+                return True
+            except BrowserBridgeError:
+                continue
+        return False
 
     def evaluate(self, script):
         # Intentional: never eval untrusted dynamic JavaScript in a browser

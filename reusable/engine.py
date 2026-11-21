@@ -1538,6 +1538,9 @@ def _archive_run_once(db, source_html: Path | None, source_url: str | None, max_
     # First consult GitHub, without starting Firefox or contacting the source.
     if not skip_remote_reconcile:
         reconcile_github_archive(db)
+    else:
+        event('GITHUB_INITIAL_RECONCILIATION_SKIPPED',
+              note='Trusted previously verified local archive state this run; all newly uploaded chapters still verified remotely')
     if archive_is_complete(db) and not force_rediscover:
         event("ARCHIVE_REUSED_WITHOUT_SOURCE_BROWSER", chapters=db.execute("SELECT COUNT(*) FROM chapters").fetchone()[0],
               action="CLOUDFLARE_ONLY", source_traversal=0, lazy_scrolls=0, source_downloads=0)
@@ -1663,7 +1666,8 @@ def _archive_run_once(db, source_html: Path | None, source_url: str | None, max_
 
 
 def archive_run(db, source_html: Path | None, source_url: str | None, max_chapters, authorized,
-                *, source_headless=None, source_browser="firefox", force_rediscover=False):
+                *, source_headless=None, source_browser="firefox", force_rediscover=False,
+                skip_initial_github_check=False):
     """Resume archive and reopen visibly if a headless page needs a human.
 
     A visible retry is attempted at most once. The source profile and saved
@@ -1673,7 +1677,8 @@ def archive_run(db, source_html: Path | None, source_url: str | None, max_chapte
         return _archive_run_once(db, source_html, source_url, max_chapters, authorized,
                                  source_headless=source_headless,
                                  source_browser=source_browser,
-                                 force_rediscover=force_rediscover)
+                                 force_rediscover=force_rediscover,
+                                 skip_remote_reconcile=skip_initial_github_check)
     except SourceManualActionRequired as exc:
         if source_headless is False:
             raise
@@ -3074,6 +3079,8 @@ def build_parser():
                    help='Source transport selected by site adapter; extension uses your normal browser')
     a.add_argument('--default-source-url', action='store_true', help='Print initial URL from the ONE source adapter')
     a.add_argument('--archive-needed', action='store_true', help='Reconcile old/new remote GitHub archives, then print READY or NEEDS_ARCHIVE without visiting the source website')
+    a.add_argument('--skip-initial-github-check', action='store_true',
+                   help='Skip full remote reconciliation of previously archived chapters for this run only; new uploads still verified')
     a.add_argument('--refresh-extension', action='store_true', help='Regenerate site-scoped extension from site_specific/site_adapter.py')
     a.add_argument("--inspect", action="store_true", help="Only inspect source HTML; no account access or downloads")
     a.add_argument("--github-login", action="store_true")
@@ -3207,7 +3214,8 @@ def main():
             desired_headless = True if args.source_headless else False if args.source_visible else None
             archive_run(db, args.source_html, args.source_url, args.max_chapters, args.authorized,
                         source_headless=desired_headless, source_browser=args.source_browser,
-                        force_rediscover=args.refresh_chapters)
+                        force_rediscover=args.refresh_chapters,
+                        skip_initial_github_check=args.skip_initial_github_check)
         # Metadata is a separate completion axis from image archiving. The
         # source adapter may enrich chapter numbers with full native titles.
         # Check ALL archived chapters (including previously published ones),

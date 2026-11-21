@@ -3,7 +3,7 @@
   // Site scope is generated from the attached HTML. This extension never navigates
   // to extension-origin pages while reading and never intercepts wheel events.
   const KEY='cleanSourceComicReader.v3';
-  const readerSelectors=["#_imageList", ".viewer_img"];
+  const readerSelectors=[".reading-content", ".page-break"];
   const findReader=()=>readerSelectors.map(s=>document.querySelector(s)).find(el=>el && el.querySelectorAll('img,[data-page]').length);
   let root=findReader();
   if(!root)return;
@@ -37,7 +37,7 @@
     root=findReader()||root;
     const images=[...root.querySelectorAll('img')];
     for(const im of images){
-      const src=["data-url", "data-src", "data-original", "data-lazy-src", "src"].map(a=>im.getAttribute(a)).find(Boolean)||im.currentSrc;
+      const src=["data-src", "data-original", "data-lazy-src", "src"].map(a=>im.getAttribute(a)).find(Boolean)||im.currentSrc;
       if(!src||src.startsWith('data:'))continue;
       if(!loaded.has(im)){
         loaded.set(im,false);
@@ -61,9 +61,9 @@
   function links(){
     // Native reader navigation always has priority. No manufactured URLs if
     // native next/previous links are present.
-    const prev=[...document.querySelectorAll(["a._prevEpisode[href]", "a[title=\"Previous Episode\"][href]"].join(','))]
+    const prev=[...document.querySelectorAll(["a[data-comic-archive-discovery-prev][href]"].join(','))]
       .find(a=>a.href && !a.classList.contains('dim'));
-    const next=[...document.querySelectorAll(["a._nextEpisode[href]", "a[title=\"Next Episode\"][href]"].join(','))]
+    const next=[...document.querySelectorAll(["a[data-comic-archive-discovery-next][href]"].join(','))]
       .find(a=>a.href && !a.classList.contains('dim'));
     return {prev:prev?.href||null,next:next?.href||null};
   }
