@@ -1,0 +1,18 @@
+{
+  "github_repo_target_mib": 700,
+  "max_push_mib": 512,
+  "pushes_per_minute": 4,
+  "github_max_file_bytes": 100000000,
+  "cloudflare_file_target": 18000,
+  "cloudflare_max_file_bytes": 26214400,
+  "cloudflare_project_max_files": 20000,
+  "deploy_batch_chapters": 10,
+  "download_retries": 4,
+  "page_scan_steps": 1500,
+  "page_scan_stability_steps": 5,
+  "max_discovered_chapters": 1000,
+  "max_pages_per_chapter": 500,
+  "delay_between_chapters_seconds": 1.5,
+  "source_min_host_interval_seconds": 1.5,
+  "source_max_inline_wait_seconds": 25
+}

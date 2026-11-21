@@ -1,0 +1,7 @@
+{
+  "name": "universal-comic-archiver",
+  "private": true,
+  "version": "0.3.0",
+  "description": "Cloudflare Pages static deployment tooling",
+  "devDependencies": {"wrangler": "^4.0.0"}
+}

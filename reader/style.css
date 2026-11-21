@@ -1,0 +1,27 @@
+:root{color-scheme:dark;background:#090909}*{box-sizing:border-box}html{margin:0;padding:0;scroll-behavior:auto!important;scroll-snap-type:none!important}body{margin:0;padding:0;overflow-x:hidden;background:#090909}#pages{display:flex;flex-direction:column;align-items:center;min-height:100vh;width:100%;margin:0 auto;padding:0;gap:0}figure{width:min(100%,1100px);margin:0;padding:0;position:relative;display:block;line-height:0;overflow:hidden;flex-shrink:0}figure img{display:block;width:100%;height:auto;max-width:100%;margin:0 auto;border:0;vertical-align:top;object-fit:contain}figure.waiting::after{content:"";position:absolute;inset:0;background:transparent;pointer-events:none}img.zoom{width:auto;max-width:none;max-height:none}a{color:inherit}::selection{background:transparent}
+
+/* Right-side navigator is hidden by default; the reading surface remains pure images. */
+[hidden]{display:none!important}
+#panel-backdrop:not([hidden]){position:fixed;inset:0;z-index:900;background:rgba(0,0,0,.52)}
+#reader-panel:not([hidden]){position:fixed;z-index:901;inset:0 0 0 auto;width:min(390px,92vw);height:100dvh;display:flex;flex-direction:column;overflow:hidden;background:#151515;color:#eee;box-shadow:-12px 0 35px #000a;font:14px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;overscroll-behavior:contain}
+.panel-heading{display:flex;align-items:center;gap:12px;justify-content:space-between;padding:20px 17px 13px;border-bottom:1px solid #303030;font-weight:600;font-size:16px;min-height:62px}
+#panel-series{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#panel-close{border:0;background:transparent;color:#ccc;font-size:26px;cursor:pointer;width:34px;height:34px;line-height:1}
+#panel-close:hover,#panel-close:focus-visible{color:#fff}
+.panel-controls{padding:15px 17px;display:grid;gap:11px;border-bottom:1px solid #333}
+.panel-label{display:flex;justify-content:space-between;align-items:center;gap:10px}
+#panel-speed-text{font-variant-numeric:tabular-nums;color:#bcbcbc}
+#reader-panel input[type=range]{width:100%;accent-color:#ddd;cursor:pointer}
+.panel-setting-row{display:flex;align-items:center;justify-content:space-between;gap:14px}
+#panel-speed-number{width:90px}
+#reader-panel input[type=number],#reader-panel input[type=search]{font:inherit;color:#eee;background:#222;border:1px solid #454545;border-radius:6px;padding:9px 10px;outline-offset:2px}
+#reader-panel input[type=search]{width:100%}
+.panel-toggle{display:flex;align-items:center;gap:8px;white-space:nowrap;color:#ddd}
+.panel-toggle input{accent-color:#e5e5e5}
+#panel-chapter-count{padding:12px 17px;color:#aaa;font-size:12px;border-bottom:1px solid #2b2b2b}
+#panel-chapters{overflow-y:auto;overscroll-behavior:contain;flex:1;padding:8px 9px 24px;scrollbar-color:#666 #171717;scrollbar-width:thin}
+.panel-chapter{display:block;color:#ccc;text-decoration:none;margin:2px 0;border-radius:7px;padding:12px 11px;white-space:normal;overflow-wrap:anywhere;line-height:1.45}
+.panel-chapter small{display:block;color:#858585;font-size:11px;margin-bottom:2px}
+.panel-chapter:hover,.panel-chapter:focus-visible{background:#292929;color:#fff}
+.panel-chapter.active{background:#303030;color:#fff;border-left:3px solid #ddd;padding-left:8px}
+@media(prefers-reduced-motion:reduce){#reader-panel{scroll-behavior:auto}}

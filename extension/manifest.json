@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Clean Source Comic Reader (Site-Scoped)",
+  "version": "0.3.0",
+  "description": "Native-site reader layout, keyboard chapter navigation, smooth auto-scroll; never intercepts wheel input.",
+  "permissions": [
+    "storage"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.webtoons.com/*",
+        "https://m.webtoons.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html"
+}

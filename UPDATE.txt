@@ -1,0 +1,59 @@
+COMIC ARCHIVER — WINDOWS README CHECKSUM + RESUME FIX
+November 20, 2026
+
+THIS ZIP CONTAINS ONLY APPLICATION CODE. It intentionally excludes .archiver_state,
+state.sqlite, saved browser profiles, credentials, image files and node_modules.
+Extract OVER your existing ComicArchiver directory to preserve account selections,
+all 60 archived chapters, and Cloudflare deployments. Do not delete .archiver_state.
+
+ONE COMMAND IN CMD AFTER SAVING THE ZIP TO DOWNLOADS:
+
+powershell -NoProfile -Command "Expand-Archive -LiteralPath '%USERPROFILE%\Downloads\ultimate_comic_archiver_readme_windows_resume_fix.zip' -DestinationPath '%USERPROFILE%\Downloads\ComicArchiver' -Force" && cd /d "%USERPROFILE%\Downloads\ComicArchiver\ultimate_comic_archiver" && python run.py
+
+Normal future startup from the project root:
+
+python run.py
+
+To perform ONLY deployment/README repair without GitHub archive preflight:
+
+python run.py --deploy --authorized
+
+CHANGES
+- Fixed Windows CRLF vs LF remote README SHA-256 verification. Git-bound
+  README files are now written and hashed as EXACT UTF-8 bytes.
+- Fixed the analogous remote volume README byte-verification problem.
+- Saved successful Cloudflare publication to SQLite BEFORE attempting
+  optional GitHub source/README updates. A failed GitHub docs step no
+  longer causes a second Cloudflare asset upload on resume.
+- Before redeploying, now checks the live Cloudflare chapter manifest,
+  native titles, image URL mappings and reader frontend asset hashes.
+  A previously successful deployment can be adopted after an interrupted
+  run even if the old process did not record its final fingerprint.
+- Added a resumable README sync that uses the tiny live reader manifest
+  without re-downloading the 1,164 original images from Webtoon or GitHub.
+- Added idempotent reader Git commits: identical trees are verified and
+  reused rather than pushed as redundant commits.
+- Reader source GitHub repository now includes reusable/, site_specific/,
+  setup scripts, extension and tests as well as the HTML/JS reader.
+- GitHub reader source fetches are batched to avoid separate network
+  round trips for dozens of tiny source-code blobs.
+- Preserved the single site-specific adapter at site_specific/site_adapter.py.
+- Preserved Git credential isolation, Firefox source profile, progress bars,
+  publication verification and opt-in shutdown-on-complete semantics.
+
+CONFIRMED BY OFFLINE TESTS (NOT A CLAIM OF LIVE ACCOUNT SUCCESS)
+- Real local Git repositories verify byte-identical remote README files,
+  unchanged image Git blobs, and idempotent second executions.
+- Simulated Windows newline conversion does not break checksum checks.
+- Simulated crash AFTER verified Cloudflare deploy leaves a durable
+  checkpoint and does not trigger another deployment on resume.
+- Simulated existing stale chapter titles are rejected even with the
+  same number of chapters.
+- A real GitHub-documentation retry from a saved manifest commits
+  reader and volume READMEs without touching archived images.
+- Automatic suite can be rerun: python -m unittest discover -s tests -v
+
+The Cloudflare Pages image-volume project remains necessary as an image host;
+it is NOT a redundant copy of the main reader. This update never deletes
+GitHub repositories or Cloudflare projects and does not modify global Git
+configuration.

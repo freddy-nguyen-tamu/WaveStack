@@ -1,0 +1,536 @@
+"""Paired, loopback-only WebExtension transport for an already-open normal browser.
+
+The Python bridge never controls a browser through WebDriver or CDP. A separate,
+user-approved Chromium extension may inspect already-loaded image responses in
+the one explicitly paired tab. No cookie extraction, fingerprint changes,
+challenge solving, remote listener, or access to unrelated tabs. Site extraction
+belongs to the single site_adapter; only generic page/byte operations live here.
+"""
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import queue
+import secrets
+import threading
+import time
+import uuid
+from contextlib import contextmanager
+from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urlsplit
+
+BRIDGE_HOST = '127.0.0.1'
+BRIDGE_PORT = 18765
+BRIDGE_PROTOCOL = "visual-transfer-2"  # Requires working probe and rendered-image transport.
+MAX_RESPONSE = 110 * 1024 * 1024
+
+
+class BrowserBridgeError(RuntimeError):
+    pass
+
+
+@dataclass
+class BrowserResponse:
+    url: str
+    status: int
+    headers: dict
+    data: bytes = b''
+    capture_method: str = 'original-response'
+
+    @property
+    def ok(self):
+        return 200 <= self.status < 300
+
+    def body(self):
+        return self.data
+
+
+class LocalBridge:
+    def __init__(self, source_url, *, reader_selectors=(), image_attributes=(),
+                 image_hosts=(), port=BRIDGE_PORT):
+        self.source = urlsplit(source_url)
+        self.allowed_site = self.source.hostname.lower()
+        self.allowed_cdn = {h.lower() for h in image_hosts}
+        self.reader_selectors = list(reader_selectors)
+        self.image_attributes = list(image_attributes)
+        self.port = port
+        # Rotated for every run; the extension obtains it itself from /bootstrap.
+        # Only a locally installed browser extension may request bootstrap.
+        self.secret = secrets.token_urlsafe(32)
+        self.pending = queue.Queue()
+        self.responses = {}
+        self.responses_lock = threading.Lock()
+        self.ready = threading.Event()
+        self.outdated_client = threading.Event()
+        self.last_heartbeat = time.monotonic()
+        self.tab_url = None
+        self.server = None
+        self.thread = None
+        # Bound only after a protocol-valid /hello, never on an unauthenticated
+        # bootstrap request. This prevents an outdated/abandoned extension from
+        # monopolizing a newly started Python bridge.
+        self.extension_origin = None
+        self.extension_client = None
+        self.extension_origin_lock = threading.Lock()
+
+    def validate_chapter(self, url):
+        parsed = urlsplit(url)
+        # Do not cross domains or switch to HTTP from a normal HTTPS page.
+        if parsed.scheme != 'https' or parsed.hostname != self.allowed_site:
+            raise BrowserBridgeError('Chapter navigation outside the selected source domain')
+        return url
+
+    def validate_image(self, url):
+        parsed = urlsplit(url)
+        if parsed.scheme != 'https' or parsed.hostname not in ({self.allowed_site} | self.allowed_cdn):
+            raise BrowserBridgeError('Image host not authorized by the site adapter: ' + str(parsed.hostname))
+        return url
+
+    def start(self):
+        bridge = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                return  # Prevent token and URLs in local access logs.
+
+            def _origin(self):
+                origin = self.headers.get('Origin', '')
+                if not origin:
+                    # Privileged background fetches sometimes omit Origin entirely.
+                    # Authentication still requires a cryptographically random token.
+                    return True
+                return (origin.startswith('chrome-extension://') or
+                        origin.startswith('moz-extension://')) and '\\' not in origin and '/' not in origin.split('://',1)[1]
+
+            def _client_id(self):
+                # The extension identity is not a secret; it separates browser
+                # installations. The random per-run token remains authentication.
+                client = self.headers.get('X-Comic-Bridge-Client', '')
+                return client if (8 <= len(client) <= 200 and
+                                  all(c.isascii() and (c.isalnum() or c in '._@{}-') for c in client)) else ''
+
+            def _cors(self):
+                origin = self.headers.get('Origin', '')
+                if origin and self._origin():
+                    self.send_header('Access-Control-Allow-Origin', origin)
+                    self.send_header('Vary', 'Origin')
+                    self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+                    self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-Comic-Bridge-Token, X-Comic-Bridge-Bootstrap, X-Comic-Bridge-Client')
+                    self.send_header('Access-Control-Max-Age', '300')
+                self.send_header('Cache-Control', 'no-store')
+
+            def _send(self, status, obj=None):
+                payload = json.dumps(obj or {}, separators=(',', ':')).encode('utf-8')
+                self.send_response(status)
+                self._cors()
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def _auth(self):
+                if not self._origin():
+                    self._send(403, {'error': 'Only browser extension origins are allowed'})
+                    return False
+                client = self._client_id()
+                if not client:
+                    self._send(403, {'error': 'Comic Bridge 1.5.1+ extension required (missing client identity)'})
+                    return False
+                with bridge.extension_origin_lock:
+                    if bridge.extension_client and client != bridge.extension_client:
+                        self._send(403, {'error': 'Another Comic Bridge extension owns this Python run'})
+                        return False
+                    if (bridge.extension_origin and self.headers.get('Origin', '') and
+                            self.headers.get('Origin') != bridge.extension_origin):
+                        self._send(403, {'error': 'Another Comic Bridge extension origin owns this Python run'})
+                        return False
+                if not secrets.compare_digest(self.headers.get('X-Comic-Bridge-Token', ''), bridge.secret):
+                    self._send(401, {'error': 'Expired local bridge token; reconnect automatically'})
+                    return False
+                return True
+
+            def do_OPTIONS(self):
+                if not self._origin():
+                    self._send(403, {'error': 'Extension origin required'})
+                    return
+                self.send_response(204)
+                self._cors()
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+
+            def do_GET(self):
+                if self.path == '/bootstrap':
+                    # Chrome/Edge extension background fetches sometimes omit
+                    # Origin on localhost GET. A privileged extension provides
+                    # two non-simple headers instead. Ordinary web pages cannot
+                    # send these without a CORS preflight, which is *not*
+                    # approved for web page origins. Never allow bare requests.
+                    origin = self.headers.get('Origin', '')
+                    if (self.headers.get('X-Comic-Bridge-Bootstrap') != '1' or
+                            not self._client_id() or not self._origin()):
+                        self._send(403, {'error':
+                            'Bootstrap requires updated Comic Bridge extension headers; '
+                            'reload the unpacked 1.5.1 extension'})
+                        return
+                    with bridge.extension_origin_lock:
+                        if bridge.extension_client and self._client_id() != bridge.extension_client:
+                            self._send(403, {'error': 'Another Comic Bridge extension owns this Python run'})
+                            return
+                        if bridge.extension_origin and origin and origin != bridge.extension_origin:
+                            self._send(403, {'error': 'Another Comic Bridge origin owns this Python run'})
+                            return
+                    # Do not claim ownership here: only /hello with the current
+                    # protocol and permitted chapter URL may claim ownership.
+                    self._send(200, {'token': bridge.secret, 'port': bridge.port,
+                                     'site': bridge.allowed_site,
+                                     'protocol': BRIDGE_PROTOCOL})
+                    return
+                if not self._auth():
+                    return
+                if self.path == '/next':
+                    bridge.last_heartbeat = time.monotonic()
+                    try:
+                        command = bridge.pending.get_nowait()
+                    except queue.Empty:
+                        self._send(200, {'command': None})
+                    else:
+                        self._send(200, {'command': command})
+                elif self.path == '/health':
+                    self._send(200, {'paired': bridge.ready.is_set()})
+                else:
+                    self._send(404, {'error': 'Unknown bridge endpoint'})
+
+            def do_POST(self):
+                if not self._auth():
+                    return
+                length = int(self.headers.get('Content-Length', '0') or '0')
+                if length < 1 or length > MAX_RESPONSE:
+                    self._send(413, {'error': 'Request size invalid'})
+                    return
+                try:
+                    obj = json.loads(self.rfile.read(length))
+                    if self.path == '/hello':
+                        # Do NOT accept the /hello request from an older installed
+                        # extension: it has no probe/image-byte protocol, and would
+                        # previously report connected then crash before scrolling.
+                        if (obj.get('bridge_protocol') != BRIDGE_PROTOCOL or
+                                not {'probe', 'image', 'content-v2'}.issubset(set(obj.get('capabilities') or []))):
+                            bridge.outdated_client.set()
+                            self._send(409, {'error':
+                                'OUTDATED COMIC BRIDGE EXTENSION: the running Chrome extension does not support '
+                                'the image-transfer proof. Remove any previous Comic Bridge extension, load the '
+                                'unpacked browser_bridge/chrome folder from this project, then restart run.py. '
+                                'Do not refresh or close your comic webpage tab.'})
+                            return
+                        url = bridge.validate_chapter(str(obj.get('url', '')))
+                        with bridge.extension_origin_lock:
+                            # Ownership begins only after validation succeeds.
+                            # Locking the client also works if Chrome omits Origin.
+                            client = self._client_id()
+                            origin = self.headers.get('Origin', '')
+                            if bridge.extension_client and bridge.extension_client != client:
+                                self._send(403, {'error': 'Another Comic Bridge extension owns this Python run'})
+                                return
+                            if bridge.extension_origin and origin and bridge.extension_origin != origin:
+                                self._send(403, {'error': 'Another Comic Bridge origin owns this Python run'})
+                                return
+                            bridge.extension_client = client
+                            if origin:
+                                bridge.extension_origin = origin
+                        bridge.tab_url = url
+                        bridge.last_heartbeat = time.monotonic()
+                        bridge.ready.set()
+                        self._send(200, {'ok': True, 'source': bridge.allowed_site,
+                                         'bridge_protocol': BRIDGE_PROTOCOL})
+                    elif self.path == '/heartbeat':
+                        bridge.last_heartbeat = time.monotonic()
+                        self._send(200, {'ok': True})
+                    elif self.path == '/result':
+                        bridge.last_heartbeat = time.monotonic()
+                        ident = str(obj.get('id', ''))
+                        with bridge.responses_lock:
+                            dest = bridge.responses.get(ident)
+                        if dest is None:
+                            self._send(404, {'error': 'Unknown operation'})
+                        else:
+                            dest.put(obj)
+                            self._send(200, {'ok': True})
+                    else:
+                        self._send(404, {'error': 'Unknown endpoint'})
+                except (ValueError, TypeError, BrowserBridgeError) as exc:
+                    self._send(400, {'error': str(exc)[:300]})
+
+        try:
+            self.server = ThreadingHTTPServer((BRIDGE_HOST, self.port), Handler)
+        except OSError as exc:
+            raise BrowserBridgeError('Local bridge port 18765 is already in use. Close another archiver or set '
+                                     'COMIC_ARCHIVER_BRIDGE_PORT to an unused local port.') from exc
+        self.port = self.server.server_port
+        self.server.daemon_threads = True
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def wait_paired(self):
+        print('\nBROWSER EXTENSION BRIDGE — USE YOUR CURRENT NORMAL BROWSER', flush=True)
+        print(f'  Local port: {self.port}', flush=True)
+        print('  AUTO CONNECT: no pairing code and no chapter-by-chapter reconnect.', flush=True)
+        print('  Keep an authorized comic chapter open in your normal Chrome/Edge browser.', flush=True)
+        print('  The installed extension discovers the tab and connects automatically.', flush=True)
+        root = Path(__file__).resolve().parents[1]
+        print('  CHROME / EDGE: chrome://extensions → Developer mode → Load unpacked:',
+              str(root / 'browser_bridge' / 'chrome'), flush=True)
+        print('  FIREFOX: about:debugging#/runtime/this-firefox → Load Temporary Add-on →',
+              str(root / 'browser_bridge' / 'firefox' / 'manifest.json'), flush=True)
+        if self.allowed_cdn:
+            print('  IMPORTANT: This CDN-backed source requires Chrome/Edge (NOT Firefox).', flush=True)
+            print('  Chrome can capture visible image pixels even when original image bytes cannot be inspected.', flush=True)
+        print('  Keep your already-open chapter tab; no reload is needed.', flush=True)
+        print('  The local listener accepts extension traffic only on 127.0.0.1.', flush=True)
+        last = 0
+        while not self.ready.wait(0.5):
+            if self.outdated_client.is_set():
+                raise BrowserBridgeError(
+                    'OUTDATED COMIC BRIDGE EXTENSION. Python rejected its old protocol before '
+                    'scanning any images. In Chrome → chrome://extensions REMOVE any old Comic Bridge '
+                    'entry, then Load unpacked from the printed project browser_bridge/chrome path. '
+                    'Restart python run.py; the extension will connect automatically. Leave the comic webpage tab open.')
+            if time.monotonic() - last > 30:
+                print('Browser bridge: waiting for automatic extension connection (check extension is loaded)...', flush=True)
+                last = time.monotonic()
+        print('Browser bridge connected to:', self.tab_url, flush=True)
+
+    def rpc(self, action, payload=None, timeout=None):
+        """Wait as long as the extension stays responsive; never cap total job time.
+
+        JS has a separate short watchdog for a *single stalled browser API*.
+        A dead service worker must not leave Python blocked forever, and any
+        late reply to an abandoned operation is rejected by /result.
+        """
+        if not self.ready.is_set():
+            raise BrowserBridgeError('Browser extension not connected')
+        ident = uuid.uuid4().hex
+        q = queue.Queue(maxsize=1)
+        with self.responses_lock:
+            self.responses[ident] = q
+        started = time.monotonic()
+        try:
+            self.pending.put({'id': ident, 'action': action, 'payload': payload or {}})
+            while True:
+                try:
+                    result = q.get(timeout=3.0)
+                    break
+                except queue.Empty as exc:
+                    now = time.monotonic()
+                    if now - self.last_heartbeat > 30:
+                        raise BrowserBridgeError(
+                            f'Comic Bridge stopped responding during {action} (no heartbeat); '
+                            'the extension may have been suspended or its tab closed. '
+                            'Restart run.py to resume this unverified chapter.') from exc
+                    # Explicit caller timeouts remain available for short UI
+                    # operations; image and scroll use timeout=None.
+                    if timeout is not None and now - started > timeout:
+                        raise BrowserBridgeError(
+                            f'Browser {action} did not respond within {timeout}s') from exc
+            if not result.get('ok'):
+                raise BrowserBridgeError(f'Browser {action} failed: {str(result.get("error", "unknown"))[:500]}')
+            return result.get('data') or {}
+        finally:
+            with self.responses_lock:
+                self.responses.pop(ident, None)
+
+    def close(self):
+        if self.server:
+            self.server.shutdown()
+            self.server.server_close()
+            self.thread.join(timeout=3)
+            self.server = None
+
+
+class BridgePage:
+    is_native_firefox = False
+
+    def __init__(self, context):
+        self.context = context
+        self.url = context.bridge.tab_url
+
+    def goto(self, url, wait_until=None, timeout=50000):
+        self.context.bridge.validate_chapter(url)
+        data = self.context.bridge.rpc('navigate', {'url': url}, timeout=max(90, timeout / 1000 + 50))
+        self.url = data.get('url', url)
+        self.context.bridge.validate_chapter(self.url)
+        return BrowserResponse(self.url, int(data.get('status', 200)), {})
+
+    def content(self):
+        data = self.context.bridge.rpc('page', timeout=90)
+        self.url = data.get('url', self.url)
+        return data['html']
+
+    def evaluate(self, script):
+        # Intentional: never eval untrusted dynamic JavaScript in a browser
+        # extension. Translate the reusable crawler's fixed operations.
+        if 'iframe[src*="captcha"' in script or 'form input[type=password]' in script:
+            return self.context.bridge.rpc('classify')
+        if 'scrollTo(' in script or 'scrollBy(' in script:
+            return self.context.bridge.rpc('scroll')
+        if 'return {imgs' in script or 'imgs:data' in script or 'MutationObserver' in script:
+            return self.context.bridge.rpc('snapshot', {'reader_selectors': self.context.reader_selectors,
+                                                       'image_attributes': self.context.image_attributes})
+        raise BrowserBridgeError('Unsupported browser script. Use the documented generic DOM operations.')
+
+    def recover_unloaded_image(self, key, url):
+        """Target only the missing ordinal in the original reader, never a new tab."""
+        return self.context.bridge.rpc('recover_image', {
+            'key': str(key), 'url': str(url or ''),
+            'reader_selectors': self.context.reader_selectors,
+            'image_attributes': self.context.image_attributes,
+        }, timeout=35)
+
+    def wait_for_timeout(self, ms):
+        time.sleep(max(0, ms) / 1000)
+
+    def locator(self, selector):
+        class EmptyLocator:
+            def count(self):
+                return 0
+        return EmptyLocator()
+
+    def close(self):
+        pass  # NEVER close the human's browser tab.
+
+
+class BridgeRequest:
+    # The cross-origin image path transfers pixels/response bytes ALREADY
+    # loaded by the chosen normal browser tab; it creates no new CDN request.
+    reuses_loaded_page_images = True
+
+    def __init__(self, context):
+        self.context = context
+
+    def get(self, url, headers=None, timeout=45000):
+        self.context.bridge.validate_image(url)
+        result = self.context.bridge.rpc('image', {'url': url})
+        # A 403 from an image CDN is NOT proof that the chapter needs another
+        # Cloudflare challenge. The document is already accessible. Repeating
+        # the human chapter check cannot grant access to an extension-origin
+        # request. Fail clearly unless the browser could return loaded bytes.
+        status = int(result.get('status', 0))
+        if status in (401, 403, 424):
+            from .source_session import SourceAccessPaused
+            host = urlsplit(url).hostname
+            diag = result.get('diagnostics') or {}
+            tab = diag.get('tabImage') or {}
+            if tab.get('found') and tab.get('loaded'):
+                tab_note = 'Browser confirms the image is decoded and displayed, but its original response bytes were not recoverable.'
+            elif tab.get('found'):
+                tab_note = 'Browser image element exists, but the original image has not loaded (naturalWidth=0).'
+            else:
+                tab_note = 'Requested image URL not found in the paired tab; check the source image URL mapping.'
+            raise SourceAccessPaused(
+                f'Image CDN {host} original response bytes unavailable (browser status {status}). '
+                f'{tab_note} '
+                f'Loaded-response inspection (debugger attached={bool(diag.get("debuggerAttached"))}, '
+                f'captured={int(diag.get("capturedImages") or 0)}, '
+                f'failed={int(diag.get("captureFailures") or 0)}). '
+                'Use Chrome/Edge (not Firefox), grant Comic Bridge debugger access, close DevTools for the selected tab, and reconnect. '
+                'If capture is attached but the image is still unavailable, the browser did not provide its original bytes; no image will be falsely archived. '
+                'No alternative identity, proxy, or challenge bypass was attempted.'
+            )
+        data = base64.b64decode(result.get('base64', ''), validate=True)
+        if len(data) > 100 * 1024 * 1024:
+            raise BrowserBridgeError('Image exceeds maximum supported size')
+        return BrowserResponse(result.get('url', url), int(result.get('status', 0)),
+                               result.get('headers', {}), data, result.get('via', 'original-response'))
+
+
+class BridgeContext:
+    def __init__(self, bridge, reader_selectors, image_attributes):
+        self.bridge = bridge
+        self.reader_selectors = list(reader_selectors)
+        self.image_attributes = list(image_attributes)
+        self.pages = [BridgePage(self)]
+        self.request = BridgeRequest(self)
+
+    def new_page(self):
+        # Engine calls this for discovery/chapter lifecycle. Never create tabs.
+        return self.pages[0]
+
+    def close(self):
+        self.bridge.close()
+
+
+@contextmanager
+def source_extension_context(data_dir: Path, source_url: str, *,
+                             adapter, reader_selectors=()):
+    port = int(os.environ.get('COMIC_ARCHIVER_BRIDGE_PORT') or BRIDGE_PORT)
+    ensure_generated_extensions(Path(__file__).resolve().parents[1], adapter, port)
+    bridge = LocalBridge(source_url, reader_selectors=reader_selectors,
+                         image_attributes=adapter.IMAGE_ATTRIBUTES,
+                         image_hosts=getattr(adapter, 'BRIDGE_IMAGE_HOSTS', ()), port=port)
+    bridge.start()
+    ctx = BridgeContext(bridge, reader_selectors, adapter.IMAGE_ATTRIBUTES)
+    try:
+        bridge.wait_paired()
+        # Real transfer proof BEFORE the crawler scrolls a single chapter.
+        # This transfers a decoded image across extension -> localhost -> Python,
+        # validates bytes, and gives the user an on-disk artifact to inspect.
+        try:
+            result = bridge.rpc('probe', timeout=55)
+        except BrowserBridgeError as exc:
+            if 'Unsupported command' in str(exc):
+                raise BrowserBridgeError(
+                    'The browser is still running an OUTDATED Comic Bridge service worker '
+                    'which cannot transfer images. Remove the old Comic Bridge extension '
+                    'under chrome://extensions and Load unpacked from the project '
+                    'browser_bridge/chrome folder. Leave the comic tab open.') from exc
+            raise
+        raw = base64.b64decode(result.get('base64',''), validate=True)
+        if not raw or len(raw) > 22*1024*1024:
+            raise BrowserBridgeError('Browser proof failed: no valid image bytes received')
+        from PIL import Image
+        import io
+        with Image.open(io.BytesIO(raw)) as im:
+            image_format, dimensions = im.format, im.size
+            im.verify()
+        if image_format not in ('PNG','JPEG','WEBP') or min(dimensions)<=0:
+            raise BrowserBridgeError('Browser proof failed: invalid or undecodable image')
+        ext={'PNG':'.png','JPEG':'.jpg','WEBP':'.webp'}[image_format]
+        proof=data_dir / ('bridge_proof_first_image'+ext)
+        proof.parent.mkdir(parents=True, exist_ok=True)
+        proof.write_bytes(raw)
+        via=str(result.get('via','unknown'))
+        print(f'BROWSER_TO_PYTHON_IMAGE_PROOF: PASS | {len(raw)} bytes | '
+              f'{dimensions[0]}x{dimensions[1]} | SHA256 {hashlib.sha256(raw).hexdigest()} | '
+              f'{via} | {proof}', flush=True)
+        if via == 'rendered-png':
+            print('IMAGE FIDELITY NOTICE: browser-rendered PNG, NOT original CDN JPEG bytes.', flush=True)
+        yield ctx
+    finally:
+        ctx.close()
+
+
+def ensure_generated_extensions(root, adapter, port):
+    """Generate the installed bridge from ONE provider-neutral manifest writer.
+
+    All website hosts, URL matches and CDN grants come from the single adapter.
+    Never hand-edit the generated browser_bridge/* manifests, and never drop
+    security-critical manifest permissions while regenerating them.
+    """
+    from .bridge_manifest import generate_installed_manifests
+
+    root = Path(root)
+    generate_installed_manifests(root, adapter, port=port)
+    source = root / 'reusable' / 'browser_bridge_extension'
+    target = root / 'browser_bridge'
+    for browser in ('chrome', 'firefox'):
+        folder = target / browser
+        for filename in ('background.js', 'content.js', 'popup.html', 'popup.js'):
+            source_file = source / filename
+            target_file = folder / filename
+            raw = source_file.read_bytes()
+            if not target_file.exists() or target_file.read_bytes() != raw:
+                target_file.write_bytes(raw)
+    return target

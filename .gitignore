@@ -1,0 +1,12 @@
+# Source-browser profiles contain session cookies; never commit or publish.
+.archiver_state/
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+*.tmp
+*.part
+.env
+.env.*
+
+.archiver_tools/

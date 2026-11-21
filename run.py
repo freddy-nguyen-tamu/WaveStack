@@ -1,0 +1,313 @@
+#!/usr/bin/env python3
+"""One-command entry: python run.py (from the extracted project directory).
+
+All site-specific settings live in site_specific/site_adapter.py.  Existing
+GitHub, Cloudflare, source-browser profile and SQLite state are reused.
+"""
+from __future__ import annotations
+
+import json
+import ast
+import re
+import os
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+
+
+def _relaunch_project_venv() -> None:
+    if os.environ.get('COMIC_ARCHIVER_IN_VENV') == '1':
+        return
+    candidate = ROOT / '.venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+    if candidate.exists() and candidate.resolve() != Path(sys.executable).resolve():
+        env = os.environ.copy()
+        env['COMIC_ARCHIVER_IN_VENV'] = '1'
+        raise SystemExit(subprocess.call([str(candidate), str(ROOT / 'run.py'), *sys.argv[1:]], cwd=ROOT, env=env))
+
+
+def _check_dependencies() -> bool:
+    try:
+        import playwright  # noqa: F401
+        import bs4  # noqa: F401
+        import requests  # noqa: F401
+        import PIL  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _bootstrap() -> None:
+    if os.name == 'nt':
+        powershell = 'powershell.exe'
+        bootstrap = ROOT / 'setup_and_publish.ps1'
+        print('Installing missing project dependencies; setup will then continue automatically.', flush=True)
+        # During first-time prerequisite installation the PowerShell setup owns
+        # the complete run. Let its existing shutdown prompt run interactively.
+        flags = []
+        if '--shutdown-on-complete' in sys.argv[1:]:
+            flags.append('-ShutdownWhenDone')
+        elif '--no-shutdown' in sys.argv[1:] or not sys.stdin.isatty():
+            flags.append('-NoShutdownPrompt')
+        raise SystemExit(subprocess.call([powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                                           '-File', str(bootstrap), *flags], cwd=ROOT))
+    print('Install project dependencies with: python -m pip install -r requirements.txt; '
+          'python -m playwright install firefox; npm install', file=sys.stderr)
+    raise SystemExit(2)
+
+
+def _preferences() -> dict:
+    prefs = ROOT / '.archiver_state' / 'run_preferences.json'
+    from site_specific import site_adapter
+    current = str(getattr(site_adapter, 'SOURCE_NAME', '') or 'unknown') + ':' + str(getattr(site_adapter, 'SERIES_SLUG_HINT', ''))
+    data = {}
+    if prefs.exists():
+        try:
+            data = json.loads(prefs.read_text(encoding='utf-8'))
+        except (ValueError, OSError):
+            data = {}
+    if data.get('source_scope') != current or data.get('rights_confirmed') is not True:
+        print('You must have permission to archive and publish the source images.')
+        answer = input('Type I HAVE RIGHTS to confirm your permission: ').strip()
+        if answer != 'I HAVE RIGHTS':
+            raise SystemExit('Stopped without downloading or publishing.')
+        data = {'source_scope': current, 'rights_confirmed': True,
+                'confirmed_at_utc': datetime.now(timezone.utc).isoformat()}
+        # Rights authorization is per source. Shutdown consent is deliberately
+        # NOT stored here: it must be reconfirmed for each interactive run.
+        prefs.parent.mkdir(parents=True, exist_ok=True)
+        temp = prefs.with_suffix('.tmp')
+        temp.write_text(json.dumps(data, indent=2), encoding='utf-8')
+        os.replace(temp, prefs)
+    return data
+
+
+def _shutdown_choice(args, *, platform=None, interactive=None, prompt=None):
+    """Ask on EVERY interactive publish run, not just first-ever rights consent.
+
+    --shutdown-on-complete is explicit opt-in for non-interactive automation;
+    --no-shutdown explicitly opts out. Nothing persists a silent yes across runs.
+    """
+    args = list(args)
+    if '--no-shutdown' in args:
+        if '--shutdown-on-complete' in args:
+            raise SystemExit('Choose either --no-shutdown or --shutdown-on-complete, not both.')
+        return [arg for arg in args if arg != '--no-shutdown']
+    if '--shutdown-on-complete' in args:
+        print('Windows shutdown explicitly enabled after successful verified publication '
+              '(60-second cancellation window).', flush=True)
+        return args
+    if not ({'--deploy', '--resume'} & set(args)):
+        return args
+    platform = os.name if platform is None else platform
+    interactive = sys.stdin.isatty() if interactive is None else interactive
+    if platform != 'nt' or not interactive:
+        # Never block redirected input or make shutdown the non-interactive default.
+        if platform == 'nt':
+            print('Shutdown not requested. For unattended operation, pass '
+                  '--shutdown-on-complete explicitly.', flush=True)
+        return args
+    prompt = input if prompt is None else prompt
+    print('Publication may close other running applications. Save your work first.', flush=True)
+    try:
+        answer = prompt('Shut down Windows 60 seconds after ALL comics are verified? [y/N]: ').strip().lower()
+    except EOFError:
+        answer = ''
+    if answer in ('y', 'yes'):
+        args.append('--shutdown-on-complete')
+        print('Automatic shutdown enabled for THIS run only. '
+              'To cancel during the countdown: shutdown /a', flush=True)
+    else:
+        print('Automatic shutdown disabled for this run.', flush=True)
+    return args
+
+
+
+# Fail-closed, always-on safety gate for automatic Comic Bridge runs.
+# Keep this in run.py: a partial ZIP must not silently skip regression tests.
+# Tests are local and simulated; they never download, publish, or shut down Windows.
+_PREFLIGHT_RELEASE = '1.5.8'
+_PREFLIGHT_PYTHON = (
+    ('test_browser_autobootstrap.py', 2),
+    ('test_regression_release_v154.py', 3),
+    ('test_streaming_order.py', 5),
+    ('test_optimized_bridge.py', 4),
+    ('test_image_checkpoint_resume.py', 8),
+    ('test_site_separation.py', 3),
+    ('test_github_fast_verification.py', 5),
+)
+_PREFLIGHT_JAVASCRIPT = (
+    'extension_persistent_autoconnect.js',
+    'extension_screenshot_permission_fallback.js',
+    'extension_fast_path_and_watchdog.js',
+    'extension_tile_stall_recovery.js',
+    'extension_next_chapter_recovery.js',
+)
+
+
+def _run_preflight() -> None:
+    """Check release compatibility and run every required regression before work."""
+    def fail(problem: str) -> None:
+        print('\nPREFLIGHT FAILED: ' + problem, file=sys.stderr, flush=True)
+        print('Archiving, GitHub publishing, Cloudflare deployment, and shutdown '
+              'have NOT started.', file=sys.stderr, flush=True)
+        raise SystemExit(3)
+
+    print('\nComic Archiver: verifying installed release and running startup tests...', flush=True)
+    # Installed manifests are generated from the current adapter, never copied
+    # from another provider's extension ZIP. Re-run on every launch so provider
+    # switches cannot retain stale permissions or chapter URL patterns.
+    try:
+        from site_specific import site_adapter
+        from reusable.bridge_manifest import generate_installed_manifests
+        generated = generate_installed_manifests(ROOT, site_adapter)
+        if generated:
+            print('  Regenerated site-specific manifests: ' + ', '.join(generated) +
+                  ' (reload this unpacked extension in Chrome/Firefox)', flush=True)
+    except Exception as exc:
+        fail('site adapter / extension manifest generation failed: '+str(exc))
+    try:
+        bridge = (ROOT / 'reusable' / 'browser_bridge.py').read_text(encoding='utf-8')
+        engine = (ROOT / 'reusable' / 'engine.py').read_text(encoding='utf-8')
+        background = (ROOT / 'reusable' / 'browser_bridge_extension' / 'background.js').read_bytes()
+        content = (ROOT / 'reusable' / 'browser_bridge_extension' / 'content.js').read_bytes()
+        for rel in ('reusable/browser_bridge.py', 'reusable/engine.py',
+                    'reusable/source_session.py', 'site_specific/site_adapter.py'):
+            ast.parse((ROOT / rel).read_text(encoding='utf-8'), filename=rel)
+        # Detect missing/corrupt prerequisite files, and accidental old-protocol
+        # overlays before they can start a 96-chapter run or touch remote archives.
+        required_bridge = ('X-Comic-Bridge-Bootstrap', 'X-Comic-Bridge-Client',
+                           'extension_client', 'def recover_unloaded_image')
+        required_engine = ('ChapterImageCheckpoint(', 'checkpoint=checkpoint',
+                           'IMAGE_REUSED_FROM_CHECKPOINT',
+                           'on_progress=save_as_scroll_reveals',
+                           'def scan_browser_images(', 'on_progress=None')
+        required_background = (b'bridgeContentProtocol===6', b'RECOVER_IMAGE',
+                               b"'X-Comic-Bridge-Bootstrap':'1'",
+                               b"'X-Comic-Bridge-Client':chrome.runtime.id",
+                               b"screenshotBackend !== 'debugger'")
+        for marker in required_bridge:
+            if marker not in bridge:
+                fail('Python bridge missing compatibility feature: ' + marker)
+        if 'Bootstrap requires a browser extension Origin' in bridge:
+            fail('old Python bootstrap handler reintroduced; 403 regression detected')
+        for marker in required_engine:
+            if marker not in engine:
+                fail('one-pass downloader missing: ' + marker)
+        for marker in required_background:
+            if marker not in background:
+                fail('extension missing compatibility feature: ' + marker.decode('utf-8'))
+        if b'RECOVER_IMAGE' not in content:
+            fail('extension missing targeted per-image recovery')
+        if b'function waitForPaintOrTimer(' not in content or b'paintReady=await waitForPaintOrTimer()' not in content:
+            fail('extension lacks the required nonblocking image-tile paint recovery')
+        if b"const tile=payload?.type==='CAPTURE_IMAGE_TILE'" not in background:
+            fail('extension lacks selected-tab tile message rescue')
+        if b"if(payload?.type==='RECOVER_IMAGE' && chrome.scripting?.executeScript)" not in background:
+            fail('extension lacks next-chapter one-shot targeted recovery')
+        if b'const paintReady=await waitForPaintOrTimer();' not in content or b'await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))' in content:
+            fail('targeted image recovery can hang forever waiting for animation frames')
+        if b'__comicBridgeContentLoadedVersion === 7' not in content:
+            fail('old content-script version guard would preserve a stale page handler')
+
+        # One editable provider adapter; generated binaries must come from the
+        # reusable extension source, not a stale/replaced generated copy.
+        src = ROOT / 'reusable' / 'browser_bridge_extension'
+        version = json.loads((src / 'manifest.chrome.json').read_text(encoding='utf-8'))['version']
+        if version != _PREFLIGHT_RELEASE:
+            fail(f'expected bridge release {_PREFLIGHT_RELEASE}, found {version}')
+        for browser in ('chrome', 'firefox'):
+            manifest_source = json.loads((src / f'manifest.{browser}.json').read_text(encoding='utf-8'))
+            installed = ROOT / 'browser_bridge' / browser
+            manifest_installed = json.loads((installed / 'manifest.json').read_text(encoding='utf-8'))
+            if manifest_source['version'] != version or manifest_installed['version'] != version:
+                fail(f'{browser} extension manifest/version mismatch')
+            if 'http://127.0.0.1:18765/*' not in (manifest_installed.get('host_permissions', [])
+                                                    + manifest_installed.get('permissions', [])):
+                fail(f'{browser} extension missing loopback host permission')
+            if browser == 'chrome' and 'debugger' not in manifest_installed.get('permissions', []):
+                fail('Chrome debugger screenshot fallback permission missing')
+            if manifest_installed['content_scripts'][0]['matches'] != list(site_adapter.EXTENSION_MATCHES):
+                fail(f'{browser} extension site patterns differ from site_specific/site_adapter.py')
+            for asset in ('background.js', 'content.js', 'popup.html', 'popup.js'):
+                if (src / asset).read_bytes() != (installed / asset).read_bytes():
+                    fail(f'{browser}/{asset} is stale or out of sync with reusable source')
+        print('  PASS release contracts and generated extension parity', flush=True)
+    except (OSError, ValueError, KeyError, SyntaxError) as exc:
+        fail('missing, broken, or incompatible source file: ' + str(exc))
+
+    node = shutil.which('node')
+    if node is None:
+        fail('Node.js is required for extension regression tests (node not on PATH)')
+
+    # subprocess (not in-process unittest) prevents test mocks and monkeypatches
+    # from leaking into the real downloader; nonzero status is always fatal.
+    for filename, minimum in _PREFLIGHT_PYTHON:
+        if not (ROOT / 'tests' / filename).is_file():
+            fail('required Python test is missing: tests/' + filename)
+        print('  TEST ' + filename, flush=True)
+        try:
+            result = subprocess.run(
+                [sys.executable, '-m', 'unittest', 'discover', '-s', 'tests',
+                 '-p', filename, '-v'], cwd=ROOT, capture_output=True,
+                text=True, timeout=90, encoding='utf-8', errors='replace')
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            fail(f'test could not complete: {filename}: {exc}')
+        count = re.search(r'Ran (\d+) tests?', result.stdout + result.stderr)
+        if result.returncode != 0 or not count or int(count.group(1)) < minimum:
+            print((result.stdout + result.stderr)[-9000:], file=sys.stderr, flush=True)
+            fail(f'Python regression tests failed or did not run: {filename}')
+        print(f'    PASS ({count.group(1)} tests)', flush=True)
+
+    for filename in _PREFLIGHT_JAVASCRIPT:
+        if not (ROOT / 'tests' / filename).is_file():
+            fail('required extension test is missing: tests/' + filename)
+        print('  TEST ' + filename, flush=True)
+        try:
+            result = subprocess.run(
+                [node, str(ROOT / 'tests' / filename)], cwd=ROOT,
+                capture_output=True, text=True, timeout=60,
+                encoding='utf-8', errors='replace')
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            fail(f'test could not complete: {filename}: {exc}')
+        if result.returncode != 0 or 'PASS' not in result.stdout:
+            print((result.stdout + result.stderr)[-9000:], file=sys.stderr, flush=True)
+            fail(f'extension regression test failed: {filename}')
+        print('    PASS', flush=True)
+
+    print('PREFLIGHT PASSED: safe to enter normal archiver startup.\n', flush=True)
+
+
+def main() -> None:
+    os.chdir(ROOT)
+    _relaunch_project_venv()
+    # Mandatory before any setup, authorization prompts, source requests or
+    # publication. No flag bypasses this gate. --self-test-only runs it alone.
+    _run_preflight()
+    if '--self-test-only' in sys.argv[1:]:
+        if len(sys.argv) != 2:
+            raise SystemExit('--self-test-only cannot be combined with other arguments')
+        return
+    # The bootstrap must also provision the deployment CLI and Git, not just
+    # Python imports. Otherwise a brand-new ZIP could fail midway through the
+    # first Cloudflare run despite requests/playwright already being installed.
+    wrangler = ROOT / 'node_modules' / '.bin' / ('wrangler.cmd' if os.name == 'nt' else 'wrangler')
+    if not _check_dependencies() or not wrangler.exists() or shutil.which('git') is None:
+        _bootstrap()
+    import reusable.engine as engine
+    args = sys.argv[1:]
+    if not args:
+        _preferences()
+        args = ['--resume', '--authorized']
+    # Also cover explicit `python run.py --deploy --authorized`: the old code
+    # silently skipped the shutdown question whenever command-line args existed.
+    args = _shutdown_choice(args)
+    sys.argv = ['comic_archiver.py', *args]
+    engine.main()
+
+
+if __name__ == '__main__':
+    main()
