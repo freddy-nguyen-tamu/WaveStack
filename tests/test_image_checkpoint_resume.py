@@ -112,7 +112,7 @@ class Tests(unittest.TestCase):
         ns={'json':json,'urljoin':urljoin,'urlsplit':urlsplit, 'event':lambda *a,**k:None,
             'classify_browser_page':lambda page:None,
             'ADAPTER':types.SimpleNamespace(READER_SELECTORS=['main'],IMAGE_ATTRIBUTES=['src'],custom_page_snapshot=None),
-            'RuntimeError':RuntimeError}
+            'RuntimeError':RuntimeError,'SourceAccessPaused':type('SourceAccessPaused',(RuntimeError,),{})}
         exec(compile(ast.Module(body=[func],type_ignores=[]),str(p),'exec'),ns)
         for i in (1,2):
             url,path,meta=self.make_image(i)
@@ -150,28 +150,36 @@ class Tests(unittest.TestCase):
         ns={'json':json,'urljoin':urljoin,'urlsplit':urlsplit, 'event':lambda *x,**kw:logs.append((x,kw)),
             'classify_browser_page':lambda page:None,
             'ADAPTER':types.SimpleNamespace(READER_SELECTORS=['main'],IMAGE_ATTRIBUTES=['src'],custom_page_snapshot=None),
-            'RuntimeError':RuntimeError}
+            'RuntimeError':RuntimeError,'SourceAccessPaused':type('SourceAccessPaused',(RuntimeError,),{})}
         exec(compile(ast.Module(body=[func],type_ignores=[]),str(p),'exec'),ns)
         seen={str(i):{'url':f'https://cdn.example.com/{i}.jpg','width':100,'height':100} for i in range(1,4)}
         self.cp.record_catalog(['1','2','3'],seen)
+        u,path,meta=self.make_image(1)
+        self.cp.record_image('1',1,u,path,meta)
         class Page:
             url='https://example.com/chapter/1'
-            def __init__(self):self.scrolls=0;self.recoveries=[];self.loaded=False
+            def __init__(self):self.scrolls=0;self.recoveries=[];self.loaded=False;self.y=0
             def evaluate(self,script):
                 if 'scrollTo(' in script:
                     self.scrolls+=1
+                    self.y=min(10000,self.y+1000)
                     return 1
                 imgs=[{'key':str(i),'url':f'https://cdn.example.com/{i}.jpg',
                         'width':100,'height':100,'loaded':i!=2 or self.loaded,'pageY':i*1000}
                       for i in range(1,4)]
-                return {'imgs':imgs,'total':3,'scrollY':0,'bottom':10000,'height':10800,
+                return {'imgs':imgs,'total':3,'scrollY':self.y,'bottom':10000,'height':10800,
                         'viewportHeight':800,'missingSlots':0,'unloadedSlots':int(not self.loaded),'revision':0}
-            def recover_unloaded_image(self,key,url):self.recoveries.append(key);self.loaded=True;return {'loaded':True}
+            def recover_unloaded_image(self,key,url):
+                self.recoveries.append(key)
+                self.loaded=True
+                self.y=1500  # physically moves the existing tab to the missing second image
+                return {'loaded':True}
             def wait_for_timeout(self,ms):pass
         page=Page();saved={'1','3'}
         def progress(info,order,seen,bottom):
             for im in info['imgs']:
-                if im['loaded'] and bottom:saved.add(im['key'])
+                if im['key']=='2' and im['loaded'] and im['pageY']<=info['scrollY']+800:
+                    saved.add('2')
             return saved
         results=ns['scan_browser_images'](page,max_steps=20,stability=2,on_progress=progress,checkpoint=self.cp)
         self.assertEqual(page.scrolls,0)

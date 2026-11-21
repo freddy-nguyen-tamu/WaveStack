@@ -1,0 +1,27 @@
+/* Source-missing panel notification bell: all routes, no interference with reader. */
+#reader-issues-widget{position:fixed;right:max(14px,env(safe-area-inset-right));top:max(12px,env(safe-area-inset-top));z-index:2147483000;font:13px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;color:#f5f5f7}
+#reader-issues-widget *{box-sizing:border-box}
+#reader-issues-widget [hidden]{display:none!important}
+#ri-button{width:43px;height:43px;display:grid;place-items:center;position:relative;border:1px solid #ffffff35;border-radius:50%;background:#111a33e8;color:#fff;box-shadow:0 4px 16px #0005;cursor:pointer;backdrop-filter:blur(8px)}
+#ri-button:hover{background:#1b2d56}
+#ri-badge{position:absolute;min-width:19px;height:19px;padding:0 4px;top:-5px;right:-7px;border-radius:100px;display:grid;place-items:center;border:1.5px solid #161927;background:#e52439;color:white;font:700 11px/1 system-ui;box-shadow:0 1px 5px #0008;font-variant-numeric:tabular-nums}
+#ri-popover{position:absolute;top:52px;right:0;width:min(395px,calc(100vw - 24px));max-height:min(75vh,640px);overflow:auto;background:#151b2b;color:#e9edf6;border:1px solid #ffffff25;border-radius:14px;box-shadow:0 16px 48px #000b}
+#ri-popover header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:13px 16px;border-bottom:1px solid #ffffff1c}
+#ri-close{border:0;background:none;color:#fff;font-size:24px;line-height:1;cursor:pointer}
+#ri-summary,#ri-feedback{padding:11px 16px;margin:0;color:#b9c2d6}
+#ri-feedback:not(:empty){border-top:1px solid #ffffff1b;color:#b9edec}
+#ri-list{max-height:410px;overflow:auto}
+.ri-chapter{padding:12px 16px;border-top:1px solid #ffffff1c}
+.ri-chapter-title{font-weight:650;color:#fff;overflow-wrap:anywhere}
+.ri-chapter-hint{margin:5px 0 8px;color:#aebbd1}
+.ri-chapter-link{display:inline-block;margin-bottom:6px;color:#67d3e2}
+.ri-panel{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 0}
+.ri-panel-label{font-size:12px;color:#d5dbe7}
+.ri-upload,#ri-login button[type=submit]{border:1px solid #5489ac;background:#1a5164;border-radius:8px;color:#fff;cursor:pointer;padding:6px 9px;font:600 11px system-ui;flex-shrink:0}
+.ri-upload:hover,#ri-login button[type=submit]:hover{background:#23738d}
+#ri-login{padding:12px 16px;border-top:1px solid #ffffff22;background:#1b2539}
+#ri-login label{display:block;font-size:12px;color:#cdd7e9}
+#ri-password{display:block;width:100%;margin-top:5px;padding:8px;border-radius:7px;background:#0e1725;border:1px solid #6684a8;color:#fff;font:14px system-ui}
+.ri-login-actions{display:flex;gap:9px;margin-top:8px}
+#ri-cancel{border:1px solid #ffffff33;background:transparent;color:white;border-radius:8px;cursor:pointer;padding:5px 10px}
+@media(prefers-reduced-motion:reduce){#reader-issues-widget *{scroll-behavior:auto!important}}

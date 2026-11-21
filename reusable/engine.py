@@ -283,8 +283,99 @@ def ensure_same_origin(seed, candidate):
     return s.scheme == c.scheme and s.netloc == c.netloc
 
 
+class SourceImageServerUnavailable(RuntimeError):
+    """One or more reader images have independently verified source-server failures.
+
+    Unlike a capture/bridge error this must not terminate other chapters.
+    The affected chapter remains incomplete, with its downloaded images
+    checkpointed for a future retry. Never treat it as archived or publishable.
+    """
+    def __init__(self, chapter_id, missing):
+        self.chapter_id = str(chapter_id)
+        self.missing = dict(missing)
+        super().__init__(f"Chapter {chapter_id}: server-failed image slots " +
+                         ','.join(str(k) for k in missing) +
+                         '; remaining images checkpointed, chapter deferred and NOT published')
+
+
+def classify_source_image_server_error(url, report, *, prior_status=None):
+    """Return a defensible server-failure classification or None.
+
+    A broken image alone is never sufficient: use observed Chromium Network
+    response metadata from the selected managed tab and same-URL DOM status.
+    Server refusal / access challenges (401,403,429), blocked extensions,
+    timeouts, debugger disconnections, and successful HTTP 200 with bad pixels
+    are UNKNOWN/LOCAL failures, not automatically tolerable server failures.
+    """
+    if not isinstance(report, dict):
+        return None
+    # The selected-tab webRequest listener can independently confirm actual
+    # source HTTP status when DevTools owns the debugger session.
+    network = report.get('network')
+    observed_via_web_request = (isinstance(network, dict) and
+        network.get('source') == 'chrome.webRequest' and
+        network.get('observedInManagedTab') is True)
+    if report.get('debuggerReady') is not True and not observed_via_web_request:
+        return None
+    if report.get('capturedOriginal') is True:
+        return None
+    network, dom = report.get('network'), report.get('dom')
+    if not isinstance(network, dict) or not isinstance(dom, dict):
+        return None
+    if report.get('url') != url or not dom.get('found') or dom.get('loaded') is not False:
+        return None
+    if network.get('failed') or network.get('fromServiceWorker'):
+        return None
+    try:
+        status = int(network.get('status', 0))
+    except (TypeError, ValueError):
+        return None
+    if status in (404, 410):
+        reason = 'confirmed_image_http_' + str(status)
+    elif 500 <= status <= 599 and prior_status is not None and 500 <= prior_status <= 599:
+        reason = 'repeated_source_http_5xx_after_reload'
+    else:
+        return None
+    return {'url':url, 'status':status, 'reason':reason,
+            'dom_dimensions':dom.get('dimensions'), 'debugger_confirmed':True}
+
+
+def adapter_confirmed_source_missing(page_url, chapter_id, key, selected, url, records):
+    """Accept only exact adapter-declared source gaps with a broken DOM image.
+
+    This is *not* an automatic HTTP-200 classification. Source-specific
+    identities are supplied exclusively by site_specific/site_adapter.py.
+    An image that decodes but cannot be captured is a LOCAL FAILURE.
+    """
+    if not isinstance(records, dict) or not selected or selected.get('loaded') is not False:
+        return None
+    try:
+        target = str(page_url).rstrip('/')
+        matching = [(str(k).rstrip('/'), value) for k,value in records.items()
+                    if str(k).rstrip('/') == target]
+        if len(matching) != 1:
+            return None
+        pages = matching[0][1]
+        if not isinstance(pages, (list,tuple,set,frozenset)):
+            return None
+        if str(key) not in {str(int(n)) for n in pages if str(n).isdigit()}:
+            return None
+        from urllib.parse import urlsplit
+        actual = urlsplit(str(url or ''))
+        if actual.scheme != 'https' or not actual.netloc:
+            return None
+        if not str(chapter_id):
+            return None
+    except (ValueError, TypeError):
+        return None
+    return {'url': str(url), 'status': None,
+            'reason': 'adapter_confirmed_origin_placeholder',
+            'adapter_confirmed': True, 'dom_unloaded': True,
+            'confirmation': 'verified_absent_on_multiple_devices'}
+
+
 def scan_browser_images(page, max_steps=1500, stability=5, *, guard=None, visible=True,
-                        manual_rounds=0, on_progress=None, checkpoint=None):
+                        manual_rounds=0, on_progress=None, checkpoint=None, recovery_reloads=0):
     """Lazily scroll the ORIGINAL site to discover ALL ordered reader images.
 
     Scroll modestly, sample after the site's own lazy loader has time to run,
@@ -363,6 +454,12 @@ def scan_browser_images(page, max_steps=1500, stability=5, *, guard=None, visibl
     last_unloaded = None
     missing_slots = 0
     resume_catalog = False
+    # Match the historically working two-stage reader flow: first allow the
+    # website's normal lazy loader to run to the real bottom, THEN revisit
+    # any genuinely missing image. A checkpoint catalog is not a scroll state.
+    recovery_phase = False
+    bottom_no_progress = 0
+    previous_loading = None
     for step in range(max_steps):
         if step % 7 == 0:
             page_state = classify_browser_page(page)
@@ -377,7 +474,7 @@ def scan_browser_images(page, max_steps=1500, stability=5, *, guard=None, visibl
                 # Restart counting image ordinals to avoid a partial/corrupted chapter.
                 return scan_browser_images(page, max_steps=max_steps, stability=stability,
                                            guard=guard, visible=visible,
-                                           manual_rounds=manual_rounds+1, on_progress=on_progress, checkpoint=checkpoint)
+                                           manual_rounds=manual_rounds+1, on_progress=on_progress, checkpoint=checkpoint, recovery_reloads=recovery_reloads)
         snapshot_hook = getattr(ADAPTER, 'custom_page_snapshot', None)
         custom_info = snapshot_hook(page) if callable(snapshot_hook) else None
         info = custom_info if custom_info is not None else page.evaluate(script)
@@ -433,8 +530,18 @@ def scan_browser_images(page, max_steps=1500, stability=5, *, guard=None, visibl
                   total=len(slot_order), strategy='missing-slots-only')
         if step == 0:
             resume_catalog = fast_resume
-        bottom = actual_bottom or resume_catalog
-        saved_keys = set(on_progress(info, tuple(slot_order), dict(seen), bottom)) if on_progress else set()
+        # The 1.5.13 regression was treating a checkpoint catalog as though
+        # the current browser had already scrolled to the bottom. That bypassed
+        # the entire lazy-loading pass and spent its three retries at once.
+        # Keep the real document position independent from verified metadata.
+        targeted_mode = bool(actual_bottom or recovery_phase)
+        bottom = actual_bottom
+        info['physicalAtBottom'] = actual_bottom
+        # No downloads beyond the first missing ordinal. The callback enforces
+        # that hard barrier even while the browser scrolls to trigger normal
+        # website lazy loading for the rest of the reader.
+        saved_keys = set(on_progress(info, tuple(slot_order), dict(seen),
+                                     targeted_mode) if on_progress else set())
         if not saved_keys.issubset(set(slot_order)):
             raise RuntimeError('Progress callback returned an unknown image ordinal')
         # An interrupted *mid-scroll* run has no bottom-verified catalog.
@@ -442,8 +549,7 @@ def scan_browser_images(page, max_steps=1500, stability=5, *, guard=None, visibl
         # browser to the FIRST missing DOM slot instead of rescrolling those
         # already-archived images. The rest of the chapter still gets scanned.
         resume_jump = False
-        if (step == 0 and checkpoint is not None and not resume_catalog and
-                not actual_bottom and slot_order):
+        if (step == 0 and checkpoint is not None and not actual_bottom and slot_order):
             prefix = checkpoint.verified_prefix(slot_order, seen)
             if 0 < prefix < len(slot_order):
                 key = slot_order[prefix]
@@ -460,51 +566,168 @@ def scan_browser_images(page, max_steps=1500, stability=5, *, guard=None, visibl
                         event('CHAPTER_RESUME_SKIPPED_VERIFIED_PREFIX', chapter=checkpoint.chapter_id,
                               verified_pages=prefix, first_missing=key)
 
-        all_saved = bool(slot_order) and len(saved_keys) == len(slot_order)
+        server_missing = set(getattr(on_progress, 'server_missing_keys', ())) if on_progress else set()
+        if not server_missing.issubset(set(slot_order)) or (server_missing & saved_keys):
+            raise RuntimeError('Server-failure evidence does not match the current image catalog')
+        all_accounted = bool(slot_order) and len(saved_keys | server_missing) == len(slot_order)
         signature = (len(seen), info["height"], info.get("revision",0),
-                     missing_slots, unloaded_slots, int(info.get("readerCount") or 0), len(saved_keys))
+                     missing_slots, unloaded_slots, int(info.get("readerCount") or 0),
+                     len(saved_keys), len(server_missing))
         ready = ((not expected or len(seen) == expected) and not missing_slots and
-                 (all_saved if on_progress else not unloaded_slots))
-        if bottom and ready and signature == prev_signature:
+                 (all_accounted if on_progress else not unloaded_slots))
+        if (targeted_mode or (resume_catalog and all_accounted)) and ready and signature == prev_signature:
             stable_bottom += 1
         else:
             stable_bottom = 0
-        # A fully traversed chapter that still has broken/not-yet-loaded
-        # images must not stall for the rest of max_steps. Give the normal
-        # browser a bounded grace window, then stop without archiving blanks.
-        if on_progress and bottom and slot_order and not all_saved:
-            # After the ONE forward pass, retry only missing slots. A successful
-            # decode causes the next progress callback to save it immediately.
-            missing_keys = [key for key in slot_order if key not in saved_keys]
-            target = next((key for key in missing_keys if revisit_attempts.get(key,0) < 3), None)
-            if target is None:
-                raise RuntimeError('Images still missing after targeted retries: ' + ','.join(missing_keys) +
-                                   '. Chapter not published.')
-            selected = next((im for im,k in zip(info['imgs'], current_keys) if k == target), None)
+        # The previous implementation immediately exhausted recovery retries
+        # at the first not-yet-decoded page. On lazy readers, a falling global
+        # unloaded count is proof that ordinary loading is still in progress.
+        # Wait for that progress to settle BEFORE any targeted recovery.
+        pending_key = next((key for key in slot_order if key not in saved_keys), None)
+        if pending_key in server_missing:
+            pending_key = next((key for key in slot_order if key not in saved_keys and
+                                key not in server_missing), None)
+        selected = next((im for im,k in zip(info['imgs'], current_keys) if k == pending_key), None)
+        capture_failed = getattr(on_progress, 'failed_key', None) == pending_key
+        loading_state = (len(seen), unloaded_slots, len(saved_keys), missing_slots)
+        if actual_bottom and pending_key and not recovery_phase:
+            if (previous_loading is not None and
+                loading_state[0] == previous_loading[0] and
+                loading_state[1] >= previous_loading[1] and
+                loading_state[2] == previous_loading[2] and
+                loading_state[3] == previous_loading[3]):
+                bottom_no_progress += 1
+            else:
+                bottom_no_progress = 0
+            # A few real passive observations at the physical bottom are
+            # enough to distinguish slow lazy loading from a persistent gap.
+            # Never trigger reloading while other images are still arriving.
+            if bottom_no_progress >= 6:
+                recovery_phase = True
+                event('SOURCE_LAZY_PASS_SETTLED', image_key=pending_key,
+                      unloaded=unloaded_slots, idle_checks=bottom_no_progress,
+                      note='normal forward loading complete; now targeting first unresolved ordinal')
+        else:
+            bottom_no_progress = 0
+        previous_loading = loading_state
+        # Explicit, human-verified source gaps are NOT transport errors.
+        # Check the exact adapter chapter URL + ordinal AND this document's
+        # still-broken <img>. Never excuse a decoded image whose capture failed.
+        if on_progress and checkpoint is not None and recovery_phase:
+            confirmations = getattr(ADAPTER, 'SOURCE_CONFIRMED_MISSING_PANELS', {})
+            register = getattr(on_progress, 'confirm_server_failure', None)
+            if callable(register) and isinstance(confirmations, dict):
+                newly_confirmed = 0
+                for image_key, im in zip(current_keys, info['imgs']):
+                    if image_key in saved_keys or image_key in server_missing:
+                        continue
+                    resolved = seen.get(image_key)
+                    if resolved is None or resolved['url'] != urljoin(page.url, im.get('url') or ''):
+                        continue
+                    classification = adapter_confirmed_source_missing(
+                        page.url, checkpoint.chapter_id, image_key, im,
+                        resolved['url'], confirmations)
+                    if classification:
+                        register(image_key, classification)
+                        server_missing.add(image_key)
+                        newly_confirmed += 1
+                        event('SOURCE_IMAGE_EXPLICITLY_CONFIRMED_MISSING',
+                              image_key=image_key, chapter=checkpoint.chapter_id,
+                              source_url=page.url, continue_later_images=True,
+                              source_record_in_adapter=True)
+                if newly_confirmed:
+                    # Reenter the checkpoint callback with the new exceptions
+                    # before attempting any recovery command for these slots.
+                    continue
+        if on_progress and pending_key and recovery_phase:
             if selected is None:
-                raise RuntimeError('Missing ordinal disappeared from original reader: ' + target)
-            retry_now = step % 2 == 0 or (selected.get('loaded') is False)
-            if retry_now:
-                revisit_attempts[target] = revisit_attempts.get(target, 0) + 1
-                action = getattr(page, 'recover_unloaded_image', None)
-                event('SOURCE_IMAGE_TARGETED_RETRY', image_key=target,
-                      attempt=revisit_attempts[target], decoded=bool(selected.get('loaded')))
-                if callable(action) and (selected.get('loaded') is False or not selected.get('url')):
+                raise RuntimeError('Reader ordinal disappeared before verified capture: '+pending_key)
+            attempts_done = revisit_attempts.get(pending_key, 0)
+            if attempts_done >= 3:
+                diag = getattr(page, 'image_diagnostics', None)
+                if callable(diag) and selected.get('url'):
+                    image_url = urljoin(page.url, selected['url'])
                     try:
-                        result = action(target, selected.get('url') or '')
-                    except RuntimeError as exc:
-                        # A Chrome scripting/receiver timeout affects one
-                        # ordinal, not the integrity of the other downloaded
-                        # images. Keep its checkpoint incomplete and revisit
-                        # it on the next targeted attempt/restart. Never mark
-                        # it saved or publish an incomplete chapter.
-                        event('SOURCE_IMAGE_RECOVERY_DEFERRED', image_key=target,
-                              attempt=revisit_attempts[target],
-                              error_type=type(exc).__name__, reason=str(exc)[:240])
+                        details = diag(image_url)
+                        event('SOURCE_IMAGE_NETWORK_DIAGNOSTICS',
+                              image_key=pending_key,
+                              network=details.get('network'),
+                              dom=details.get('dom'),
+                              debugger_ready=details.get('debuggerReady'))
+                        seen_status = (details.get('network') or {}).get('status')
+                        network_seen = getattr(on_progress, 'server_network_observations', None)
+                        if network_seen is None:
+                            network_seen = {}
+                            on_progress.server_network_observations = network_seen
+                        earlier = network_seen.get(pending_key)
+                        classification = classify_source_image_server_error(
+                            image_url, details,
+                            prior_status=(earlier if recovery_reloads > 0 else None))
+                        if classification:
+                            register = getattr(on_progress, 'confirm_server_failure', None)
+                            if callable(register):
+                                register(pending_key, classification)
+                                event('SOURCE_IMAGE_SERVER_FAILURE_TOLERATED',
+                                      image_key=pending_key, status=classification['status'],
+                                      reason=classification['reason'],
+                                      chapter_will_remain_unpublished=True,
+                                      continue_later_images=True)
+                                revisit_attempts.pop(pending_key, None)
+                                prev_signature = None
+                                continue
+                        if isinstance(seen_status, int) and 500 <= seen_status <= 599:
+                            network_seen[pending_key] = seen_status
+                    except Exception as exc:
+                        event('SOURCE_IMAGE_NETWORK_DIAGNOSTICS_UNAVAILABLE',
+                              image_key=pending_key,error_type=type(exc).__name__,
+                              reason=str(exc)[:180])
+                if recovery_reloads == 0 and callable(getattr(page, 'goto', None)):
+                    event('SOURCE_IMAGE_FINAL_CHAPTER_RELOAD', image_key=pending_key,
+                          verified_before=len(saved_keys), strategy='one-reload-then-retry')
+                    if guard:
+                        visit_source_page(page, page.url, guard, visible=visible)
                     else:
-                        event('SOURCE_IMAGE_TARGETED_RESULT', image_key=target,
-                              loaded=bool(result.get('loaded')), reason=result.get('reason',''))
-                page.wait_for_timeout(300)
+                        page.goto(page.url, wait_until='domcontentloaded', timeout=50000)
+                    after = getattr(ADAPTER, 'after_chapter_visit', None)
+                    if callable(after):
+                        after(page, page.url)
+                    reset_attempts = getattr(on_progress, 'reset_after_reload', None)
+                    if callable(reset_attempts):
+                        reset_attempts()
+                    return scan_browser_images(page, max_steps=max_steps,
+                        stability=stability, guard=guard, visible=visible,
+                        manual_rounds=manual_rounds, on_progress=on_progress,
+                        checkpoint=checkpoint, recovery_reloads=1)
+                # Report just the actual gap. Subsequent slots are deliberately
+                # not attempted, not individually defective images.
+                raise RuntimeError('First missing image after natural lazy loading and targeted recovery: ' +
+                                   pending_key + '; later images deliberately not attempted. Chapter not published.')
+            revisit_attempts[pending_key] = attempts_done + 1
+            action = getattr(page, 'recover_unloaded_image', None)
+            event('SOURCE_IMAGE_TARGETED_RETRY', image_key=pending_key,
+                  attempt=revisit_attempts[pending_key],
+                  decoded=bool(selected.get('loaded')),
+                  blocking_later_images=True, phase='after-natural-lazy-pass')
+            if callable(action):
+                try:
+                    try:
+                        result = action(pending_key, selected.get('url') or '',
+                                        force_position=True,
+                                        refresh_source=(attempts_done == 1))
+                    except TypeError as signature_error:
+                        if 'unexpected keyword argument' not in str(signature_error):
+                            raise
+                        result = action(pending_key, selected.get('url') or '')
+                except SourceAccessPaused:
+                    raise
+                except RuntimeError as exc:
+                    event('SOURCE_IMAGE_RECOVERY_DEFERRED', image_key=pending_key,
+                          attempt=revisit_attempts[pending_key],
+                          error_type=type(exc).__name__, reason=str(exc)[:240])
+                else:
+                    event('SOURCE_IMAGE_TARGETED_RESULT', image_key=pending_key,
+                          loaded=bool(result.get('loaded')), reason=result.get('reason',''))
+            page.wait_for_timeout(300)
             stable_unloaded = 0
             last_unloaded = None
         elif not on_progress and bottom and expected and len(seen) == expected and not missing_slots and unloaded_slots:
@@ -519,20 +742,29 @@ def scan_browser_images(page, max_steps=1500, stability=5, *, guard=None, visibl
         else:
             stable_unloaded = 0
             last_unloaded = None
-        if step % 25 == 0 or (bottom and stable_bottom == 0):
+        if step % 25 == 0 or (targeted_mode and stable_bottom == 0):
             event("SOURCE_LAZY_SCROLL_PROGRESS", step=step, discovered=len(seen),
                   expected=expected or None, unresolved_slots=missing_slots,
                   browser_images_not_loaded=unloaded_slots,
                   downloaded_during_scroll=len(saved_keys) if on_progress else None,
-                  at_bottom=bottom, stable_checks=stable_bottom)
+                  at_bottom=actual_bottom, resume_missing_only=resume_catalog, stable_checks=stable_bottom)
         if stable_bottom >= stability:
             break
         prev_signature = signature
-        if not bottom and not resume_jump:
+        # Never scroll beyond a missing image currently in reach. Resume the
+        # forward pass only after it has been captured and checkpointed.
+        # Restore the old working forward pass: normal scrolling can continue
+        # loading the website's images, but the checkpoint callback blocks
+        # saving anything beyond the first unresolved ordinal.
+        if not targeted_mode and not resume_jump and not (resume_catalog and all_accounted):
             page.evaluate(scroll_script)
         # Observe the *original reader* after the slow scroll.  A late src/data
         # mutation is picked up in the next sample, and resets stability.
-        page.wait_for_timeout(350 if bottom else 420)
+        # At a real bottom with a pending gap, sleep passively rather than
+        # repeatedly touching the page while its own image requests finish.
+        # This grace interval costs nothing on healthy, complete chapters.
+        page.wait_for_timeout(1600 if actual_bottom and pending_key and not recovery_phase
+                              else 350 if targeted_mode else 300)
     else:
         if on_progress:
             raise RuntimeError('Streaming chapter scan exhausted without verified ordered images; '
@@ -560,8 +792,8 @@ def scan_browser_images(page, max_steps=1500, stability=5, *, guard=None, visibl
         first = int(order[0])
         if expected and [int(k) for k in order] != list(range(first,first+expected)):
             raise RuntimeError("Page ordinals have gaps or duplicates")
-    if on_progress and len(saved_keys) != len(slot_order):
-        raise RuntimeError('Streaming scan did not verify every page in the DOM order')
+    if on_progress and len(saved_keys | server_missing) != len(slot_order):
+        raise RuntimeError('Streaming scan did not resolve every page in DOM order')
     event("SOURCE_LAZY_SCROLL_COMPLETE", discovered=len(order),
           expected=expected or None, downloaded_during_scroll=len(saved_keys) if on_progress else None,
           scroll_steps=step+1,
@@ -1447,6 +1679,7 @@ def acquire_chapter(context, chapter: Chapter, storage: Path, config=CONFIG, gua
         checkpoint = ChapterImageCheckpoint(chapter_dir, chapter.chapter_id, chapter.url)
         saved = {}
         attempts = {}
+        server_failures = {}
         def save_as_scroll_reveals(info, slot_order, seen, at_bottom):
             if len(slot_order) > config['max_pages_per_chapter']:
                 raise RuntimeError('Chapter page count exceeds configured safety limit')
@@ -1457,17 +1690,24 @@ def acquire_chapter(context, chapter: Chapter, storage: Path, config=CONFIG, gua
             # Preserve the COMPLETE ordered catalog once we have reached the
             # real bottom, even when some images are still missing. This is
             # what makes the following run avoid another full scroll.
-            if (at_bottom and len(slot_order) == int(info.get('total') or 0) and
+            if (info.get('physicalAtBottom', at_bottom) and len(slot_order) == int(info.get('total') or 0) and
                     len(seen) == len(slot_order) and not info.get('missingSlots')):
                 checkpoint.record_catalog(slot_order, seen)
             reach = float(info.get('scrollY') or 0) + float(info.get('viewportHeight') or 0) + 120
+            # When the full ordered catalog is known, work in reading order.
+            # Previously an unloaded image 56 caused 61..118 to be captured
+            # first and then 56 to be visited from the bottom. Keeping a
+            # contiguous prefix avoids those long backwards jumps.
+            ordered_retry = bool(checkpoint.catalog_matches(
+                slot_order, seen, len(slot_order)))
+            save_as_scroll_reveals.failed_key = None
             for i,key in enumerate(slot_order,1):
-                if key in saved:
+                if key in saved or key in server_failures:
                     continue
                 resolved = seen.get(key)
                 im = by_key.get(key)
                 if not resolved or not im or not im.get('url'):
-                    continue
+                    break  # first unverified image blocks all later capture
                 if resolved['url'] != urljoin(page.url, im['url']):
                     raise RuntimeError('Source image identity changed during ordered download: '+key)
                 restored = checkpoint.reuse(key, i, resolved['url'])
@@ -1477,14 +1717,15 @@ def acquire_chapter(context, chapter: Chapter, storage: Path, config=CONFIG, gua
                           image=i,total=len(slot_order),bytes=restored[1]['bytes'])
                     continue
                 if im.get('loaded') is False:
-                    continue
+                    break  # try this ordinal first, before later pages
                 if not at_bottom and 'pageY' in im and info.get('viewportHeight') is not None:
                     if float(im['pageY']) > reach:
-                        continue
+                        break  # wait until normal forward scroll reaches this slot
                 # Avoid repeated fetches while advancing the reader. At the
                 # bottom, targeted retries may attempt a failed image again.
-                if attempts.get(key,0) >= (3 if at_bottom else 1):
-                    continue
+                if attempts.get(key,0) >= 3:
+                    save_as_scroll_reveals.failed_key = key
+                    break  # scanner must recover/reload or stop, not skip this gap
                 attempts[key] = attempts.get(key,0) + 1
                 try:
                     path, meta = image_download(context, resolved['url'], chapter_dir / f'{i:04d}', chapter.url,
@@ -1497,15 +1738,66 @@ def acquire_chapter(context, chapter: Chapter, storage: Path, config=CONFIG, gua
                 except Exception as exc:
                     event('IMAGE_DEFERRED_FOR_TARGETED_RETRY',chapter=chapter.chapter_id,
                           image=i, error=str(exc)[:250])
-                    continue
+                    save_as_scroll_reveals.failed_key = key
+                    break  # never attempt a later image after a capture error
                 saved[key] = checkpoint.record_image(key, i, resolved['url'], path, meta)
                 event('IMAGE_VALIDATED',chapter=chapter.chapter_id,image=i,
                       total=len(slot_order),bytes=meta['bytes'],during_scroll=True)
             return set(saved)
-        found = scan_browser_images(page, config['page_scan_steps'], config['page_scan_stability_steps'],
-                                    guard=guard, visible=visible, on_progress=save_as_scroll_reveals,
-                                    checkpoint=checkpoint)
+        def confirm_server_failure(key, classification):
+            if key in saved:
+                raise RuntimeError('Cannot mark an already verified image as missing')
+            server_failures[key] = dict(classification)
+            # State is persisted in the normal per-chapter working directory,
+            # not the site adapter or permanent Git archive. Later runs can
+            # retry these slots, and verified files are kept intact.
+            atomic_json(chapter_dir / 'confirmed_server_failures.json', {
+                'chapter_id':chapter.chapter_id, 'chapter_url':chapter.url,
+                'recorded_at':utc(), 'failures':server_failures})
+        save_as_scroll_reveals.confirm_server_failure = confirm_server_failure
+        save_as_scroll_reveals.server_missing_keys = server_failures
+        save_as_scroll_reveals.server_network_observations = {}
+        save_as_scroll_reveals.reset_after_reload = attempts.clear
+        # A Chrome tab can become unresponsive after dozens of captures. The
+        # extension replaces only its owned tab and returns a reset marker.
+        # Never retry the timed-out relative scroll: that can double-advance.
+        # Start a NEW DOM scan in the new document; per-image checkpoints and
+        # the in-memory saved dict preserve all verified work exactly once.
+        from .browser_bridge import BrowserManagedTabRecycled
+        for managed_reset in range(3):
+            try:
+                found = scan_browser_images(page, config['page_scan_steps'], config['page_scan_stability_steps'],
+                                            guard=guard, visible=visible, on_progress=save_as_scroll_reveals,
+                                            checkpoint=checkpoint)
+                break
+            except BrowserManagedTabRecycled:
+                if managed_reset >= 2:
+                    raise RuntimeError('Managed Chrome tab stalled repeatedly even after two automatic '
+                                       'replacements. Verified checkpoints retained; restart later.')
+                event('BROWSER_MANAGED_TAB_RECOVERED', chapter=chapter.chapter_id,
+                      attempt=managed_reset+1, verified_images=len(saved),
+                      recovery='new-extension-owned-tab; restart scanner from checkpoint')
+                attempts.clear()
+                # tabs.create already navigated this NEW managed document.
+                # Do not navigate/reload a second time: that can retrigger the
+                # source challenge or stall the just-recovered Chrome tab.
+                page.content()
+                if guard:
+                    state = classify_browser_page(page)
+                    if state in ('challenge', 'login'):
+                        wait_for_manual_source_access(page, chapter.url, guard,
+                            visible=visible, reason=f'{state} after managed tab replacement')
+                if callable(after):
+                    after(page, chapter.url)
         keys = [key for key, _ in found]
+        if server_failures:
+            # Save all later reachable images in their original DOM positions;
+            # defer the whole chapter. Never invent placeholder image bytes or
+            # publish a manifest claiming completeness.
+            event('CHAPTER_SERVER_IMAGES_DEFERRED', chapter=chapter.chapter_id,
+                  confirmed_missing=list(server_failures), verified_images=len(saved),
+                  expected=len(keys), no_incomplete_publication=True)
+            raise SourceImageServerUnavailable(chapter.chapter_id, server_failures)
         if any(key not in saved or saved[key][1].get('source_url') != im['url']
                for key,im in found) or len(saved) != len(keys):
             raise RuntimeError('Chapter has missing or changed ordered pages; no incomplete archive can be published')
@@ -1532,7 +1824,7 @@ def ensure_cleanup(base: Path):
         event("LOCAL_CHAPTER_CLEANUP_VERIFIED", deleted_files=count, deleted_bytes=bytes_)
 
 
-def _archive_run_once(db, source_html: Path | None, source_url: str | None, max_chapters, authorized, *, source_headless=None, source_browser="firefox", force_rediscover=False, skip_remote_reconcile=False):
+def _archive_run_once(db, source_html: Path | None, source_url: str | None, max_chapters, authorized, *, source_headless=None, source_browser="firefox", force_rediscover=False, skip_remote_reconcile=False, retry_server_failures=False):
     """Resume from verified GitHub first; crawl only *unarchived* source chapters.
 
     A completed source episode catalog survives across all versions that use the
@@ -1566,11 +1858,29 @@ def _archive_run_once(db, source_html: Path | None, source_url: str | None, max_
     if source_html:
         set_option(db, "source_html_path", str(source_html.resolve()))
     stored = _saved_chapters(db) if _catalog_complete(db) and not force_rediscover else None
-    remaining = ([ch for ch in stored if
-                  db.execute("SELECT status FROM chapters WHERE chapter_id=?", (ch.chapter_id,)).fetchone()[0]
-                  not in PUBLISHABLE_STATES] if stored is not None else None)
+    # Confirmed source-side failures are durable exceptions, not downloader
+    # failures. Keep their reports in SQLite/checkpoints/the global issue feed,
+    # but never spend an ordinary resume rescanning them. A deliberate repair
+    # run can opt into --retry-server-failures.
+    remaining = (_source_resume_candidates(db, stored, retry_server_failures=retry_server_failures)
+                 if stored is not None else None)
     if stored is not None and not remaining:
-        event("ARCHIVE_ALL_KNOWN_CHAPTERS_ALREADY_VERIFIED", chapters=len(stored), source_requests=0)
+        # An interrupted post-push cleanup is local-only; do it without
+        # opening Chrome or requesting any chapter from the source server.
+        for ch in stored:
+            status = db.execute('SELECT status FROM chapters WHERE chapter_id=?',
+                                (ch.chapter_id,)).fetchone()[0]
+            if status == 'ARCHIVED_VERIFIED':
+                ensure_cleanup(DATA / 'temporary_downloads' / safe_slug(ch.chapter_id, 45))
+                with db:
+                    db.execute("UPDATE chapters SET status='ARCHIVED_PENDING_DEPLOYMENT',updated_at=? "
+                               "WHERE chapter_id=?", (utc(), ch.chapter_id))
+                event('CHAPTER_POSTPUSH_CLEANUP_COMPLETED', chapter=ch.chapter_id,
+                      source_requests=0)
+        event("ARCHIVE_ALL_KNOWN_CHAPTERS_ALREADY_VERIFIED", chapters=len(stored),
+              deferred_server_chapters=db.execute(
+                  "SELECT COUNT(*) FROM chapters WHERE status='SOURCE_SERVER_DEFERRED'").fetchone()[0],
+              source_requests=0)
         return
     if stored is not None:
         event("CHAPTER_CATALOG_REUSED", total=len(stored), missing=len(remaining),
@@ -1633,6 +1943,11 @@ def _archive_run_once(db, source_html: Path | None, source_url: str | None, max_
                     event("SKIP_VERIFIED_GITHUB_CHAPTER", chapter=ch.chapter_id,
                           repo=existing[1], source_requests=0)
                     continue
+                if existing and existing[0] == 'SOURCE_SERVER_DEFERRED' and not retry_server_failures:
+                    event('SKIP_CONFIRMED_SERVER_MISSING_CHAPTER', chapter=ch.chapter_id,
+                          reason='known_source_failure_not_downloader_failure',
+                          source_requests=0, notification_preserved=True)
+                    continue
                 folder = DATA / "temporary_downloads" / safe_slug(ch.chapter_id, 45)
                 if existing and existing[0] == "ARCHIVED_VERIFIED":
                     # Reconciliation verifies remote before this branch.
@@ -1642,8 +1957,28 @@ def _archive_run_once(db, source_html: Path | None, source_url: str | None, max_
                                    (utc(), ch.chapter_id))
                     continue
                 event("CHAPTER_START", chapter=ch.chapter_id, url=ch.url)
-                files, manifest = acquire_chapter(ctx, ch, DATA / "temporary_downloads",
-                                                  guard=guard, visible=not actual_headless)
+                try:
+                    files, manifest = acquire_chapter(ctx, ch, DATA / "temporary_downloads",
+                                                      guard=guard, visible=not actual_headless)
+                except SourceImageServerUnavailable as exc:
+                    # A source-origin 404/410 or repeated 5xx is not a broken
+                    # bridge. Keep this chapter retryable while archiving the
+                    # remaining chapters. Never upload the incomplete chapter.
+                    with db:
+                        db.execute("UPDATE chapters SET status='SOURCE_SERVER_DEFERRED',updated_at=? "
+                                   "WHERE chapter_id=?", (utc(), ch.chapter_id))
+                    from .reader_issue_feed import write_issue_feed
+                    active_feed = write_issue_feed(ROOT,
+                        ROOT / '.archiver_state' / 'source-issues.json')
+                    event('SOURCE_ISSUE_FEED_UPDATED', active_cases=active_feed['count'],
+                          affected_works=active_feed['affected_works'],
+                          feed=str(ROOT / '.archiver_state' / 'source-issues.json'),
+                          public_worker_update_pending=True)
+                    event('CHAPTER_SERVER_ERROR_CONTINUING', chapter=ch.chapter_id,
+                          missing_images=list(exc.missing),
+                          next_chapter=True, checkpoint_retained=True,
+                          github_upload=False)
+                    continue
                 # Store archive order in new manifests so even an entirely lost
                 # SQLite DB can recover exact order from existing remote repos.
                 manifest["ordinal"] = next((n for n, c in enumerate(chapters) if c.chapter_id == ch.chapter_id), 0)
@@ -1666,6 +2001,8 @@ def _archive_run_once(db, source_html: Path | None, source_url: str | None, max_
                                (repo, commit, total, json.dumps(manifest), manifest.get('chapter_title') or ch.label, utc(), ch.chapter_id))
                     db.execute("UPDATE repositories SET logical_bytes=logical_bytes+?,file_count=file_count+?,last_sha=?,updated_at=? WHERE name=?",
                                (total, len(files), commit, utc(), repo))
+                from .reader_issue_feed import write_issue_feed
+                write_issue_feed(ROOT, ROOT / '.archiver_state' / 'source-issues.json')
                 ensure_cleanup(folder)
                 with db:
                     db.execute("UPDATE chapters SET status='ARCHIVED_PENDING_DEPLOYMENT',updated_at=? WHERE chapter_id=?",
@@ -1679,7 +2016,7 @@ def _archive_run_once(db, source_html: Path | None, source_url: str | None, max_
 
 def archive_run(db, source_html: Path | None, source_url: str | None, max_chapters, authorized,
                 *, source_headless=None, source_browser="firefox", force_rediscover=False,
-                skip_initial_github_check=False):
+                skip_initial_github_check=False, retry_server_failures=False):
     """Resume archive and reopen visibly if a headless page needs a human.
 
     A visible retry is attempted at most once. The source profile and saved
@@ -1690,7 +2027,8 @@ def archive_run(db, source_html: Path | None, source_url: str | None, max_chapte
                                  source_headless=source_headless,
                                  source_browser=source_browser,
                                  force_rediscover=force_rediscover,
-                                 skip_remote_reconcile=skip_initial_github_check)
+                                 skip_remote_reconcile=skip_initial_github_check,
+                                 retry_server_failures=retry_server_failures)
     except SourceManualActionRequired as exc:
         if source_headless is False:
             raise
@@ -1701,7 +2039,8 @@ def archive_run(db, source_html: Path | None, source_url: str | None, max_chapte
                                  source_headless=False,
                                  source_browser=source_browser,
                                  force_rediscover=force_rediscover,
-                                 skip_remote_reconcile=True)
+                                 skip_remote_reconcile=True,
+                                 retry_server_failures=retry_server_failures)
 
 
 def source_login(db, source_html: Path | None, source_url: str | None, source_browser="firefox"):
@@ -2479,8 +2818,15 @@ def _publish_reader_on_verified_volume(db, reader_stage, grouped, owner,
 
 def deploy_run(db, mode='shared-worker'):
     if mode == 'shared-worker':
+        # The shared publisher enumerates only comics with a trusted public
+        # image-volume host. A GitHub-verified archive with no Pages host was
+        # silently omitted before this preflight, despite intact image files.
+        from .shared_reader_volume import ensure_current_image_hosts, verify_current_in_shared_reader
+        ensure_current_image_hosts(sys.modules[__name__], db)
         from .open_reader import publish
-        return publish(sys.modules[__name__], db)
+        url = publish(sys.modules[__name__], db)
+        verify_current_in_shared_reader(sys.modules[__name__], db, url)
+        return url
     print('Cloudflare: verifying existing published reader before any upload...', flush=True)
     already_live = _published_reader_unchanged(db, mode)
     if already_live:
@@ -2666,6 +3012,31 @@ def status(db):
         pass
     print("  Logs:", DATA / "events.jsonl")
 
+
+
+def _source_chapter_done(status, *, retry_server_failures=False):
+    """Whether this chapter needs NO new source-browser requests.
+
+    A confirmed server-side missing panel stays in SQLite and in the issue feed.
+    A GitHub-verified chapter awaiting local cleanup is also not source work.
+    Neither status is allowed to masquerade as a published complete chapter.
+    """
+    return (status in PUBLISHABLE_STATES or status == 'ARCHIVED_VERIFIED' or
+            (status == 'SOURCE_SERVER_DEFERRED' and not retry_server_failures))
+
+
+def _source_resume_candidates(db, stored, *, retry_server_failures=False):
+    """Ordered first genuinely unarchived/downloader-failed chapter through newest.
+
+    Does not alter status or source-issue reports. This prevents a known server
+    gap (82) from replaying all verified chapters (83--98) on every run.
+    """
+    rows = dict(db.execute('SELECT chapter_id,status FROM chapters'))
+    missing_rows = [ch.chapter_id for ch in stored if str(ch.chapter_id) not in rows]
+    if missing_rows:
+        raise RuntimeError('Saved chapter catalog and status records disagree: '+str(missing_rows[:8]))
+    return [ch for ch in stored if not _source_chapter_done(
+        rows[str(ch.chapter_id)], retry_server_failures=retry_server_failures)]
 
 
 ARCHIVED_STATES = frozenset({"ARCHIVED_VERIFIED", "LOCAL_FILES_DELETED",
@@ -3100,6 +3471,8 @@ def build_parser():
     a.add_argument("--status", action="store_true")
     a.add_argument("--audit-resources", action="store_true", help="Show reader/volume dependencies; does not delete anything")
     a.add_argument("--resume", action="store_true", help="Resume saved archive then publish pending chapters")
+    a.add_argument('--retry-server-failures', action='store_true',
+                   help='Explicitly revisit chapters with confirmed source-side missing panels')
     a.add_argument("--github-switch-account", action="store_true")
     a.add_argument("--github-logout", action="store_true")
     a.add_argument("--archive", action="store_true")
@@ -3227,7 +3600,8 @@ def main():
             archive_run(db, args.source_html, args.source_url, args.max_chapters, args.authorized,
                         source_headless=desired_headless, source_browser=args.source_browser,
                         force_rediscover=args.refresh_chapters,
-                        skip_initial_github_check=args.skip_initial_github_check)
+                        skip_initial_github_check=args.skip_initial_github_check,
+                        retry_server_failures=args.retry_server_failures)
         # Metadata is a separate completion axis from image archiving. The
         # source adapter may enrich chapter numbers with full native titles.
         # Check ALL archived chapters (including previously published ones),

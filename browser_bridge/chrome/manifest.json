@@ -2,14 +2,15 @@
   "manifest_version": 3,
   "name": "Comic Bridge — Local Reader",
   "description": "Automatically reconnects to the local Python archiver and the selected comic tab; no code required.",
-  "version": "1.5.10",
+  "version": "1.5.17",
   "permissions": [
     "tabs",
     "storage",
     "scripting",
     "debugger",
     "activeTab",
-    "alarms"
+    "alarms",
+    "webRequest"
   ],
   "host_permissions": [
     "http://127.0.0.1:18765/*",

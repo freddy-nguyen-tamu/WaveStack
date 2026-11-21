@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
-  "name": "Comic Bridge — Local Reader",
+  "name": "Comic Bridge \u2014 Local Reader",
   "description": "Automatically reconnects to the local Python archiver and the selected comic tab; no code required.",
-  "version": "1.5.10",
+  "version": "1.5.17",
   "browser_specific_settings": {
     "gecko": {
       "id": "comic-local-bridge@local.invalid"
@@ -11,7 +11,8 @@
   "permissions": [
     "tabs",
     "storage",
-    "http://127.0.0.1:18765/*"
+    "http://127.0.0.1:18765/*",
+    "webRequest"
   ],
   "background": {
     "scripts": [

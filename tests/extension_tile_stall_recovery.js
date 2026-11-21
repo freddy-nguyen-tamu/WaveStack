@@ -23,7 +23,7 @@ async function contentCase(painted) {
     requestAnimationFrame:raf,scrollTo:window.scrollTo,
     getComputedStyle:()=>({}),URL,setTimeout,clearTimeout,Promise,Number,String,Math,Date,Error,console};
   vm.createContext(sandbox); vm.runInContext(content,sandbox);
-  assert.equal(window.__comicBridgeContentLoadedVersion,7);
+  assert.equal(window.__comicBridgeContentLoadedVersion,9);
   const start=Date.now();
   const result=await window.__comicBridgeDirect({type:'CAPTURE_IMAGE_TILE',payload:{url:image,offsetCss:200}});
   const elapsed=Date.now()-start;
@@ -62,13 +62,13 @@ async function backgroundCase() {
   const reply=await sandbox.__probe.send(7,{type:'CAPTURE_IMAGE_TILE',payload:{url:image,offsetCss:200}});
   assert.equal(reply.ok,true);
   assert.equal(messages,1);
-  assert.equal(injections,1);
+  assert.equal(injections,0);
   assert.equal(dispatched,1);
   // Non-idempotent forward scrolling must NEVER trigger a second transport.
   await assert.rejects(
     sandbox.__probe.checkedIO(sandbox.__probe.send(7,{type:'SCROLL'}),'scroll must not retry'),
     /stalled.*scroll must not retry/);
-  assert.equal(injections,1,'a scroll command was incorrectly retried');
+  assert.equal(injections,0,'a scroll command was incorrectly retried');
   assert.equal(messages,2);
 }
 (async()=>{

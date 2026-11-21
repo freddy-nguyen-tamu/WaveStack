@@ -36,7 +36,7 @@ async function directTabCommand(id, payload) {
       const dispatch = async () => {
         const reply=await chrome.scripting.executeScript({target,
           func: command => {
-            if(window.__comicBridgeContentLoadedVersion !== 7 ||
+            if(window.__comicBridgeContentLoadedVersion !== 9 ||
                typeof window.__comicBridgeDirect !== 'function')
               return {__bridgeError:'Page command transport not initialized'};
             return window.__comicBridgeDirect(command);
@@ -130,6 +130,9 @@ let inspectedTabId = null;
 let inspectedReady = false;
 const imageRequests = new Map(); // URL -> requestId, only this tab
 const imageByRequest = new Map(); // requestId -> URL, cleared per chapter
+const imageNetworkStatus = new Map(); // Sanitized CDP Network status (DevTools equivalent), this tab only
+const imageWebRequestStatus = new Map(); // Permitted selected-tab HTTP status; independent of debugger
+const networkRequestUrl = new Map(); // requestId -> permitted image URL, bounded per chapter
 const capturedImages = new Map(); // URL -> original base64 response body
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_CAPTURE_BYTES = 72 * 1024 * 1024;
@@ -151,6 +154,9 @@ const imagePermission = raw => {
 function clearImageMemory() {
   imageRequests.clear();
   imageByRequest.clear();
+  imageNetworkStatus.clear();
+  imageWebRequestStatus.clear();
+  networkRequestUrl.clear();
   capturedImages.clear();
   capturedBytes = 0;
   captureFailures = 0;
@@ -205,17 +211,45 @@ async function attachSelectedTab() {
   }
   return true;
 }
+// Independent HTTP evidence even when DevTools or the debugger owns the tab.
+// Permissions are still generated EXCLUSIVELY from the active site adapter.
+const permittedWebRequestUrls=(chrome.runtime.getManifest().host_permissions || [])
+  .filter(p=>p.startsWith('https://') && p.endsWith('/*'));
+if (permittedWebRequestUrls.length && chrome.webRequest?.onCompleted?.addListener) {
+  chrome.webRequest.onCompleted.addListener(details=>{
+    if(!state || details.tabId!==state.tabId || details.type!=='image' ||
+       !imagePermission(details.url)) return;
+    const url=normalizeResourceUrl(details.url);
+    const status=Number(details.statusCode)||0;
+    if(status<100 || status>599)return;
+    imageWebRequestStatus.set(url,{
+      status,source:'chrome.webRequest',fromCache:!!details.fromCache,
+      observedInManagedTab:true,failed:false
+    });
+    if(imageWebRequestStatus.size>400)
+      imageWebRequestStatus.delete(imageWebRequestStatus.keys().next().value);
+  }, {urls:permittedWebRequestUrls,types:['image']});
+}
 if (chrome.debugger?.onEvent?.addListener) {
   chrome.debugger.onEvent.addListener((source, method, params={}) => {
     if (!state || source.tabId !== state.tabId || source.tabId !== inspectedTabId ||
         !inspectedReady) return;
     if (method === 'Network.responseReceived' && params.type === 'Image' &&
-        params.response?.status >= 200 && params.response?.status < 300 &&
-        imagePermission(params.response.url)) {
+        imagePermission(params.response?.url)) {
       const url = normalizeResourceUrl(params.response.url);
-      imageRequests.set(url, params.requestId);
-      imageByRequest.set(params.requestId, url);
-      if (imageRequests.size > 400) imageRequests.delete(imageRequests.keys().next().value);
+      const status = Number(params.response.status) || 0;
+      imageNetworkStatus.set(url, {status,
+        mimeType:String(params.response.mimeType||'').slice(0,80),
+        fromDiskCache:!!params.response.fromDiskCache,
+        fromServiceWorker:!!params.response.fromServiceWorker});
+      networkRequestUrl.set(params.requestId,url);
+      if (imageNetworkStatus.size>400) imageNetworkStatus.delete(imageNetworkStatus.keys().next().value);
+      if (networkRequestUrl.size>400) networkRequestUrl.delete(networkRequestUrl.keys().next().value);
+      if (status>=200 && status<300) {
+        imageRequests.set(url, params.requestId);
+        imageByRequest.set(params.requestId, url);
+        if (imageRequests.size > 400) imageRequests.delete(imageRequests.keys().next().value);
+      }
     } else if (method === 'Network.loadingFinished') {
       // Critical: capture original bytes IMMEDIATELY after the normal page
       // loads an image, rather than waiting until the entire lazy scroll ends.
@@ -229,7 +263,11 @@ if (chrome.debugger?.onEvent?.addListener) {
         else captureFailures++;
       }).catch(() => {captureFailures++;});
     } else if (method === 'Network.loadingFailed') {
+      const url=networkRequestUrl.get(params.requestId);
+      if(url) imageNetworkStatus.set(url,{...(imageNetworkStatus.get(url)||{}),
+        failed:true,errorText:String(params.errorText||'').slice(0,130)});
       imageByRequest.delete(params.requestId);
+      networkRequestUrl.delete(params.requestId);
     }
   });
 }
@@ -438,10 +476,11 @@ async function captureVisibleImage(url) {
     throw Error('Chrome screenshot and image-composition APIs unavailable');
   const tab=await checkedIO(tabsGet(state.tabId), 'get selected tab');
   if(!tab.active) await checkedIO(tabsUpdate(state.tabId,{active:true}), 'focus selected tab');
-  const priorPosition=await checkedIO(send(state.tabId,{type:'SCROLL_POSITION'}), 'read scroll position');
-  const restoreY=Number(priorPosition?.scrollY);
+  // Do not restore a stale scroll offset between individual screenshots.
+  // In particular, checkpoint resumes often start at the bottom; restoring
+  // that bottom after each tile visibly teleported up/down 100+ times.
+  // Screenshots now advance the normal tab toward the next ordered image.
   let canvas=null, ctx=null, nextCss=0, sourceWidth=0, sourceHeight=0;
-  try {
   for(let tile=0;tile<100;tile++) {
     const r=await checkedIO(send(state.tabId,{type:'CAPTURE_IMAGE_TILE',payload:{url:key,offsetCss:nextCss}}), 'position image tile');
     if(!r?.ok || !r.loaded) throw Error('The image is not visibly decoded in the paired tab: '+String(r?.reason||key));
@@ -494,12 +533,6 @@ async function captureVisibleImage(url) {
     nextCss=end;
   }
   throw Error('Visual image capture exceeded the tile safety limit');
-  } finally {
-    if (Number.isFinite(restoreY) && restoreY >= 0) {
-      try {await checkedIO(send(state.tabId,{type:'RESTORE_SCROLL',payload:{scrollY:restoreY}}),
-        'restore image capture position');} catch {}
-    }
-  }
 }
 
 function captureDiagnostics() {
@@ -593,6 +626,55 @@ async function toBase64(bytes) {
     reader.readAsDataURL(blob);
   });
 }
+// A genuinely stalled selected-tab content channel is a LOCAL failure, never
+// permission to record a server-missing image or silently advance a chapter.
+// Recycle only the tab this extension explicitly created. Python will restart
+// the scan from per-image checkpoints; it will NOT retry a non-idempotent SCROLL.
+async function recycleManagedChapterTab() {
+  if (!state) throw Error('No paired tab to recycle');
+  const oldId=state.tabId;
+  const old=await checkedIO(tabsGet(oldId),'inspect managed tab before recycling',5000);
+  if (!old || !sourceMatches(old.url)) throw Error('Untrusted tab cannot be recycled');
+  const saved=await checkedIO(storageGet(['comicBridgeManagedTabId','comicBridgeManagedSite']),
+      'verify managed tab ownership',5000);
+  const hostname=new URL(old.url).hostname;
+  if (saved.comicBridgeManagedTabId!==oldId || saved.comicBridgeManagedSite!==hostname)
+    throw Error('Refusing to recycle a tab not owned by Comic Bridge');
+  let replacement=null;
+  try {
+    replacement=await checkedIO(call(chrome.tabs,'create',{url:old.url,active:true}),
+      'create new managed chapter tab',12000);
+    if (!replacement || !Number.isInteger(replacement.id) || replacement.id===oldId)
+      throw Error('Chrome did not create a distinct managed tab');
+    state.tabId=replacement.id;
+    await checkedIO(waitContent(45000,old.url),'initialize new managed chapter document',48000);
+    await checkedIO(storageSet({comicBridgeManagedTabId:replacement.id,
+      comicBridgeManagedSite:hostname,selectedTabId:replacement.id}),
+      'persist replacement managed tab',6000);
+    // Rebind the Python listener before completing the pending RPC, or its
+    // next command might be attributed to the closed old tab.
+    await checkedIO(api('/hello',{url:old.url,bridge_protocol:'visual-transfer-2',
+      capabilities:['probe','image','content-v2'],
+      tab_ownership:'extension-managed',tab_id:replacement.id}),
+      'rebind Python to replacement tab',6000);
+    clearImageMemory();
+    // Only an extension-owned tab is eligible; user's other Chrome tabs remain.
+    try {await checkedIO(call(chrome.tabs,'remove',oldId),
+      'close stalled extension-owned tab',3000);} catch(error) {
+      console.warn('Comic Bridge: old managed tab could not be closed:',String(error));
+    }
+    return {transport_reset:true,tab_id:replacement.id,url:old.url,
+      reason:'stalled selected-tab scroll transport; new managed document ready'};
+  } catch(error) {
+    state.tabId=oldId;
+    if (replacement?.id) {
+      try {await checkedIO(call(chrome.tabs,'remove',replacement.id),
+        'close unsuccessful replacement tab',2500);} catch {}
+    }
+    throw error;
+  }
+}
+
 async function execute(job) {
   const {action,payload={}}=job;
   await tabInfo();
@@ -605,11 +687,34 @@ async function execute(job) {
     const current=new URL((await tabsGet(state.tabId)).url);
     if (!sourceMatches(desired.href) || desired.host !== current.host)
       throw Error('Cross-site navigation refused');
+    clearImageMemory();
     if (desired.href !== current.href) {
-      clearImageMemory();
       await tabsUpdate(state.tabId,{url:desired.href});
+    } else {
+      // A recovery reload must create a NEW document even at the SAME URL.
+      // The prior no-op reused a stalled content script forever. Observe the
+      // loading->complete transition; a same-URL PING alone is not proof.
+      const tabId=state.tabId;
+      const completed=new Promise((resolve,reject)=>{
+        let sawLoading=false, done=false, timer;
+        const finish=error=>{
+          if(done)return; done=true;clearTimeout(timer);
+          chrome.tabs.onUpdated.removeListener(observer);
+          error?reject(error):resolve();
+        };
+        const observer=(id,info)=>{
+          if(id!==tabId)return;
+          if(info.status==='loading')sawLoading=true;
+          if(info.status==='complete' && sawLoading)finish();
+        };
+        chrome.tabs.onUpdated.addListener(observer);
+        timer=setTimeout(()=>finish(Error('Same-URL reload did not finish loading')),45000);
+        // Listener is installed BEFORE starting reload. There is no valid
+        // shortcut based on the existing page answering a PING.
+      });
+      await Promise.all([completed,call(chrome.tabs,'reload',tabId,{bypassCache:false})]);
     }
-    // Never accept the old chapter's receiver while tabs.update commits.
+    // Never accept the old chapter's receiver while navigation commits.
     const result=await waitContent(85000, desired.href);
     return {url:result.url,status:200};
   }
@@ -656,6 +761,15 @@ async function execute(job) {
     }
     return {url:response.url,status:response.status,headers:{'retry-after':response.headers.get('retry-after') || ''},base64:encoded,diagnostics};
   }
+  if(action==='image_diagnostics') {
+    const key=normalizeResourceUrl(payload?.url);
+    if(!imagePermission(key)) throw Error('Image diagnostics must be limited to adapter-permitted URLs');
+    let dom=null;
+    try {dom=await checkedIO(send(state.tabId,{type:'IMAGE_STATUS',payload:{url:key}}),
+      'read-only source image status',3500);} catch {}
+    return {url:key,network:imageNetworkStatus.get(key)||imageWebRequestStatus.get(key)||null,
+      capturedOriginal:capturedImages.has(key),dom,debuggerReady:!!inspectedReady};
+  }
   const type={page:'PAGE',snapshot:'SNAPSHOT',classify:'CLASSIFY',scroll:'SCROLL',recover_image:'RECOVER_IMAGE'}[action];
   if (!type) throw Error('Unsupported command');
   // Also watch ordinary scroll/snapshot commands. A stalled content-script
@@ -668,6 +782,17 @@ async function execute(job) {
     result=await checkedIO(send(state.tabId,{type,payload}), action+' page command',
       action==='recover_image' ? 11000 : BROWSER_IO_STALL_MS);
   } catch(error) {
+    if (action==='scroll' &&
+        String(error).includes('Selected-tab browser API stalled: scroll page command')) {
+      // SCROLL may have executed before its response was lost. A new document
+      // and fresh scanner, not a second SCROLL, is the only safe recovery.
+      try {return await recycleManagedChapterTab();}
+      catch(recoveryError) {
+        // Preserve the original failure classification and a precise reason
+        // for any unsafe/unavailable tab recovery. Never invent server faults.
+        throw Error(String(error)+'; managed-tab recovery unavailable: '+String(recoveryError));
+      }
+    }
     if(action!=='recover_image' ||
        !String(error).includes('Selected-tab browser API stalled: recover_image page command')) throw error;
     // The scripting API may hang independently from tabs.sendMessage. Fall
@@ -696,32 +821,35 @@ function trustedStartupUrl(site, startupUrl) {
 }
 async function pickComicTab(site, startupUrl='') {
   const requested=trustedStartupUrl(site,startupUrl);
-  let tabs=await call(chrome.tabs,'query',{});
-  let candidates=(tabs||[]).filter(tab => {
+  // Never silently fall back to a manual tab when an automatic startup URL is invalid.
+  if(startupUrl && !requested) return null;
+  const tabs=await call(chrome.tabs,'query',{});
+  const candidates=(tabs||[]).filter(tab => {
     if(!sourceMatches(tab.url)) return false;
     try {return new URL(tab.url).hostname===site;} catch{return false;}
   });
-  const exact=requested && candidates.find(tab=>canonicalPage(tab.url)===canonicalPage(requested));
-  if(exact) return exact;
   if(requested) {
-    // The ordinary Chrome process may be opening this URL simultaneously.
-    // Give its tab creation a moment before creating a duplicate.
-    await sleep(800);
-    tabs=await call(chrome.tabs,'query',{});
-    candidates=(tabs||[]).filter(tab=>sourceMatches(tab.url) &&
-      (()=>{try{return new URL(tab.url).hostname===site;}catch{return false;}})());
-    const pending=candidates.find(tab=>canonicalPage(tab.url)===canonicalPage(requested));
-    if(pending) return pending;
-    // Do NOT take over an unrelated reading tab. Create a separate tab on
-    // the same explicitly granted site using normal chrome.tabs API.
-    return call(chrome.tabs,'create',{url:requested,active:true});
+    // The extension owns the archiver tab. Never select an arbitrary tab with
+    // the same URL: Chrome tabs.query() is not creation-order sorted, and the
+    // user's older manual tab must NEVER be repurposed for an automatic run.
+    const saved=await storageGet(['comicBridgeManagedTabId','comicBridgeManagedSite']).catch(()=>({}));
+    const managed=candidates.find(tab => tab.id===saved.comicBridgeManagedTabId &&
+      saved.comicBridgeManagedSite===site);
+    if(managed) {
+      if(canonicalPage(managed.url)!==canonicalPage(requested))
+        return tabsUpdate(managed.id,{url:requested,active:true});
+      return managed;
+    }
+    const owned=await call(chrome.tabs,'create',{url:requested,active:true});
+    await storageSet({comicBridgeManagedTabId:owned.id,comicBridgeManagedSite:site});
+    return owned;
   }
-  // Backward compatibility with an older Python bridge without startup_url.
+  // No startup URL: retain the original manual-only fallback for legacy
+  // callers. An automatic current release always supplies startup_url.
   if(!candidates.length) return null;
-  let preferred={};
-  try {preferred=await storageGet(['selectedTabId']);} catch {}
-  const pinned=candidates.find(t=>t.id===preferred.selectedTabId);
-  return pinned || candidates.find(t=>t.active) || candidates[0];
+  const preferred=await storageGet(['selectedTabId']).catch(()=>({}));
+  return candidates.find(t=>t.id===preferred.selectedTabId) ||
+         candidates.find(t=>t.active) || candidates[0];
 }
 async function autoConnect() {
   if(autoConnecting || polling || state) return;
@@ -747,7 +875,8 @@ async function autoConnect() {
       // No debugger requirement: pixel capture is available in normal Chrome.
       await waitContent(20000,tab.url);
       await api('/hello',{url:(await tabInfo()).url,
-        bridge_protocol:'visual-transfer-2',capabilities:['probe','image','content-v2']});
+        bridge_protocol:'visual-transfer-2',capabilities:['probe','image','content-v2'],
+        tab_ownership:'extension-managed',tab_id:state.tabId});
       await storageSet({lastPort:port,selectedTabId:tab.id}).catch(()=>{});
       lastError='';
       workLoop();
@@ -783,7 +912,8 @@ async function workLoop() {
   if (polling || !state) return;
   polling=true;
   try {
-    await api('/hello',{url:(await tabInfo()).url,bridge_protocol:'visual-transfer-2',capabilities:['probe','image','content-v2']});
+    await api('/hello',{url:(await tabInfo()).url,bridge_protocol:'visual-transfer-2',capabilities:['probe','image','content-v2'],
+        tab_ownership:'extension-managed',tab_id:state.tabId});
     while (state) {
       const command=(await checkedIO(api('/next'), 'poll local Python bridge')).command;
       if (!command) {

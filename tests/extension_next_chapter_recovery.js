@@ -38,7 +38,7 @@ const chrome={runtime:{id:'test-chapter-handoff',lastError:null,getManifest:()=>
 };
 function createPage(url,alreadyLoaded) {
   const listeners=[];
-  const window={scrollY:0,
+  const window={scrollY:0,innerHeight:800,
     __comicBridgeContentLoadedVersion:6,
     __comicBridgeDirect:()=>({oldImplementation:true})};
   const img={isConnected:true,complete:alreadyLoaded,naturalWidth:alreadyLoaded?800:0,
@@ -53,15 +53,17 @@ function createPage(url,alreadyLoaded) {
     querySelectorAll(sel){return sel==='img'?[img]:[];}};
   const document={images:[img],body:root,documentElement:root,
     querySelector(sel){return sel==='.reader'||sel==='main,article'?root:null;}};
-  window.scrollTo=({top})=>{window.scrollY=top;};
+  window.scrollTo=({top})=>{window.scrollY=top;
+    if(!img.complete) setTimeout(()=>{img.complete=true;img.naturalWidth=800;img.naturalHeight=1400;},150);
+  };
   const pageChrome={runtime:{onMessage:{addListener(listener){listeners.push(listener);}}}};
   const sandbox={window,document,chrome:pageChrome,location:{href:url},URL,
     requestAnimationFrame(){/* stopped in background tab */},
-    setTimeout,clearTimeout,Date,Promise,Math,Number,Error,String,console};
+    setTimeout,clearTimeout,Date,Promise,Math,Number,Error,String,console,innerHeight:800};
   vm.createContext(sandbox);
   const inject=()=>vm.runInContext(content,sandbox);
   inject();
-  assert.equal(window.__comicBridgeContentLoadedVersion,7,'upgrade must replace old in-page content transport');
+  assert.equal(window.__comicBridgeContentLoadedVersion,9,'upgrade must replace old in-page content transport');
   return {img,inject,window,
     send(message,callback){
       assert.ok(listeners.length);
@@ -98,10 +100,10 @@ vm.runInContext(script+'\nstate={tabId:7};globalThis.__test={execute,send};',san
   assert.equal(result.key,'1');
   assert.equal(result.loaded,true);
   assert.equal(result.paintReady,false,'must not depend on rAF in new chapter');
-  assert.equal(page.window.scrollY,0,'restore scroll, do not corrupt reading progression');
+  assert.equal(page.window.scrollY,320,'stay centered on recovered image to avoid bottom/page teleport');
   assert.equal(recoveredMessages,0,'must not wait on stale async RECOVER_IMAGE listener');
   assert.equal(directCalls,1,'send only one idempotent new-document recovery');
-  assert.equal(injections,1);
+  assert.equal(injections,0,'current document should not be needlessly reinjected');
   assert.equal(scrollCommands,0,'must not duplicate forward scrolling');
   assert.ok(Date.now()-start<1000,'must return before the old 18-second watchdog');
   console.log('PASS first->next chapter new-document recovery with suspended rAF and unresponsive old receiver');

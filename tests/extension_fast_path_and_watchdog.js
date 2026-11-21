@@ -31,7 +31,7 @@ vm.runInContext(source+'\nstate={tabId:7};globalThis.__test={send,checkedIO,exec
   assert.equal(fastReply.type,'SCROLL');assert.equal(injection,0);
   receiverMissing=true;
   const fallback=await sandbox.__test.send(7,{type:'PING'});
-  assert.equal(fallback.type,'PING');assert.equal(injection,2);
+  assert.equal(fallback.type,'PING');assert.equal(injection,1);
   await assert.rejects(sandbox.__test.checkedIO(new Promise(()=>{}),'unresponsive browser'),/stalled.*unresponsive browser/);
   receiverMissing=false;blockReceiver=true;
   await assert.rejects(sandbox.__test.execute({action:'scroll',payload:{}}),/stalled.*scroll page command/);

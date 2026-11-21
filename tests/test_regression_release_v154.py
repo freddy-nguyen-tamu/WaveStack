@@ -22,12 +22,12 @@ class ReleaseGuard(unittest.TestCase):
     c=(ROOT/'reusable/browser_bridge_extension/content.js').read_text(encoding='utf-8')
     self.assertIn('RECOVER_IMAGE',c)
     self.assertIn('const paintReady=await waitForPaintOrTimer()', c)
-    self.assertIn('__comicBridgeContentLoadedVersion === 7', c)
+    self.assertIn('__comicBridgeContentLoadedVersion === 9', c)
     self.assertIn("if(payload?.type==='RECOVER_IMAGE' && chrome.scripting?.executeScript)",b)
   def test_versions_match_and_site_adapters_unmodified(self):
     for name in ('reusable/browser_bridge_extension/manifest.chrome.json','reusable/browser_bridge_extension/manifest.firefox.json','browser_bridge/chrome/manifest.json','browser_bridge/firefox/manifest.json'):
       manifest=json.loads((ROOT/name).read_text(encoding='utf-8'))
-      self.assertEqual(manifest['version'],'1.5.10', name)
+      self.assertEqual(manifest['version'],'1.5.17', name)
       if name.endswith('chrome.json') or name == 'browser_bridge/chrome/manifest.json':
         self.assertIn('debugger',manifest['permissions'])
         self.assertIn('http://127.0.0.1:18765/*',manifest['host_permissions'])

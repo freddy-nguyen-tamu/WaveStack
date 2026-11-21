@@ -214,7 +214,7 @@ from contextlib import contextmanager
 
 @contextmanager
 def source_browser_context(data_dir: Path, source_url: str, *, headless=None,
-                           browser='firefox', reader_selectors=()):
+                           browser='firefox', reader_selectors=(), initial_chapter_url=None):
     """Shared browser API; installed Firefox is ALWAYS visible.
 
     Only the transport differs. Crawling, selectors, chapter navigation,
@@ -224,7 +224,8 @@ def source_browser_context(data_dir: Path, source_url: str, *, headless=None,
         from .browser_bridge import source_extension_context
         from site_specific import site_adapter
         with source_extension_context(data_dir, source_url, adapter=site_adapter,
-                                      reader_selectors=reader_selectors) as ctx:
+                                      reader_selectors=reader_selectors,
+                                      initial_chapter_url=initial_chapter_url) as ctx:
             yield ctx
     elif browser == 'firefox':
         if headless is True:

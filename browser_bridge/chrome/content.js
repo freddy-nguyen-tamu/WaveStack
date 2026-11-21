@@ -2,9 +2,9 @@
 (() => {
   // Versioned guard: a previously installed extension may have injected
   // an older content script into this tab. Upgrade without refreshing it.
-  if (window.__comicBridgeContentLoadedVersion === 7 &&
+  if (window.__comicBridgeContentLoadedVersion === 9 &&
       typeof window.__comicBridgeDirect === 'function') return;
-  window.__comicBridgeContentLoadedVersion = 7;
+  window.__comicBridgeContentLoadedVersion = 9;
   window.__comicBridgeContentLoaded = true;
 
   const html = () => ({url: location.href, html: '<!doctype html>\n' + document.documentElement.outerHTML});
@@ -98,30 +98,29 @@
     if(desired && !urls.includes(desired))
       return {loaded:false,key,reason:'Image source changed during revisit'};
     const isReady=()=>im.isConnected && im.complete && im.naturalWidth>0 && im.naturalHeight>0;
-    if(isReady()) return {loaded:true,key,width:im.naturalWidth,height:im.naturalHeight,alreadyReady:true};
-    const oldY=window.scrollY;
-    let didScroll=false;
-    try {
-      // IntersectionObserver lazy loaders require the original <img> to
-      // intersect the viewport. 'eager' merely permits normal browser loading.
-      im.loading='eager';
-      im.scrollIntoView({behavior:'instant',block:'center',inline:'nearest'});
-      didScroll=true;
-      // Chrome can pause rAF in a background/inactive tab, especially after
-      // moving from the first processed chapter into the next document.
-      // Never strand the bridge listener while waiting for a frame that may
-      // not be delivered. The same bounded paint barrier is used by tiles.
-      const paintReady=await waitForPaintOrTimer();
-      const deadline=Date.now()+6500;
-      while(Date.now()<deadline && !isReady()){
-        if(!im.isConnected) break;
-        await new Promise(resolve=>setTimeout(resolve,250));
-      }
-      return {loaded:isReady(),key,width:im.naturalWidth||0,height:im.naturalHeight||0,
-        paintReady,reason:isReady()?'loaded after targeted scroll':(!im.isConnected?'Reader replaced image node':'Image still has naturalWidth=0')};
-    } finally {
-      if(didScroll) window.scrollTo({top:oldY,behavior:'instant'});
+    if(isReady() && !p.force_position) return {loaded:true,key,width:im.naturalWidth,height:im.naturalHeight,alreadyReady:true};
+    // Keep the viewport on the missing image. Restoring the previous offset
+    // (often the bottom) after EVERY attempt caused an endless up/down
+    // teleport and prevented lazy IntersectionObservers from settling.
+    // Only the first targeted revisit may jump; subsequent checks stay here.
+    im.loading='eager';
+    if (p.refresh_source && !isReady() && desired.startsWith('https:') && urls.includes(desired)) {
+      // Retry exactly the original DOM-declared URL in the normal document,
+      // once only, after ordinary lazy observation failed. Never invent a CDN.
+      im.src=desired;
     }
+    // Targeted correction happens once per missing slot; a decoded image
+    // requires no re-scroll.  Keep the camera there while lazy loading settles.
+    const rect=im.getBoundingClientRect();
+    await moveViewportTo(window.scrollY+rect.top+(rect.height-window.innerHeight)/2,210);
+    const paintReady=await waitForPaintOrTimer();
+    const deadline=Date.now()+6500;
+    while(Date.now()<deadline && !isReady()){
+      if(!im.isConnected) break;
+      await new Promise(resolve=>setTimeout(resolve,250));
+    }
+    return {loaded:isReady(),key,width:im.naturalWidth||0,height:im.naturalHeight||0,
+      paintReady,reason:isReady()?'loaded after targeted scroll':(!im.isConnected?'Reader replaced image node':'Image still has naturalWidth=0')};
   }
 
   // Replay ONLY an image already present and decoded in this specific page.
@@ -176,6 +175,24 @@
       } catch {finish(false);}
     });
   }
+  // Visible, bounded progression; no one-frame jumps across the scrollbar.
+  // Timers, not rAF, drive motion so a paused animation clock cannot strand
+  // a browser-extension command. The final position is exact for screenshots.
+  async function moveViewportTo(destination, duration=180) {
+    const start=Number(window.scrollY)||0;
+    const target=Math.max(0,Number(destination)||0);
+    const distance=target-start;
+    if(Math.abs(distance)<2) return target;
+    const steps=Math.max(3,Math.min(14,Math.round(duration/24)));
+    const interval=Math.max(12,Math.floor(duration/steps));
+    for(let i=1;i<=steps;i++) {
+      const t=i/steps;
+      const eased=t*t*(3-2*t);
+      window.scrollTo({top:i===steps?target:start+distance*eased,behavior:'instant'});
+      if(i<steps) await new Promise(resolve=>setTimeout(resolve,interval));
+    }
+    return target;
+  }
   async function imageTile(p) {
     const img=[...document.images].find(im=>matchesImage(im,p.url));
     if(!img) return {ok:false,reason:'No image DOM element matches requested URL'};
@@ -184,7 +201,7 @@
     const rect=img.getBoundingClientRect();
     const docY=rect.top+window.scrollY;
     // Place the next unseen slice just below any sticky page header.
-    window.scrollTo({top:Math.max(0,docY+Math.max(0,Number(p.offsetCss)||0)-100),behavior:'instant'});
+    await moveViewportTo(Math.max(0,docY+Math.max(0,Number(p.offsetCss)||0)-100), 130);
     const paintReady=await waitForPaintOrTimer();
     // Force fresh layout geometry even when Chrome has paused the animation clock.
     // A deferred paint is an observation, not grounds to skip/renumber a page.
@@ -213,8 +230,11 @@
       return {scrollY:window.scrollY};
     }
     if (message?.type === 'SCROLL') {
+      // Restore the previously working forward distance (85% viewport),
+      // but animate it instead of jumping the scrollbar in a single frame.
       const move=Math.max(450,Math.floor(innerHeight*.85));
-      scrollTo({top:scrollY+move,behavior:'instant'});
+      const from=window.scrollY;
+      await moveViewportTo(from+move,210);
       return move;
     }
     if (message?.type === 'PING') return {ok:true,url:location.href,bridgeContentProtocol:6};

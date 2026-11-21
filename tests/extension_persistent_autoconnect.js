@@ -4,21 +4,29 @@ const fs=require('node:fs');
 const path=require('node:path');
 const vm=require('node:vm');
 const src=fs.readFileSync(path.resolve(__dirname,'../reusable/browser_bridge_extension/background.js'),'utf8');
-async function scenario() {
-  const chapter=n=>`https://www.toongod.org/webtoon/annoying-alice/chapter-${n}/`;
-  const grant='https://www.toongod.org/webtoon/annoying-alice/*';
+async function scenario({needsInjection=false}={}) {
+  const chapter=n=>`https://reader.example.test/webtoon/sample/chapter-${n}/`;
+  const grant='https://reader.example.test/webtoon/sample/*';
   let url=chapter(1),loading=false,receiverAlive=false;
-  let scriptInjected=0,directExecuted=0, bootstrap=0,hello=0;
+  let scriptInjected=0,directExecuted=0, bootstrap=0,hello=0, reloads=0;
+  const updatedListeners=new Set();
   let tabId=7,alarmReady=false;
   const inbox=[];
   let shutDown=false;
-  const manifest={version:'1.5.7',host_permissions:[grant,'https://i.tngcdn.com/*'],content_scripts:[{matches:[grant]}]};
+  const manifest={version:'1.5.14',host_permissions:[grant,'https://images.example.test/*'],content_scripts:[{matches:[grant]}]};
   const storage={local:{get(_keys,cb){cb({});},set(_data,cb){cb();}}};
   const chrome={
     runtime:{id:'comic-bridge-test-client',lastError:null,getManifest:()=>manifest,onStartup:{addListener:()=>{}},onInstalled:{addListener:()=>{}},onMessage:{addListener:()=>{}}},
     storage,
     alarms:{create(name,o){assert.equal(name,'comic-bridge-autoconnect');alarmReady=true;},onAlarm:{addListener:()=>{}}},
     tabs:{
+      onUpdated:{addListener(fn){updatedListeners.add(fn);},removeListener(fn){updatedListeners.delete(fn);}},
+      reload(id,opts,cb){
+        assert.equal(id,tabId);assert.equal(opts.bypassCache,false);reloads++;
+        setTimeout(()=>{loading=true; for(const fn of updatedListeners)fn(tabId,{status:'loading'});
+          setTimeout(()=>{loading=false;for(const fn of updatedListeners)fn(tabId,{status:'complete'});},8);},5);
+        cb();
+      },
       get(id,cb){assert.equal(id,tabId);cb({id,url,status:loading?'loading':'complete',active:true,windowId:1});},
       query(_x,cb){cb([{id:tabId,url,status:'complete',active:true}]);},
       update(_id,change,cb){url=change.url;loading=true;receiverAlive=false;cb({id:tabId,url,status:'loading'});
@@ -29,6 +37,9 @@ async function scenario() {
       assert.equal(target.tabId,tabId);
       if(files){assert.deepEqual(Array.from(files),['content.js']);scriptInjected++;return [];}
       directExecuted++;
+      // Simulates a freshly navigated document whose content handler has not loaded.
+      if(needsInjection && scriptInjected===0)
+        return [{result:{__bridgeError:'Page command transport not initialized'}}];
       // Simulates current document isolated-world dispatch; has NO message receiver.
       const command=args[0];
       let data;
@@ -44,7 +55,7 @@ async function scenario() {
       assert.equal(options.headers['X-Comic-Bridge-Bootstrap'],'1');
       assert.equal(options.headers['X-Comic-Bridge-Client'],chrome.runtime.id);
       bootstrap++;
-      return {ok:true,json:async()=>({token:'abc_123456789012345678901234',port:18765,site:'www.toongod.org',protocol:'visual-transfer-2'})};
+      return {ok:true,json:async()=>({token:'abc_123456789012345678901234',port:18765,site:'reader.example.test',protocol:'visual-transfer-2'})};
     }
     if(target.endsWith('/hello')){
       assert.equal(options.headers['X-Comic-Bridge-Client'],chrome.runtime.id);
@@ -72,9 +83,18 @@ async function scenario() {
     const snapshot=await sandbox.__testBridge.execute({action:'snapshot',payload:{reader_selectors:['.reading-content']}});
     assert.equal(snapshot.url,chapter(n),'must execute against NEW document');
   }
-  assert.ok(scriptInjected>=6);
-  assert.ok(directExecuted>=6);
+  const same=await sandbox.__testBridge.execute({action:'navigate',payload:{url:chapter(4)}});
+  assert.equal(same.url,chapter(4));
+  assert.equal(reloads,1,'same-URL navigation must do a real reload');
+  assert.ok(directExecuted>=6, 'one direct command per navigation and snapshot');
+  assert.equal(scriptInjected,needsInjection ? 1 : 0,
+    'inject once only when a new document lacks the handler; never on every chapter');
   sandbox.__testBridge.stop();
-  console.log('PASS zero-code automatic bootstrap + chapter 1→2→3→4 navigation without message receiver', {bootstrap,hello,scriptInjected,directExecuted});
+  return {bootstrap,hello,scriptInjected,directExecuted};
 }
-scenario().then(()=>process.exit(0)).catch(e=>{console.error(e);process.exit(1);});
+(async()=>{
+  const warm=await scenario({needsInjection:false});
+  const cold=await scenario({needsInjection:true});
+  console.log('PASS persistent zero-code pairing, 3 next-chapter navigations, no redundant injections, one cold-start injection', {warm,cold});
+  process.exit(0);
+})().catch(e=>{console.error(e);process.exit(1);});

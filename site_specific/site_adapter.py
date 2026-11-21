@@ -209,3 +209,10 @@ def custom_page_snapshot(page):
         scrollY:window.scrollY||html.scrollTop||0,
         bottom:Math.max(0,height-window.innerHeight),height,revision:state.revision};
     }""")
+
+
+# ComicArchiver explicit human-verified source-image exceptions (1.5.16)
+SOURCE_CONFIRMED_MISSING_PANELS = {
+    **globals().get('SOURCE_CONFIRMED_MISSING_PANELS', {}),
+    'https://www.toongod.org/webtoon/annoying-alice/chapter-82/': (56, 57),
+}

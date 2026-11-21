@@ -33,6 +33,11 @@ class BrowserBridgeError(RuntimeError):
     pass
 
 
+class BrowserManagedTabRecycled(BrowserBridgeError):
+    """The extension bound a fresh managed chapter tab; restart the scan."""
+    pass
+
+
 @dataclass
 class BrowserResponse:
     url: str
@@ -51,10 +56,14 @@ class BrowserResponse:
 
 class LocalBridge:
     def __init__(self, source_url, *, reader_selectors=(), image_attributes=(),
-                 image_hosts=(), port=BRIDGE_PORT):
+                 image_hosts=(), port=BRIDGE_PORT, initial_chapter_url=None,
+                 require_managed_tab=False):
         self.source = urlsplit(source_url)
         self.allowed_site = self.source.hostname.lower()
         self.allowed_cdn = {h.lower() for h in image_hosts}
+        self.initial_chapter_url = self.validate_chapter(initial_chapter_url or source_url)
+        self.require_managed_tab = bool(require_managed_tab)
+        self.tab_id = None
         self.reader_selectors = list(reader_selectors)
         self.image_attributes = list(image_attributes)
         self.port = port
@@ -187,6 +196,7 @@ class LocalBridge:
                     # protocol and permitted chapter URL may claim ownership.
                     self._send(200, {'token': bridge.secret, 'port': bridge.port,
                                      'site': bridge.allowed_site,
+                                     'startup_url': bridge.initial_chapter_url,
                                      'protocol': BRIDGE_PROTOCOL})
                     return
                 if not self._auth():
@@ -226,6 +236,17 @@ class LocalBridge:
                                 'unpacked browser_bridge/chrome folder from this project, then restart run.py. '
                                 'Do not refresh or close your comic webpage tab.'})
                             return
+                        if bridge.require_managed_tab and (
+                                obj.get('tab_ownership') != 'extension-managed' or
+                                not isinstance(obj.get('tab_id'), int) or
+                                isinstance(obj.get('tab_id'), bool) or
+                                obj['tab_id'] < 0):
+                            bridge.outdated_client.set()
+                            self._send(409, {'error':
+                                'Comic Bridge extension must own the automatic chapter tab. '
+                                'Reload the updated unpacked extension at chrome://extensions '
+                                'before restarting run.py.'})
+                            return
                         url = bridge.validate_chapter(str(obj.get('url', '')))
                         with bridge.extension_origin_lock:
                             # Ownership begins only after validation succeeds.
@@ -241,6 +262,7 @@ class LocalBridge:
                             bridge.extension_client = client
                             if origin:
                                 bridge.extension_origin = origin
+                        bridge.tab_id = obj.get('tab_id') if bridge.require_managed_tab else None
                         bridge.tab_url = url
                         bridge.last_heartbeat = time.monotonic()
                         bridge.ready.set()
@@ -278,8 +300,8 @@ class LocalBridge:
         print('\nBROWSER EXTENSION BRIDGE — USE YOUR CURRENT NORMAL BROWSER', flush=True)
         print(f'  Local port: {self.port}', flush=True)
         print('  AUTO CONNECT: no pairing code and no chapter-by-chapter reconnect.', flush=True)
-        print('  Keep an authorized comic chapter open in your normal Chrome/Edge browser.', flush=True)
-        print('  The installed extension discovers the tab and connects automatically.', flush=True)
+        print('  Python starts normal Chrome; the extension opens its own chapter tab.', flush=True)
+        print('  The installed extension connects ONLY to its managed tab.', flush=True)
         root = Path(__file__).resolve().parents[1]
         print('  CHROME / EDGE: chrome://extensions → Developer mode → Load unpacked:',
               str(root / 'browser_bridge' / 'chrome'), flush=True)
@@ -288,7 +310,7 @@ class LocalBridge:
         if self.allowed_cdn:
             print('  IMPORTANT: This CDN-backed source requires Chrome/Edge (NOT Firefox).', flush=True)
             print('  Chrome can capture visible image pixels even when original image bytes cannot be inspected.', flush=True)
-        print('  Keep your already-open chapter tab; no reload is needed.', flush=True)
+        print('  The installed extension selects or creates the requested chapter tab.', flush=True)
         print('  The local listener accepts extension traffic only on 127.0.0.1.', flush=True)
         last = 0
         while not self.ready.wait(0.5):
@@ -302,6 +324,9 @@ class LocalBridge:
                 print('Browser bridge: waiting for automatic extension connection (check extension is loaded)...', flush=True)
                 last = time.monotonic()
         print('Browser bridge connected to:', self.tab_url, flush=True)
+        if self.require_managed_tab:
+            print('BROWSER_MANAGED_TAB_BOUND: tab_id=' + str(self.tab_id) +
+                  ' (not an older manually opened tab)', flush=True)
 
     def rpc(self, action, payload=None, timeout=None):
         """Wait as long as the extension stays responsive; never cap total job time.
@@ -411,19 +436,38 @@ class BridgePage:
         if 'iframe[src*="captcha"' in script or 'form input[type=password]' in script:
             return self.context.bridge.rpc('classify')
         if 'scrollTo(' in script or 'scrollBy(' in script:
-            return self.context.bridge.rpc('scroll')
+            result = self.context.bridge.rpc('scroll')
+            # A normal scroll returns its numeric scroll offset; only a
+            # recycled-tab notification is a mapping. Do not call .get() on
+            # a scalar success response (1.5.17 regression).
+            if isinstance(result, dict) and result.get('transport_reset'):
+                # Do not continue using the former document's DOM/order/cache.
+                if result.get('url'):
+                    self.url = self.context.bridge.validate_chapter(result['url'])
+                raise BrowserManagedTabRecycled('Browser tab recycled after a stalled scroll; re-scan from checkpoint')
+            return result
         if 'return {imgs' in script or 'imgs:data' in script or 'MutationObserver' in script:
             return self.context.bridge.rpc('snapshot', {'reader_selectors': self.context.reader_selectors,
                                                        'image_attributes': self.context.image_attributes})
         raise BrowserBridgeError('Unsupported browser script. Use the documented generic DOM operations.')
 
-    def recover_unloaded_image(self, key, url):
+    def recover_unloaded_image(self, key, url, *, force_position=False, refresh_source=False):
         """Target only the missing ordinal in the original reader, never a new tab."""
         return self.context.bridge.rpc('recover_image', {
             'key': str(key), 'url': str(url or ''),
+            'force_position': bool(force_position),
+            'refresh_source': bool(refresh_source),
             'reader_selectors': self.context.reader_selectors,
             'image_attributes': self.context.image_attributes,
         }, timeout=35)
+
+    def image_diagnostics(self, url):
+        """Read status cached by the EXISTING tab's Chrome Network observer.
+
+        No DevTools window, page navigation, direct CDN request or credential
+        read is required. Source allowlists still apply in the bridge.
+        """
+        return self.context.bridge.rpc('image_diagnostics', {'url': str(url)}, timeout=8)
 
     def wait_for_timeout(self, ms):
         time.sleep(max(0, ms) / 1000)
@@ -500,13 +544,27 @@ class BridgeContext:
 
 @contextmanager
 def source_extension_context(data_dir: Path, source_url: str, *,
-                             adapter, reader_selectors=()):
+                             adapter, reader_selectors=(), initial_chapter_url=None):
     port = int(os.environ.get('COMIC_ARCHIVER_BRIDGE_PORT') or BRIDGE_PORT)
     ensure_generated_extensions(Path(__file__).resolve().parents[1], adapter, port)
     bridge = LocalBridge(source_url, reader_selectors=reader_selectors,
                          image_attributes=adapter.IMAGE_ATTRIBUTES,
-                         image_hosts=getattr(adapter, 'BRIDGE_IMAGE_HOSTS', ()), port=port)
+                         image_hosts=getattr(adapter, 'BRIDGE_IMAGE_HOSTS', ()), port=port,
+                         initial_chapter_url=initial_chapter_url, require_managed_tab=True)
     bridge.start()
+    # The loopback listener MUST be ready before opening Chrome: a cold-started
+    # service worker can immediately request /bootstrap. Chrome uses the user's
+    # ordinary installed profile and the extension already enabled there.
+    try:
+        if os.environ.get('COMIC_ARCHIVER_NO_AUTO_BROWSER') != '1':
+            from .normal_browser_launch import launch_normal_chrome
+            command = launch_normal_chrome(bridge.initial_chapter_url)
+            print('NORMAL_CHROME_AUTO_OPEN: normal Chrome/Edge ready; '
+                  'installed extension owns and navigates the chapter tab: '
+                  + bridge.initial_chapter_url, flush=True)
+    except Exception:
+        bridge.close()
+        raise
     ctx = BridgeContext(bridge, reader_selectors, adapter.IMAGE_ATTRIBUTES)
     try:
         bridge.wait_paired()

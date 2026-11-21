@@ -163,7 +163,7 @@ def _initial_github_check_choice(args, *, interactive=None, prompt=None):
 # Fail-closed, always-on safety gate for automatic Comic Bridge runs.
 # Keep this in run.py: a partial ZIP must not silently skip regression tests.
 # Tests are local and simulated; they never download, publish, or shut down Windows.
-_PREFLIGHT_RELEASE = '1.5.10'
+_PREFLIGHT_RELEASE = '1.5.17'
 _PREFLIGHT_PYTHON = (
     ('test_browser_autobootstrap.py', 2),
     ('test_regression_release_v154.py', 3),
@@ -174,7 +174,16 @@ _PREFLIGHT_PYTHON = (
     ('test_github_fast_verification.py', 5),
     ('test_challenge_passive_resume.py', 6),
     ('test_startup_compatibility_and_check_choice.py', 5),
-    ('test_normal_chrome_autolaunch.py', 7),
+    ('test_normal_chrome_autolaunch.py', 8),
+    ('test_browser_release_dependency_contract.py', 3),
+    ('test_scroll_stability.py', 2),
+    ('test_strict_completion_barrier.py', 7),
+    ('test_historical_lazy_loading_baseline.py', 4),
+    ('test_source_server_fault_policy.py', 6),
+    ('test_reader_issue_feed.py', 4),
+    ('test_confirmed_source_placeholders.py', 3),
+    ('test_managed_tab_recycle_resume.py', 2),
+    ('test_resume_deferred_and_reader_host.py', 8),
 )
 _PREFLIGHT_JAVASCRIPT = (
     'extension_persistent_autoconnect.js',
@@ -183,7 +192,12 @@ _PREFLIGHT_JAVASCRIPT = (
     'extension_tile_stall_recovery.js',
     'extension_next_chapter_recovery.js',
     'extension_auto_tab_launch.js',
+    'extension_managed_tab_isolation.js',
     'extension_recovery_transport_fallback.js',
+    'extension_scroll_stability.js',
+    'extension_exact_image_recovery.js',
+    'extension_same_url_reload.js',
+    'extension_managed_tab_recycle.js',
 )
 
 
@@ -215,6 +229,8 @@ def _run_preflight(*, run_tests=True) -> None:
     try:
         bridge = (ROOT / 'reusable' / 'browser_bridge.py').read_text(encoding='utf-8')
         engine = (ROOT / 'reusable' / 'engine.py').read_text(encoding='utf-8')
+        session = (ROOT / 'reusable' / 'source_session.py').read_text(encoding='utf-8')
+        launcher = (ROOT / 'reusable' / 'normal_browser_launch.py').read_text(encoding='utf-8')
         background = (ROOT / 'reusable' / 'browser_bridge_extension' / 'background.js').read_bytes()
         content = (ROOT / 'reusable' / 'browser_bridge_extension' / 'content.js').read_bytes()
         for rel in ('reusable/browser_bridge.py', 'reusable/engine.py',
@@ -238,6 +254,21 @@ def _run_preflight(*, run_tests=True) -> None:
         for marker in required_bridge:
             if marker not in bridge:
                 fail('Python bridge missing compatibility feature: ' + marker)
+        # A partial update can contain a new run.py/background.js yet an old
+        # Python bridge or session module. All three hands-free components must
+        # be installed together before entering any archiving workflow.
+        if 'initial_chapter_url=initial_chapter_url' not in session:
+            fail('Python source session does not forward the startup chapter')
+        if 'def launch_normal_chrome(' not in launcher or '--new-tab' not in launcher:
+            fail('normal Chrome launcher missing or incompatible')
+        if "command.append('about:blank')" not in launcher:
+            fail('normal Chrome launcher must not create a second matching chapter tab')
+        if 'require_managed_tab=True' not in bridge or 'tab_ownership' not in bridge:
+            fail('Python must reject old extension workers that reuse manual tabs')
+        if 'comicBridgeManagedTabId' not in background.decode('utf-8'):
+            fail('auto startup can select an old manually opened matching tab')
+        if 'launch_normal_chrome(bridge.initial_chapter_url)' not in bridge:
+            fail('Python bridge does not launch the selected chapter in normal Chrome')
         if 'Bootstrap requires a browser extension Origin' in bridge:
             fail('old Python bootstrap handler reintroduced; 403 regression detected')
         for marker in required_engine:
@@ -246,6 +277,10 @@ def _run_preflight(*, run_tests=True) -> None:
         for marker in required_background:
             if marker not in background:
                 fail('extension missing compatibility feature: ' + marker.decode('utf-8'))
+        if b'async function recycleManagedChapterTab()' not in background or b'transport_reset:true' not in background:
+            fail('extension lacks managed tab recycling on stalled scroll')
+        if 'BrowserManagedTabRecycled' not in bridge or 'except BrowserManagedTabRecycled:' not in engine:
+            fail('Python lacks checkpoint-safe restart after tab recycling')
         if b'recover_image existing-listener fallback' not in background:
             fail('extension lacks fallback when Chrome recovery injection stalls')
         if 'SOURCE_IMAGE_RECOVERY_DEFERRED' not in engine:
@@ -260,7 +295,13 @@ def _run_preflight(*, run_tests=True) -> None:
             fail('extension lacks next-chapter one-shot targeted recovery')
         if b'const paintReady=await waitForPaintOrTimer();' not in content or b'await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))' in content:
             fail('targeted image recovery can hang forever waiting for animation frames')
-        if b'__comicBridgeContentLoadedVersion === 7' not in content:
+        if b"type:'RESTORE_SCROLL'" in background or b'oldY,behavior' in content:
+            fail('browser contains per-image scroll restoration; repeated bottom/page teleports')
+        if b'Math.floor(innerHeight*.85)' not in content:
+            fail('normal scroll has reverted to oversized viewport jumps')
+        if 'pending_key = next((key for key in slot_order if key not in saved_keys), None)' not in engine:
+            fail('resume lacks forward-only ordered recovery')
+        if b'__comicBridgeContentLoadedVersion === 9' not in content:
             fail('old content-script version guard would preserve a stale page handler')
 
         # One editable provider adapter; generated binaries must come from the

@@ -8,7 +8,7 @@ tree=ast.parse(P.read_text()); func=next(node for node in tree.body if isinstanc
 ns={'json':json,'urljoin':urljoin,'urlsplit':urlsplit,'event':lambda *a,**k:None,
     'classify_browser_page':lambda page:None,
     'ADAPTER':types.SimpleNamespace(READER_SELECTORS=['main'],IMAGE_ATTRIBUTES=['src'],custom_page_snapshot=None),
-    'RuntimeError':RuntimeError}
+    'RuntimeError':RuntimeError,'SourceAccessPaused':type('SourceAccessPaused',(RuntimeError,),{})}
 exec(compile(ast.Module(body=[func],type_ignores=[]),str(P),'exec'),ns)
 scan=ns['scan_browser_images']
 class SimPage:
@@ -34,8 +34,10 @@ class Tests(unittest.TestCase):
     def on_progress(info,slot_order,seen,at_bottom):
       for idx,key in enumerate(slot_order,1):
         im=next(im for im in info['imgs'] if im['key']==key)
-        if key not in saved and im['loaded'] and im['url'] and (im['pageY']<=info['scrollY']+800 or at_bottom):
-          saved[key]=f'{idx:04d}.jpg';seen_order.append(key)
+        if key in saved: continue
+        if not im['loaded'] or not im['url'] or (im['pageY']>info['scrollY']+800 and not at_bottom):
+          break  # production invariant: never capture after the first gap
+        saved[key]=f'{idx:04d}.jpg';seen_order.append(key)
       return set(saved)
     return saved,seen_order,on_progress
   def test_one_forward_scroll_preserves_original_order(self):
@@ -80,10 +82,10 @@ class Tests(unittest.TestCase):
       raise RuntimeError('Browser recover_image failed: Selected-tab browser API stalled')
     p.recover_unloaded_image=recover
     saved,_,callback=self.callback(p)
-    with self.assertRaisesRegex(RuntimeError,'Images still missing after targeted retries: 2'):
+    with self.assertRaisesRegex(RuntimeError,'First missing image after natural lazy loading and targeted recovery: 2'):
       scan(p,max_steps=30,stability=2,on_progress=callback)
     self.assertEqual(attempts,['2','2','2'])
-    self.assertEqual(set(saved),{'1','3'})
+    self.assertEqual(set(saved),{'1'})
   def test_failed_image_cannot_be_marked_complete(self):
     p=SimPage(late=True)
     def on_progress(info,slot_order,seen,bottom):return {'1','3'}
