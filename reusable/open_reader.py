@@ -437,7 +437,296 @@ def _registry_payload(registry, frontend_hash):
 
 def _index_html():
     return '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><title>open-reader</title><style>
-:root{color-scheme:dark;font-family:system-ui,Segoe UI,sans-serif;background:#0b0b0d;color:#eee}*{box-sizing:border-box}body{margin:0 auto;max-width:950px;padding:clamp(20px,5vw,54px)}h1{font-size:clamp(27px,5vw,44px);letter-spacing:-.04em;margin:0 0 12px}.subtitle{color:#8f919b;margin:0 0 36px}#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}.comic{padding:20px;border:1px solid #292b31;border-radius:12px;color:inherit;text-decoration:none;background:#141518;transition:border-color .15s,transform .15s}.comic:hover,.comic:focus-visible{border-color:#9396a4;transform:translateY(-2px)}.comic b{display:block;margin-bottom:10px;font-size:18px;line-height:1.35}.comic small{color:#999ca8}#search{background:#17181c;border:1px solid #383942;border-radius:8px;color:#eee;font:inherit;padding:12px;width:min(100%,450px);margin:0 0 25px}.empty{color:#9295a0}
+/* open-reader homepage only | Amazon-like editorial storefront treatment
+ * Keeps existing markup, library search, comic links and notifications intact.
+ * Never loaded by /comics/<slug>/ reader pages.
+ */
+:root {
+  color-scheme: light;
+  font-family: Arial, Helvetica, system-ui, sans-serif;
+  --or-ink: #0f1111;
+  --or-muted: #565959;
+  --or-header: #131921;
+  --or-navigation: #232f3e;
+  --or-accent: #ff9900;
+  --or-accent-soft: #febd69;
+  --or-link: #007185;
+  --or-paper: #fff;
+  --or-canvas: #eaeded;
+  --or-gutter: clamp(16px, 3.2vw, 62px);
+  background: var(--or-canvas);
+  color: var(--or-ink);
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { min-width: 0; }
+body {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(184px, 23%) minmax(0, 1fr);
+  grid-template-areas: "brand search" "navigation navigation" "catalog catalog";
+  grid-template-rows: 79px 45px minmax(0, 1fr);
+  align-content: start;
+  align-items: start;
+  background: linear-gradient(to bottom,
+    var(--or-header) 0, var(--or-header) 79px,
+    var(--or-navigation) 79px, var(--or-navigation) 124px,
+    var(--or-canvas) 124px, var(--or-canvas) 100%);
+  overflow-x: clip;
+}
+h1 {
+  grid-area: brand;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 79px;
+  margin: 0;
+  padding: 0 12px 0 var(--or-gutter);
+  color: #fff;
+  font-size: clamp(21px, 1.8vw, 30px);
+  font-weight: 800;
+  letter-spacing: -.045em;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+h1::before {
+  content: "";
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 24px;
+  margin-right: 11px;
+  border: 2px solid var(--or-accent-soft);
+  border-left-width: 7px;
+  border-radius: 2px 4px 4px 2px;
+  transform: skewY(-4deg);
+  box-shadow: 3px 3px 0 rgba(255,153,0,.2);
+}
+#search {
+  grid-area: search;
+  align-self: center;
+  justify-self: start;
+  display: block;
+  width: min(860px, calc(100% - 86px));
+  min-width: 0;
+  max-width: none;
+  height: 43px;
+  margin: 0;
+  padding: 10px 48px 10px 15px;
+  border: 2px solid var(--or-accent-soft);
+  border-radius: 5px;
+  outline: 0;
+  background-color: #fff;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='22' height='22' fill='none' stroke='%23565959' stroke-width='2.3' stroke-linecap='round'%3E%3Ccircle cx='9.5' cy='9.5' r='6.3'/%3E%3Cpath d='m14.5 14.5 5.2 5.2'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 15px center;
+  color: var(--or-ink);
+  font: 400 15px/1.35 Arial, Helvetica, system-ui, sans-serif;
+  box-shadow: 0 1px 3px rgba(0,0,0,.18);
+  transition: border-color .17s ease, box-shadow .17s ease;
+  -webkit-appearance: none;
+  appearance: none;
+}
+#search::placeholder { color: #626a70; opacity: 1; }
+#search:hover { border-color: #ff9900; }
+#search:focus-visible, #search:focus {
+  border-color: var(--or-accent);
+  box-shadow: 0 0 0 3px rgba(255,153,0,.35);
+}
+.subtitle {
+  grid-area: navigation;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  width: 100%;
+  height: 45px;
+  margin: 0;
+  padding: 0 var(--or-gutter);
+  border-top: 1px solid rgba(255,255,255,.08);
+  color: #f2f5f7;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: .015em;
+}
+.subtitle::before {
+  content: "";
+  display: inline-block;
+  width: 3px;
+  height: 15px;
+  margin-right: 11px;
+  border-radius: 2px;
+  background: var(--or-accent);
+}
+#grid {
+  grid-area: catalog;
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  margin: 0;
+  padding: clamp(26px, 3.4vw, 55px) var(--or-gutter) clamp(52px, 7vw, 100px);
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 270px), 1fr));
+  gap: clamp(15px, 1.5vw, 24px);
+  align-content: start;
+  align-items: stretch;
+}
+#grid::before {
+  content: "Browse your collection";
+  grid-column: 1 / -1;
+  display: block;
+  min-width: 0;
+  margin: 0 0 6px;
+  padding: 0 0 clamp(15px, 1.8vw, 22px);
+  border-bottom: 1px solid #cbd1d3;
+  color: var(--or-ink);
+  font-size: clamp(20px, 2vw, 27px);
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -.02em;
+}
+.comic {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 192px;
+  margin: 0;
+  padding: 24px 21px 20px;
+  overflow: hidden;
+  border: 1px solid #d5d9d9;
+  border-radius: 7px;
+  background: var(--or-paper);
+  color: var(--or-ink);
+  box-shadow: 0 1px 3px rgba(15,17,17,.055);
+  text-decoration: none;
+  transition: border-color .17s ease, transform .17s ease, box-shadow .17s ease;
+}
+.comic::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 5px;
+  background: linear-gradient(90deg, #ff9900 0%, #febd69 45%, #d9e4e8 100%);
+}
+.comic b {
+  display: block;
+  margin: 8px 0 21px;
+  color: #0f1111;
+  font-size: clamp(17px, 1.34vw, 21px);
+  font-weight: 700;
+  letter-spacing: -.018em;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.comic small {
+  display: inline-block;
+  align-self: flex-start;
+  margin: 0 0 18px;
+  padding: 6px 9px;
+  border: 1px solid #e7eaea;
+  border-radius: 4px;
+  background: #f0f2f2;
+  color: var(--or-muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+}
+.comic::after {
+  content: "Open comic  ›";
+  display: block;
+  margin-top: auto;
+  padding-top: 2px;
+  color: var(--or-link);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.comic:hover, .comic:focus-visible {
+  border-color: #b7c4c7;
+  box-shadow: 0 5px 18px rgba(15,17,17,.13);
+  transform: translateY(-2px);
+}
+.comic:hover::after, .comic:focus-visible::after {
+  color: #c45500;
+  text-decoration: underline;
+}
+.comic:focus-visible { outline: 3px solid var(--or-accent); outline-offset: 3px; }
+.empty {
+  grid-column: 1 / -1;
+  width: 100%;
+  margin: 0;
+  padding: 23px 25px;
+  border: 1px solid #d5d9d9;
+  border-radius: 6px;
+  background: var(--or-paper);
+  color: var(--or-muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+/* Homepage-only positioning. Reader route's bell and drawer CSS are unchanged. */
+html body #reader-issues-widget {
+  top: max(17px, env(safe-area-inset-top));
+  right: max(var(--or-gutter), env(safe-area-inset-right));
+}
+html body #reader-issues-widget #ri-button {
+  width: 43px;
+  height: 43px;
+  border: 1px solid rgba(255,255,255,.25);
+  border-radius: 5px;
+  background: #273545;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+html body #reader-issues-widget #ri-button:hover,
+html body #reader-issues-widget #ri-button:focus-visible {
+  border-color: var(--or-accent-soft);
+  background: #36495d;
+}
+html body #reader-issues-widget #ri-popover { border-radius: 7px; }
+@media (max-width: 760px) {
+  body { grid-template-columns: minmax(164px, 30%) minmax(0, 1fr); }
+  h1 { font-size: clamp(20px, 2.9vw, 23px); }
+  #search { width: calc(100% - 76px); }
+  #grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 226px), 1fr)); }
+}
+@media (max-width: 560px) {
+  body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "brand" "search" "navigation" "catalog";
+    grid-template-rows: 65px 64px 42px minmax(0, 1fr);
+    background: linear-gradient(to bottom,
+      var(--or-header) 0, var(--or-header) 129px,
+      var(--or-navigation) 129px, var(--or-navigation) 171px,
+      var(--or-canvas) 171px, var(--or-canvas) 100%);
+  }
+  h1 { height: 65px; font-size: 24px; }
+  #search {
+    justify-self: stretch;
+    width: auto;
+    max-width: none;
+    height: 43px;
+    margin: 0 var(--or-gutter);
+  }
+  .subtitle { height: 42px; }
+  #grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 235px), 1fr)); }
+  html body #reader-issues-widget { top: max(11px, env(safe-area-inset-top)); }
+}
+@media (max-width: 350px) {
+  h1 { font-size: 21px; }
+  h1::before { margin-right: 8px; width: 17px; height: 22px; }
+  .comic { padding: 20px 17px 17px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #search, .comic { transition: none; }
+  .comic:hover, .comic:focus-visible { transform: none; }
+}
 </style></head><body><h1>open-reader</h1><p class="subtitle">Your comic library</p><input id="search" type="search" placeholder="Find a comic" aria-label="Find a comic"><main id="grid" aria-live="polite"></main><script type="module">
 const grid=document.querySelector('#grid');let comics=[];
 function render(){const q=document.querySelector('#search').value.trim().toLowerCase();grid.replaceChildren();for(const comic of comics.filter(c=>(c.title+' '+c.slug).toLowerCase().includes(q))){const a=document.createElement('a');a.className='comic';a.href=comic.route;const t=document.createElement('b');t.textContent=comic.title;const meta=document.createElement('small');meta.textContent=comic.chapters+' chapters';a.append(t,meta);grid.append(a);}if(!grid.childElementCount){const p=document.createElement('p');p.className='empty';p.textContent='No matching comics';grid.append(p);}}
