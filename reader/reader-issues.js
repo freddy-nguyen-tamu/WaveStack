@@ -13,7 +13,7 @@
   document.body.append(root);
   const q=s=>root.querySelector(s), button=q('#ri-button'), badge=q('#ri-badge'), box=q('#ri-popover');
   const list=q('#ri-list'), summary=q('#ri-summary'), login=q('#ri-login'), password=q('#ri-password'), feedback=q('#ri-feedback');
-  let lastRefresh=0, pending=null, cases=[];
+  let lastRefresh=0, pending=null, cases=[], uploadEnabled=false;
   const close=()=>{box.hidden=true;button.setAttribute('aria-expanded','false');login.hidden=true;password.value='';pending=null};
   button.onclick=()=>{box.hidden=!box.hidden;button.setAttribute('aria-expanded',String(!box.hidden));if(!box.hidden)refresh(true)};
   q('#ri-close').onclick=close;
@@ -28,7 +28,7 @@
     if(!['image/jpeg','image/png','image/webp'].includes(file.type) || file.size>12*1024*1024 || file.size<32) {
       setStatus('Choose a JPEG, PNG or WebP image up to 12 MiB.');return;
     }
-    if(!/^\w[a-z0-9]{0,39}$/i.test(String(c.work_slug).slice(0,40)) && !c.work_slug) return;
+    if(!uploadEnabled){setStatus('Uploads are not configured. An administrator must enable R2 and Worker secrets.');return;}
     setStatus(`Uploading ${c.work}, ${c.episode}, panel ${c.panel}…`);
     try {
       const r=await fetch('/api/panel-replacements/'+encodeURIComponent(c.id),{
@@ -83,6 +83,8 @@
         chooser.setAttribute('aria-label',`Replacement image for ${c.work} ${c.episode} panel ${c.panel}`);
         chooser.onchange=()=>{const file=chooser.files?.[0];if(file)upload(c,file);chooser.value=''};
         const action=text('button',c.replacement_present?'Replace again':'Upload replacement','ri-upload');action.type='button';
+        action.disabled=!uploadEnabled;
+        action.title=uploadEnabled?'Upload a verified replacement':'Administrator must enable R2 and Worker secrets';
         action.onclick=()=>chooser.click();
         line.append(action,chooser);group.append(line);
       }
@@ -98,6 +100,7 @@
       if(!response.ok)throw new Error('Issue feed unavailable (HTTP '+response.status+')');
       const feed=await response.json();
       if(feed.schema!=='comicarchiver.source_issue_feed.v1'||!Array.isArray(feed.cases))throw new Error('Invalid source issue feed');
+      uploadEnabled=Boolean(feed.upload_enabled);
       draw(feed.cases.filter(c=>c && c.status==='source_server_unavailable' && typeof c.work==='string' && typeof c.work_slug==='string' && typeof c.episode_id==='string' && Number.isInteger(c.panel) && c.panel>0 && /^[a-f0-9]{20}$/.test(c.id)));
     }catch(err){summary.textContent=String(err?.message||err)}
   }

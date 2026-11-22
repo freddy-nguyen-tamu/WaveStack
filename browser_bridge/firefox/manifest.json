@@ -13,9 +13,7 @@
     "storage",
     "webRequest",
     "http://127.0.0.1:18765/*",
-    "https://www.toongod.org/*",
-    "https://toongod.org/*",
-    "https://i.tngcdn.com/*"
+    "https://tritinia.org/*"
   ],
   "background": {
     "scripts": [
@@ -29,8 +27,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://www.toongod.org/webtoon/annoying-alice/*",
-        "https://toongod.org/webtoon/annoying-alice/*"
+        "https://tritinia.org/manga/we-may-be-an-inexperienced-couple-but/*"
       ],
       "js": [
         "content.js"

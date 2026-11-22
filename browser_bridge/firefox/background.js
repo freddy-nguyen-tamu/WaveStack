@@ -65,7 +65,43 @@ async function directTabCommand(id, payload) {
   }
   throw Error('Selected comic document did not become ready: '+failure);
 }
+// One-shot classifier: read only the CURRENT managed tab DOM. A prior content.js
+// closure can survive until navigation and keep reporting a passive badge as a
+// challenge. Do not replace the stable SCROLL/image message transport.
+function classifyLiveDOM() {
+  const visible = el => {
+    if (!el || typeof el.getBoundingClientRect !== 'function') return false;
+    const r=el.getBoundingClientRect();
+    if (!r || r.width<=0 || r.height<=0) return false;
+    for (let n=el; n && n.nodeType===1; n=n.parentElement) {
+      const s=getComputedStyle(n);
+      if (s.display==='none' || s.visibility==='hidden' || s.visibility==='collapse') return false;
+    }
+    return true;
+  };
+  const passiveBadge = el => !!el.closest?.('.grecaptcha-badge');
+  // Identical pre-existing challenge selectors: do not remove real checks.
+  const challenged=[...document.querySelectorAll('iframe[src*="captcha" i], iframe[title*="captcha" i], #challenge-running, .cf-challenge, input[name*="captcha" i], .g-recaptcha, [data-sitekey]')];
+  return {
+    login:[...document.querySelectorAll('form input[type=password]')].some(visible),
+    challenge:challenged.some(el => visible(el) && !passiveBadge(el)),
+    title:document.title||'',
+    classifierRevision:'live-dom-badge-aware-2'
+  };
+}
+
 async function send(id,payload) {
+  // Always classify the currently rendered managed tab, not a cached/old
+  // content-script closure. No navigation, clicks or source requests.
+  if (payload?.type === 'CLASSIFY' && chrome.scripting?.executeScript) {
+    const result = await checkedIO(chrome.scripting.executeScript({
+      target:{tabId:id}, func:classifyLiveDOM
+    }), 'read current-tab challenge state');
+    const state = result?.[0]?.result;
+    if (!state || typeof state.challenge !== 'boolean' || typeof state.login !== 'boolean')
+      throw Error('Current-tab challenge classifier returned no valid result');
+    return state;
+  }
   // A chapter transition creates a NEW document/receiver. The old receiver
   // can leave a RECOVER_IMAGE message pending even after PING succeeded.
   // RECOVER_IMAGE moves one known DOM tile, then restores the scroll offset:
@@ -721,7 +757,7 @@ async function execute(job) {
   if (action === 'probe') {
     // Open tabs predating extension installation need content-script injection.
     await waitContent(10000);
-    const first=await checkedIO(send(state.tabId,{type:'FIRST_LOADED_IMAGE',payload:{origins:browserImageOrigins()}}), 'probe visible images');
+    const first=await checkedIO(send(state.tabId,{type:'FIRST_LOADED_IMAGE',payload:{origins:browserImageOrigins(),reader_selectors:Array.isArray(payload?.reader_selectors)?payload.reader_selectors:[]}}), 'probe visible images');
     if(!first?.url) throw Error('No decoded CDN image on the selected page; scroll to the first chapter image and retry pairing');
     const already=capturedImages.get(normalizeResourceUrl(first.url));
     const original=already ? {base64:already.base64,via:'captured-during-scroll'} : null;
@@ -750,13 +786,57 @@ async function execute(job) {
         reason:'No original image bytes were available from the paired browser tab'};
     }
     // Same-origin sites may still use a normal extension fetch.
-    const response=await fetch(u.href,{credentials:'include',cache:'default'});
+    // A normal <img> can decode in the managed tab even when a SEPARATE
+    // extension-origin fetch throws (CORS on redirects, network failures).
+    // The existing HTTP-error fallback below cannot run when fetch rejects.
+    // Keep original-byte success unchanged; use only the already-implemented
+    // rendered-pixel capture if this particular fetch failed AND the exact
+    // image is decoded in the currently managed tab.
+    let response;
+    try {
+      response=await fetch(u.href,{credentials:'include',cache:'default'});
+    } catch(fetchError) {
+      const diagnostics=captureDiagnostics();
+      diagnostics.originalFetchError=String(fetchError).slice(0,240);
+      try {
+        diagnostics.tabImage=await send(state.tabId,{type:'IMAGE_STATUS',payload:{url:u.href}});
+      } catch(statusError) {
+        diagnostics.tabStatusError=String(statusError).slice(0,240);
+      }
+      if (diagnostics.tabImage?.loaded) {
+        try {
+          const rendered=await captureVisibleImage(u.href);
+          if (rendered?.base64) {
+            return {url:u.href,status:200,headers:{},base64:rendered.base64,
+              via:rendered.via,diagnostics};
+          }
+        } catch(captureError) {
+          diagnostics.renderFallbackError=String(captureError).slice(0,240);
+        }
+      }
+      lastError='Original image fetch rejected; decoded-tab fallback unavailable. '
+        + JSON.stringify(diagnostics);
+      return {url:u.href,status:424,headers:{},base64:'',
+        reason:'Original-byte fetch rejected; visible-image recovery unavailable',
+        diagnostics};
+    }
     const bytes=response.ok ? await response.arrayBuffer() : new ArrayBuffer(0);
     if (bytes.byteLength > 90*1024*1024) throw Error('Image exceeds safety limit');
     const encoded= response.ok ? await toBase64(bytes) : '';
     const diagnostics=captureDiagnostics();
     if (!response.ok) {
       try {diagnostics.tabImage=await send(state.tabId,{type:'IMAGE_STATUS',payload:{url:u.href}});} catch{}
+      // Additive fallback after a failed original-byte fetch. Preserve the
+      // existing original response path for every site where it works.
+      if (diagnostics.tabImage?.loaded) {
+        try {
+          const rendered=await captureVisibleImage(u.href);
+          if (rendered?.base64) return {url:u.href,status:200,headers:{},base64:rendered.base64,via:rendered.via,
+            diagnostics:{...diagnostics,originalFetchStatus:response.status}};
+        } catch (error) {
+          diagnostics.renderFallbackError=String(error).slice(0,240);
+        }
+      }
       lastError='Image not recoverable from loaded tab; extension fetch HTTP '+response.status+'. '+JSON.stringify(diagnostics);
     }
     return {url:response.url,status:response.status,headers:{'retry-after':response.headers.get('retry-after') || ''},base64:encoded,diagnostics};

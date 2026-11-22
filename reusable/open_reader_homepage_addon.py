@@ -42,6 +42,12 @@ def augment_assets(asset_root: Path, project_root: Path):
         if not p.resolve().is_relative_to(asset_root):
             raise RuntimeError('Asset path escapes staging directory')
         s=p.read_text(encoding='utf-8')
+        # The original per-comic bell would otherwise render twice. Change only
+        # staged HTML; preserve users' local reader/index.html unchanged.
+        s=re.sub(r'<script\b[^>]*\bsrc=[\"\'](?:\./)?source-issue-bell\.js[\"\'][^>]*>\s*</script>', '', s, flags=re.IGNORECASE)
+        # Earlier local kits added relative favicons. Retain one canonical
+        # root-relative set for the generated Worker, on every route.
+        s=re.sub(r'<link\b[^>]*\bhref=[\"\']\./favicon(?:\.ico|-[0-9]+\.png)[\"\'][^>]*>', '', s, flags=re.IGNORECASE)
         if '<script defer src="/reader-issues.js"' not in s:
             if not re.search(r'</head\s*>',s,re.IGNORECASE):
                 raise RuntimeError('HTML asset is missing </head>: ' + str(p))
@@ -49,6 +55,12 @@ def augment_assets(asset_root: Path, project_root: Path):
             p.write_text(s,encoding='utf-8')
         html_count+=1
     feed=write_issue_feed(project_root,asset_root/'source-issues.json')
+    # Public contents should not change merely because run.py was rerun.
+    # Runtime R2 issues still carry their own first-reported timestamps.
+    stable={k:v for k,v in feed.items() if k!='generated_at'}
+    import json
+    (asset_root/'source-issues.json').write_text(
+        json.dumps(stable,sort_keys=True,separators=(',',':'),ensure_ascii=False),encoding='utf-8')
     return {'html_documents':html_count,'issues':feed['count'],
             'affected_chapters':len({(c['work_slug'],c['episode_id']) for c in feed['cases']}),
             'static_assets':len(ASSETS)+1}

@@ -572,7 +572,7 @@ def source_extension_context(data_dir: Path, source_url: str, *,
         # This transfers a decoded image across extension -> localhost -> Python,
         # validates bytes, and gives the user an on-disk artifact to inspect.
         try:
-            result = bridge.rpc('probe', timeout=55)
+            result = bridge.rpc('probe', {'reader_selectors': list(reader_selectors)}, timeout=55)
         except BrowserBridgeError as exc:
             if 'Unsupported command' in str(exc):
                 raise BrowserBridgeError(

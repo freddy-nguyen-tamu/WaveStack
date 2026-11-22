@@ -342,9 +342,11 @@ def classify_browser_page(page) -> str | None:
             return r.width>0 && r.height>0 && s.display!=='none' && s.visibility!=='hidden';
           };
           const login=[...document.querySelectorAll('form input[type=password]')].some(visible);
+          // Ignore ONLY the passive corner badge, not a displayed verification form.
+          const passiveRecaptchaBadge = el => !!el.closest('.grecaptcha-badge');
           const challenge=[...document.querySelectorAll(
             'iframe[src*="captcha" i], iframe[title*="captcha" i], #challenge-running, .cf-challenge, input[name*="captcha" i], .g-recaptcha, [data-sitekey]'
-          )].some(visible);
+          )].some(el => visible(el) && !passiveRecaptchaBadge(el));
           return {login, challenge, title:document.title||''};
         }""")
     except Exception:

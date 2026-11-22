@@ -184,6 +184,7 @@ _PREFLIGHT_PYTHON = (
     ('test_confirmed_source_placeholders.py', 3),
     ('test_managed_tab_recycle_resume.py', 2),
     ('test_resume_deferred_and_reader_host.py', 8),
+    ('test_open_reader_bell_integration.py', 4),
 )
 _PREFLIGHT_JAVASCRIPT = (
     'extension_persistent_autoconnect.js',
@@ -191,13 +192,16 @@ _PREFLIGHT_JAVASCRIPT = (
     'extension_fast_path_and_watchdog.js',
     'extension_tile_stall_recovery.js',
     'extension_next_chapter_recovery.js',
+    'extension_passive_recaptcha.js',
     'extension_auto_tab_launch.js',
     'extension_managed_tab_isolation.js',
     'extension_recovery_transport_fallback.js',
     'extension_scroll_stability.js',
     'extension_exact_image_recovery.js',
+    'extension_fetch_exception_screenshot_fallback.js',
     'extension_same_url_reload.js',
     'extension_managed_tab_recycle.js',
+    'open_reader_worker.test.mjs',
 )
 
 

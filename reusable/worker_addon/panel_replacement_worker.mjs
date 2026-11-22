@@ -62,13 +62,15 @@ const isId = id => /^[a-f0-9]{20}$/.test(id||'');
 const feedRequest = req => new Request(new URL('/source-issues.json',req.url),{method:'GET'});
 async function baseCases(req,env) {
   const response=await env.ASSETS.fetch(feedRequest(req));
-  if(!response.ok) return [];
+  if(!response.ok) return {cases:[],resolved:new Set()};
   let data;
-  try{data=await response.json()}catch{return []}
-  return data?.schema==='comicarchiver.source_issue_feed.v1' && Array.isArray(data.cases) ? data.cases.filter(x=>x?.status==='source_server_unavailable' && isId(x.id)) : [];
+  try{data=await response.json()}catch{return {cases:[],resolved:new Set()}}
+  if(data?.schema!=='comicarchiver.source_issue_feed.v1' || !Array.isArray(data.cases))return {cases:[],resolved:new Set()};
+  const resolved=new Set((Array.isArray(data.resolved_ids)?data.resolved_ids:[]).filter(isId));
+  return {cases:data.cases.filter(x=>x?.status==='source_server_unavailable' && isId(x.id) && !resolved.has(x.id)),resolved};
 }
 async function casesAndHistory(req,env) {
-  const cases=await baseCases(req,env), byId=new Map(cases.map(c=>[c.id,c]));
+  const base=await baseCases(req,env), byId=new Map(base.cases.map(c=>[c.id,c]));
   if(env.PANEL_REPLACEMENTS) {
     let cursor;
     do {
@@ -76,7 +78,7 @@ async function casesAndHistory(req,env) {
       for(const item of list.objects) {
         const stored=await env.PANEL_REPLACEMENTS.get(item.key);
         if(!stored)continue;
-        try{const c=await stored.json();if(c && isId(c.id) && !byId.has(c.id) && c.status==='source_server_unavailable')byId.set(c.id,c)}catch{}
+        try{const c=await stored.json();if(c && isId(c.id) && !base.resolved.has(c.id) && !byId.has(c.id) && c.status==='source_server_unavailable')byId.set(c.id,c)}catch{}
       }
       cursor=list.truncated ? list.cursor : undefined;
     } while(cursor);
@@ -85,9 +87,14 @@ async function casesAndHistory(req,env) {
 }
 async function issuesResponse(req,env) {
   const cases=await casesAndHistory(req,env);
-  const enriched=await Promise.all(cases.map(async c=>({ ...c, replacement_present: !!(env.PANEL_REPLACEMENTS && await env.PANEL_REPLACEMENTS.head('panels/'+c.id)) })));
+  const enriched=await Promise.all(cases.map(async c=>{
+    const replacement=env.PANEL_REPLACEMENTS ? await env.PANEL_REPLACEMENTS.head('panels/'+c.id) : null;
+    return {...c,replacement_present:!!replacement,
+      replacement_sha256:replacement?.customMetadata?.sha256||null};
+  }));
   const chapters=new Set(cases.map(c=>c.work_slug+'\x00'+c.episode_id));
-  return json({schema:'comicarchiver.source_issue_feed.v1',count:enriched.length,affected_chapters:chapters.size,affected_works:new Set(cases.map(c=>c.work_slug)).size,cases:enriched});
+  return json({schema:'comicarchiver.source_issue_feed.v1',count:enriched.length,affected_chapters:chapters.size,affected_works:new Set(cases.map(c=>c.work_slug)).size,
+    upload_enabled:!!(env.PANEL_REPLACEMENTS && typeof env.READER_ADMIN_PASSWORD==='string' && env.READER_ADMIN_PASSWORD.length>=20 && typeof env.READER_SESSION_HMAC_KEY==='string' && env.READER_SESSION_HMAC_KEY.length>=32),cases:enriched});
 }
 async function login(req,env) {
   if(!sameOriginPost(req))return error('Same-origin request required',403);
@@ -113,7 +120,8 @@ async function upload(req,env,id) {
   const bytes=await boundedBody(req);
   if(!bytes || bytes.length<32)return error('Invalid or oversized image',413);
   if(!images[contentType](bytes))return error('Image signature does not match content type',415);
-  const hash=base64url(await crypto.subtle.digest('SHA-256',bytes).then(x=>new Uint8Array(x)));
+  const digest=new Uint8Array(await crypto.subtle.digest('SHA-256',bytes));
+  const hash=Array.from(digest,b=>b.toString(16).padStart(2,'0')).join('');
   const now=new Date().toISOString();
   await env.PANEL_REPLACEMENTS.put('panels/'+id,bytes,{httpMetadata:{contentType},customMetadata:{sha256:hash,updated_at:now,work_slug:String(issue.work_slug),episode_id:String(issue.episode_id),panel:String(issue.panel)}});
   await env.PANEL_REPLACEMENTS.put('history/'+id+'.json',JSON.stringify(issue),{httpMetadata:{contentType:'application/json'}});
@@ -141,7 +149,8 @@ async function decorateManifest(req,env) {
     const object=await env.PANEL_REPLACEMENTS.head('panels/'+c.id);
     if(!object)continue;
     // Only override the missing panel's exact original slot, never a neighboring image.
-    chapter.images[i]={...chapter.images[i],url:'/api/panel-replacements/'+c.id+'?v='+esc(object.customMetadata?.sha256||'new')};
+    chapter.images[i]={...chapter.images[i],url:'/api/panel-replacements/'+c.id+'?v='+esc(object.customMetadata?.sha256||'new'),
+      sha256:object.customMetadata?.sha256||chapter.images[i].sha256};
     changed++;
   }
   return changed ? json(m,200,{'Cache-Control':'no-store'}) : original;
@@ -163,6 +172,8 @@ export default {
   async fetch(req,env) {
     if(!env.ASSETS)return error('Static assets binding missing',503);
     const u=new URL(req.url), path=u.pathname;
+    if(path==='/api/reader-health' && req.method==='GET')return json({ok:true,script:'open-reader-panel-replacement-v1',
+      storage_configured:!!env.PANEL_REPLACEMENTS});
     if(path==='/source-issues.json' && req.method==='GET')return issuesResponse(req,env);
     if(path==='/api/admin/login' && req.method==='POST')return login(req,env);
     const imagePath=path.match(/^\/api\/panel-replacements\/([a-f0-9]{20})$/);

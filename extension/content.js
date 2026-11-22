@@ -3,7 +3,7 @@
   // Site scope is generated from the attached HTML. This extension never navigates
   // to extension-origin pages while reading and never intercepts wheel events.
   const KEY='cleanSourceComicReader.v3';
-  const readerSelectors=[".reading-content", ".page-break"];
+  const readerSelectors=[".reading-content"];
   const findReader=()=>readerSelectors.map(s=>document.querySelector(s)).find(el=>el && el.querySelectorAll('img,[data-page]').length);
   let root=findReader();
   if(!root)return;
@@ -47,7 +47,7 @@
       im.setAttribute('loading','eager');
       // The original site sometimes uses lazy placeholder URLs. Restore the
       // legitimate source URL from its own data attributes without bypassing access.
-      if(im.getAttribute('src')!==src && !src.includes('bg_transparency')) im.setAttribute('src',src);
+      if(im.getAttribute('src')!==src && !["/images/refresh.png"].some(marker=>src.includes(marker))) im.setAttribute('src',src);
       if(im.complete && im.naturalWidth>0)loaded.set(im,true);
       else if(failed.has(im)&&failed.get(im)<4){
         const k=failed.get(im);failed.set(im,k+1);
@@ -61,9 +61,9 @@
   function links(){
     // Native reader navigation always has priority. No manufactured URLs if
     // native next/previous links are present.
-    const prev=[...document.querySelectorAll(["a[data-comic-archive-discovery-prev][href]"].join(','))]
+    const prev=[...document.querySelectorAll([].join(','))]
       .find(a=>a.href && !a.classList.contains('dim'));
-    const next=[...document.querySelectorAll(["a[data-comic-archive-discovery-next][href]"].join(','))]
+    const next=[...document.querySelectorAll([].join(','))]
       .find(a=>a.href && !a.classList.contains('dim'));
     return {prev:prev?.href||null,next:next?.href||null};
   }

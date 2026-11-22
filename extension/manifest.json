@@ -9,8 +9,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://www.toongod.org/webtoon/annoying-alice/*",
-        "https://toongod.org/webtoon/annoying-alice/*"
+        "https://tritinia.org/manga/we-may-be-an-inexperienced-couple-but/*"
       ],
       "js": [
         "content.js"

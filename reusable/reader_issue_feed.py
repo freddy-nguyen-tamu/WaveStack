@@ -68,6 +68,7 @@ def build_issue_feed(project_root: Path, *, reader_base='') -> dict:
     if (state / 'state.sqlite').is_file():
         dirs.insert(0, state)
     cases = []
+    resolved_ids = set()
     for scope in dirs:
         db_path = scope / 'state.sqlite'
         if not db_path.is_file():
@@ -83,8 +84,7 @@ def build_issue_feed(project_root: Path, *, reader_base='') -> dict:
         except sqlite3.DatabaseError:
             continue
         for episode_id, episode, source_url, status in chapters:
-            if status in {'ARCHIVED_VERIFIED', 'ARCHIVED_PENDING_DEPLOYMENT', 'PUBLISHED_VERIFIED'}:
-                continue
+            verified = status in {'ARCHIVED_VERIFIED', 'ARCHIVED_PENDING_DEPLOYMENT', 'PUBLISHED_VERIFIED'}
             folder = scope / 'temporary_downloads' / re.sub(r'[^a-z0-9]+', '-', str(episode_id).casefold()).strip('-')[:45].rstrip('-')
             report = _read_json(folder / 'confirmed_server_failures.json')
             if not isinstance(report, dict) or str(report.get('chapter_id')) != str(episode_id):
@@ -95,7 +95,7 @@ def build_issue_feed(project_root: Path, *, reader_base='') -> dict:
             checkpoint = _read_json(folder / '.image-checkpoint.json')
             saved = checkpoint.get('images', {}) if isinstance(checkpoint, dict) else {}
             for key, evidence in failures.items():
-                if not _accepted(evidence) or str(key) in saved:
+                if not _accepted(evidence):
                     continue
                 try:
                     panel = int(key)
@@ -104,6 +104,9 @@ def build_issue_feed(project_root: Path, *, reader_base='') -> dict:
                 except (ValueError, TypeError):
                     continue
                 ident = hashlib.sha256(f'{slug}\x00{episode_id}\x00{panel}'.encode()).hexdigest()[:20]
+                if verified or str(key) in saved:
+                    resolved_ids.add(ident)
+                    continue
                 case = {
                     'id': ident,
                     'work': comic,
@@ -127,6 +130,7 @@ def build_issue_feed(project_root: Path, *, reader_base='') -> dict:
         'generated_at': _utc(),
         'count': len(cases),
         'affected_works': len({x['work_slug'] for x in cases}),
+        'resolved_ids': sorted(resolved_ids),
         'cases': cases,
     }
 

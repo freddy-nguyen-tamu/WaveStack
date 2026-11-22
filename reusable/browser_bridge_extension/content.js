@@ -13,9 +13,12 @@
       const r = el.getBoundingClientRect(), s = getComputedStyle(el);
       return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
     };
+    // A small reCAPTCHA v3 badge at the viewport edge is not a challenge wall.
+    // Preserve every existing hard-challenge selector and the login check.
+    const passiveRecaptchaBadge = el => !!el.closest('.grecaptcha-badge');
     return {
       login: [...document.querySelectorAll('form input[type=password]')].some(visible),
-      challenge: [...document.querySelectorAll('iframe[src*="captcha" i], iframe[title*="captcha" i], #challenge-running, .cf-challenge, input[name*="captcha" i], .g-recaptcha, [data-sitekey]')].some(visible),
+      challenge: [...document.querySelectorAll('iframe[src*="captcha" i], iframe[title*="captcha" i], #challenge-running, .cf-challenge, input[name*="captcha" i], .g-recaptcha, [data-sitekey]')].some(el => visible(el) && !passiveRecaptchaBadge(el)),
       title: document.title || ''
     };
   };
@@ -151,9 +154,23 @@
   const abs = value => {try {let u=new URL(String(value||'').trim(),location.href);u.hash='';return u.href;}catch{return '';}};
   const matchesImage = (im,url) => [im.currentSrc,im.src,im.getAttribute('src'),im.getAttribute('data-src'),
     im.getAttribute('data-original')].some(v=>abs(v)===abs(url));
-  const firstLoadedImage = origins => {
-    const image=[...document.images].find(im=>im.complete && im.naturalWidth>0 &&
+  // Compatibility cascade: preserve the existing external-CDN probe first.
+  // A site may instead have decoded panels at its own origin; the adapter
+  // already specifies the reader container, so add this narrow fallback.
+  const firstLoadedImage = options => {
+    const origins=Array.isArray(options) ? options : (options?.origins || []);
+    let image=[...document.images].find(im=>im.complete && im.naturalWidth>0 &&
       (origins||[]).some(o=>abs(im.currentSrc).startsWith(o+'/')));
+    if (!image && !Array.isArray(options)) {
+      for(const selector of (Array.isArray(options?.reader_selectors) ? options.reader_selectors : [])) {
+        let root;
+        try { root=document.querySelector(selector); } catch { continue; }
+        if (!root) continue;
+        image=[...root.querySelectorAll('img')].find(im=>im.complete && im.naturalWidth>0 &&
+          im.naturalHeight>0 && abs(im.currentSrc || im.src).startsWith('https://'));
+        if (image) break;
+      }
+    }
     return {url:image ? abs(image.currentSrc) : ''};
   };
   // Background/minimized Chrome tabs can stop delivering requestAnimationFrame.
@@ -215,7 +232,7 @@
   // The identical dispatch is also available to Firefox's message transport.
   async function dispatch(message) {
     if (message?.type === 'PAGE') return html();
-    if (message?.type === 'FIRST_LOADED_IMAGE') return firstLoadedImage(message.payload?.origins);
+    if (message?.type === 'FIRST_LOADED_IMAGE') return firstLoadedImage(message.payload || {});
     if (message?.type === 'CAPTURE_IMAGE_TILE') return imageTile(message.payload || {});
     if (message?.type === 'CLASSIFY') return classify();
     if (message?.type === 'SNAPSHOT') return snapshot(message.payload || {});

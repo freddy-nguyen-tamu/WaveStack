@@ -8,6 +8,7 @@ or an exact existing Cloudflare reader project. No destructive remote operations
 from __future__ import annotations
 
 import base64
+from contextlib import closing
 import hashlib
 import json
 import re
@@ -165,7 +166,7 @@ def local_candidates(engine):
     comics = {}
     for path in list_local_state_dbs(engine.ROOT):
         try:
-            with sqlite3.connect(f'file:{path.as_posix()}?mode=ro', uri=True) as conn:
+            with closing(sqlite3.connect(f'file:{path.as_posix()}?mode=ro', uri=True)) as conn:
                 conn.row_factory = sqlite3.Row
                 opts = {}
                 for rec in conn.execute('SELECT key,value FROM options WHERE key IN (\'series_slug\',\'series_title\')'):
@@ -420,6 +421,12 @@ def _reader_hash(root):
     files = {p.name: sha(p.read_bytes()) for p in sorted((root / 'reader').iterdir())
              if p.is_file()}
     files['open-reader-homepage'] = sha(_index_html().encode('utf-8'))
+    for relative in ('reusable/open_reader_homepage_addon.py',
+                     'reusable/worker_addon/panel_replacement_worker.mjs'):
+        file = Path(root) / relative
+        if not file.is_file():
+            raise RuntimeError('Missing shared-reader integration source: ' + relative)
+        files[relative] = sha(file.read_bytes())
     return sha(canonical(files))
 
 
@@ -457,17 +464,39 @@ def stage_worker_assets(root, registry, stage):
                 shutil.copy2(file, dest / file.name)
         (dest / 'manifest.json').write_bytes(canonical({'title': comic['title'],
                                                         'chapters': comic['chapters']}))
+    # Same staging hook handles the generated homepage AND nested reader HTML.
+    # Never mutate the local reader/ files or any downloaded chapter archive.
+    from reusable.open_reader_homepage_addon import augment_assets
+    stats = augment_assets(stage, root)
+    print(f'open-reader: notification bell + favicon staged on {stats["html_documents"]} routes; '
+          f'{stats["affected_chapters"]} affected chapters ({stats["issues"]} panels)', flush=True)
     return payload
 
 
-def _worker_config(stage, config_dir):
-    cfg = {'name': WORKER_NAME, 'compatibility_date': '2026-11-20',
+def _worker_config(stage, config_dir, root=None):
+    root = Path(root) if root is not None else Path(__file__).resolve().parent.parent
+    worker = root / 'reusable' / 'worker_addon' / 'panel_replacement_worker.mjs'
+    if not worker.is_file():
+        raise RuntimeError('Missing open-reader Worker script: ' + str(worker))
+    cfg = {'name': WORKER_NAME, 'compatibility_date': '2026-11-21',
+           'main': str(worker.resolve()),
            'assets': {'directory': str(Path(stage).resolve()),
-                      'not_found_handling': '404-page'}}
+                      'not_found_handling': '404-page', 'binding': 'ASSETS',
+                      # Assets, including chapter images and scripts, stay on the
+                      # static fast path. Only authenticated API and dynamic
+                      # issue/manifest routes invoke the Worker first.
+                      'run_worker_first': ['/api/*', '/source-issues.json',
+                                           '/comics/*/manifest.json']}}
+    settings_file = root / '.archiver_state' / 'open_reader_uploads.json'
+    if settings_file.is_file():
+        settings = json.loads(settings_file.read_text(encoding='utf-8'))
+        bucket = settings.get('r2_bucket') if isinstance(settings, dict) else None
+        if not isinstance(bucket, str) or not re.fullmatch(r'[a-z0-9][a-z0-9-]{2,62}', bucket):
+            raise RuntimeError('Invalid R2 bucket configuration: ' + str(settings_file))
+        cfg['r2_buckets'] = [{'binding':'PANEL_REPLACEMENTS','bucket_name':bucket}]
     path = Path(config_dir) / 'wrangler.json'
     path.write_bytes(canonical(cfg))
     return path
-
 
 
 def _assert_no_unowned_existing_worker(engine, registry):
@@ -500,14 +529,13 @@ def _assert_no_unowned_existing_worker(engine, registry):
 
 def _deploy(engine, stage, registry):
     with tempfile.TemporaryDirectory(prefix='open-reader-config-') as tmp:
-        cfg = _worker_config(stage, tmp)
+        cfg = _worker_config(stage, tmp, root=engine.ROOT)
         p = engine.npx_wrangler(['deploy', '--config', str(cfg)], cwd=Path(tmp),
                                 progress_label='Cloudflare Workers upload: open-reader')
         output = (p.stdout or '') + '\n' + (p.stderr or '')
     matches = re.findall(r'https://open-reader\.[a-zA-Z0-9-]+\.workers\.dev', output)
     if matches:
         return matches[-1].rstrip('/')
-    # The Worker may have an existing hostname, or Wrangler may omit the URL.
     old = registry.get('worker_url', '').rstrip('/')
     if old and urlsplit(old).hostname and urlsplit(old).hostname.endswith('.workers.dev'):
         return old
@@ -517,34 +545,105 @@ def _deploy(engine, stage, registry):
 
 
 def _verify_published(worker_url, staged, registry):
-    """Prove the public library AND its reader pages work, not just JSON files.
+    """Validate all deployed assets, allowing *only* registered panel overlays.
 
-    On unchanged deployments this is the gate for skipping Wrangler. The old
-    gate verified only JSON and could declare success with a broken homepage.
+    /source-issues.json is computed dynamically with R2 replacement states.
+    /comics/slug/manifest.json may rewrite an exact source-missing panel to its
+    verified uploaded replacement. All other fields and assets remain immutable.
     """
     stage = Path(staged)
-    # Check every deployed reader asset, including JavaScript and styles. An
-    # unchanged registry alone does not prove that a comic can actually render.
-    # Static Workers serve directory index.html at the public trailing-slash
-    # route; checking /index.html would miss a broken user-facing / URL.
-    paths = []
+    # Verify the dynamic Worker script, not just assets-only Cloudflare hosting.
+    check = requests.get(worker_url.rstrip('/') + '/api/reader-health',
+                         headers={'Cache-Control':'no-cache'}, timeout=40)
+    if check.status_code != 200 or check.json().get('script') != 'open-reader-panel-replacement-v1':
+        raise RuntimeError('Open Reader Worker backend is absent or outdated; refusing success')
+    expected_feed = json.loads((stage / 'source-issues.json').read_text(encoding='utf-8'))
+    source_ids = {c['id'] for c in expected_feed['cases']}
+    live_feed = None
+
+    def validate_feed(data):
+        if (not isinstance(data, dict) or
+                data.get('schema') != 'comicarchiver.source_issue_feed.v1' or
+                not isinstance(data.get('cases'), list)):
+            return False
+        ids = {c.get('id') for c in data['cases'] if isinstance(c, dict)}
+        resolved = set(expected_feed.get('resolved_ids') or [])
+        return source_ids.issubset(ids) and not ids.intersection(resolved)
+
+    def validate_manifest(relative, deployed):
+        """Allow a URL/hash rewrite only at a source-issue panel's exact slot."""
+        expected = json.loads((stage / relative).read_text(encoding='utf-8'))
+        if canonical(expected) == canonical(deployed):
+            return True
+        if live_feed is None or not isinstance(deployed, dict):
+            return False
+        parts = Path(relative).parts
+        if len(parts) != 3 or parts[0] != 'comics' or parts[2] != 'manifest.json':
+            return False
+        slug = parts[1]
+        chapters = deployed.get('chapters')
+        old_chapters = expected.get('chapters')
+        if (not isinstance(chapters, list) or not isinstance(old_chapters, list) or
+                len(chapters) != len(old_chapters)):
+            return False
+        allowed = {(str(c['episode_id']), int(c['panel'])): c for c in live_feed['cases']
+                   if isinstance(c, dict) and c.get('work_slug') == slug and
+                   str(c.get('episode_id','')) and
+                   str(c.get('panel','')).isdigit() and
+                   re.fullmatch(r'[a-f0-9]{20}', str(c.get('id','')))}
+        normalized = json.loads(json.dumps(deployed))
+        for ch, old in zip(normalized['chapters'], old_chapters):
+            if str(ch.get('id')) != str(old.get('id')) or not isinstance(ch.get('images'), list):
+                return False
+            if len(ch['images']) != len(old['images']):
+                return False
+            for i, image in enumerate(ch['images']):
+                previous = old['images'][i]
+                if image == previous:
+                    continue
+                case = allowed.get((str(ch['id']), i+1))
+                if not case or not case.get('replacement_present'):
+                    return False
+                prefix = '/api/panel-replacements/' + case['id'] + '?v='
+                if (not isinstance(image,dict) or
+                        not isinstance(image.get('url'),str) or
+                        not image['url'].startswith(prefix) or
+                        image.get('sha256') != case.get('replacement_sha256') or
+                        not re.fullmatch(r'[0-9a-f]{64}', str(image.get('sha256','')))):
+                    return False
+                image['url'] = previous['url']
+                image['sha256'] = previous['sha256']
+        return canonical(normalized) == canonical(expected)
+
     for source in sorted(p for p in stage.rglob('*') if p.is_file()):
         relative = source.relative_to(stage).as_posix()
         public_path = relative[:-len('index.html')] if relative.endswith('index.html') else relative
-        paths.append((relative, public_path))
-
-    for relative, public_path in paths:
-        expected = sha((stage / relative).read_bytes())
+        expected_hash = sha(source.read_bytes())
         url = worker_url.rstrip('/') + '/' + public_path
         problem = 'no response'
         for attempt in range(5):
             try:
                 response = requests.get(url, headers={'Cache-Control': 'no-cache'}, timeout=40)
-                if response.status_code == 200 and sha(response.content) == expected:
-                    break
-                problem = (f'HTTP {response.status_code}' if response.status_code != 200
-                           else 'HTTP 200 but deployed content checksum differs')
-            except requests.RequestException as exc:
+                if response.status_code == 200:
+                    if sha(response.content) == expected_hash:
+                        break
+                    if relative == 'source-issues.json':
+                        data = response.json()
+                        if validate_feed(data):
+                            live_feed = data
+                            break
+                    elif relative.startswith('comics/') and relative.endswith('/manifest.json'):
+                        if live_feed is None:
+                            feed_response = requests.get(worker_url.rstrip('/') + '/source-issues.json',
+                                                         headers={'Cache-Control':'no-cache'}, timeout=40)
+                            if feed_response.ok and validate_feed(feed_response.json()):
+                                live_feed = feed_response.json()
+                        if validate_manifest(relative, response.json()):
+                            break
+                    problem = 'HTTP 200 but unexpected dynamic content or SHA-256 mismatch'
+                else:
+                    problem = f'HTTP {response.status_code}'
+            except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
                 problem = f'{type(exc).__name__}: {exc}'
             if attempt < 4:
                 import time
@@ -553,8 +652,7 @@ def _verify_published(worker_url, staged, registry):
         else:
             raise RuntimeError(f'Open Reader live URL is unavailable or outdated: {url} '
                                f'({problem}); refusing to claim deployment complete')
-        print(f'open-reader: HTTP 200 + SHA-256 OK {url}', flush=True)
-
+        print(f'open-reader: HTTP 200 + integrity OK {url}', flush=True)
 
 
 def _sync_github_readme(engine, owner, token, repo, slug, route):
@@ -696,7 +794,7 @@ def _checkpoint_legacy_sqlite(engine, registry):
     base = registry['worker_url'].rstrip('/')
     for path in list_local_state_dbs(engine.ROOT):
         try:
-            with sqlite3.connect(path) as conn:
+            with closing(sqlite3.connect(path)) as conn:
                 row = conn.execute("SELECT value FROM options WHERE key='series_slug'").fetchone()
                 if not row:
                     continue
