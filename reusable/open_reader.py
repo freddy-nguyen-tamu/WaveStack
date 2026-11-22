@@ -454,12 +454,12 @@ def _reader_hash(root):
                      'reusable/comic_landing.js', 'reusable/reader_progress.js',
                      'reusable/reader_chapter_enhancement.css',
                      'reusable/reader_chapter_enhancement.js',
-                     'reusable/gold_favicon.py'):
+                     'reusable/gold_favicon.py', 'reusable/partial_chapter_publish.py'):
         file = Path(root) / relative
         if not file.is_file():
             # Legacy and isolated non-streaming test projects do not have the
             # optional GitHub transport. Refuse only in configured mode.
-            if relative in ('reusable/github_streaming.py', 'reusable/github_upload_bell.js') and not github_streaming.load_mode(root):
+            if relative in ('reusable/github_streaming.py', 'reusable/github_upload_bell.js', 'reusable/partial_chapter_publish.py') and not github_streaming.load_mode(root):
                 continue
             raise RuntimeError('Missing shared-reader integration source: ' + relative)
         files[relative] = sha(file.read_bytes())
@@ -770,7 +770,7 @@ document.querySelector('#search').addEventListener('input',render);fetch('/libra
 </script></body></html>'''
 
 
-def stage_worker_assets(root, registry, stage):
+def stage_worker_assets(root, registry, stage, *, partial_records=None):
     stage = Path(stage)
     stage.mkdir(parents=True, exist_ok=True)
     payload = _registry_payload(registry, _reader_hash(root))
@@ -818,6 +818,61 @@ def stage_worker_assets(root, registry, stage):
         if native_app.count(needle) != 1:
             raise RuntimeError('Reader chapter selection has changed; refusing an unsafe progress patch')
         native_app = native_app.replace(needle, updated, 1)
+        # An explicit but unpublished chapter must NOT silently render chapter 1.
+        # This only alters the generated reader bundle, not reader/app.js.
+        absent = "  if(chapterIndex<0)chapterIndex=0;"
+        if native_app.count(absent) != 1:
+            raise RuntimeError('Unknown-chapter fallback changed; refusing an unsafe reader-link patch')
+        native_app = native_app.replace(absent, """  if(chapterIndex<0 && params.has('chapter')){
+    const requested=params.get('chapter');
+    const notice=document.createElement('section');notice.className='or-unpublished-chapter';
+    const heading=document.createElement('h1');heading.textContent='Chapter not yet available';
+    const detail=document.createElement('p');
+    detail.textContent=`The requested chapter (${requested}) is not in this comic's published Open Reader catalogue. Another chapter will not be substituted.`;
+    const browse=document.createElement('a');browse.href='./overview/';browse.textContent='Browse available chapters';
+    notice.append(heading,detail,browse);$('#pages').append(notice);
+    $('#panel-series').textContent=manifest.title||'Open Reader';
+    updateSpeed(settings.speed);$('#panel-auto').checked=settings.auto;drawChapterList();
+    document.title='Chapter unavailable · '+(manifest.title||'Open Reader');
+    return;
+  }
+  if(chapterIndex<0)chapterIndex=0;""", 1)
+        # A verified image that later fails to load uses the same compact
+        # helper as an originally missing image. Keep it in global script
+        # scope so the existing top-level needPreload() callback can call it.
+        helper = 'function missingGlyph(figure,ordinal,reason){\n    figure.className=\'or-missing-panel\';\n    figure.style.aspectRatio=\'auto\';\n    figure.setAttribute(\'role\',\'img\');\n    figure.setAttribute(\'aria-label\',`Panel ${ordinal} unavailable: ${reason}`);\n    figure.title=`Panel ${ordinal} unavailable`;\n    const svg=document.createElementNS(\'http://www.w3.org/2000/svg\',\'svg\');\n    svg.setAttribute(\'viewBox\',\'0 0 16 16\');\n    svg.setAttribute(\'width\',\'16\');svg.setAttribute(\'height\',\'16\');\n    svg.setAttribute(\'aria-hidden\',\'true\');\n    svg.innerHTML=\'<rect x="1.3" y="2" width="13.4" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="5" cy="5.4" r="1.1" fill="currentColor"/><path d="M2.8 12l3.6-3.8 2.1 2 2.3-2.2 2.5 3.1M1.7 14.7l12.6-13.3" fill="none" stroke="currentColor" stroke-width="1"/>\';\n    figure.replaceChildren(svg);\n}\n'
+        if native_app.count('function needPreload(im){')!=1:
+            raise RuntimeError('Native reader preload function changed; refusing partial-pixel patch')
+        native_app=native_app.replace('function needPreload(im){',helper+'\nfunction needPreload(im){',1)
+        # Missing chapters use the regular rendering path. The staging hook
+        # fills their real checkpoint panels and unavailable ordinal placeholders.
+        # Never substitute the next or previous chapter for a requested ID.
+        native_app = native_app.replace(
+            "  const frag=document.createDocumentFragment();\n  known=chapter.images.map((item,i)=>{",
+            """  const frag=document.createDocumentFragment();
+  // Render compact markers for missing pages without reserving any image height.
+  known=chapter.images.map((item,i)=>{
+    if(item?.placeholder===true){
+      const figure=document.createElement('figure');
+      missingGlyph(figure,Number(item.panel)||i+1,
+        item.confirmed_missing ? 'Missing from original source' : 'Not yet archived');
+      frag.append(figure);
+      return {status:'loaded',el:figure,url:'',order:i,placeholder:true};
+    }""",1)
+        if 'if(item?.placeholder===true)' not in native_app:
+            raise RuntimeError('Could not add partial-panel fallback to staged reader')
+        # On an unexpected runtime image failure, retain a visible placeholder
+        # after the bounded retries rather than leaving the reader stuck forever.
+        original_fail = "    if(im.failures<=4) setTimeout(()=>{im.status='waiting';needPreload(im)}, Math.min(15000,700*2**im.failures));"
+        replacement_fail = """    if(im.failures<=4) setTimeout(()=>{im.status='waiting';needPreload(im)}, Math.min(15000,700*2**im.failures));
+    else {
+      im.status='loaded';
+      const figure=im.el.parentElement;
+      if(figure)missingGlyph(figure,im.order+1,'Image failed to load; refresh to retry');
+    }"""
+        if native_app.count(original_fail)!=1:
+            raise RuntimeError('Native image retry logic changed; refusing unsafe stage modification')
+        native_app=native_app.replace(original_fail,replacement_fail,1)
         nav_addon = (Path(root) / 'reusable' / 'reader_chapter_enhancement.js').read_text(encoding='utf-8')
         if 'open-reader:skip-entry-flip' in native_app:
             raise RuntimeError('Existing reader app contains the supplemental navigation logic; refusing duplicates')
@@ -835,7 +890,7 @@ def stage_worker_assets(root, registry, stage):
     # The staging hook adds favicons to every route, but the issue bell to the homepage only.
     # Never mutate the local reader/ files or any downloaded chapter archive.
     from reusable.open_reader_homepage_addon import augment_assets
-    stats = augment_assets(stage, root)
+    stats = augment_assets(stage, root, partial_records)
     print(f'open-reader: golden favicon on {stats["html_documents"]} routes, homepage-only notifications; '
           f'{stats["affected_chapters"]} affected chapters ({stats["issues"]} panels)', flush=True)
     return payload
@@ -975,10 +1030,19 @@ def _verify_published(worker_url, staged, registry):
                             if im==prev:continue
                             expected_sha=github_replacements.get(f'{parts[1]}:{ch["id"]}:{i}')
                             expected_url=github_streaming.route(parts[1],str(ch['id']),i,str(expected_sha))
-                            if (not re.fullmatch('[a-f0-9]{64}',str(expected_sha)) or
-                                    im.get('sha256')!=expected_sha or im.get('url')!=expected_url or
-                                    {k:v for k,v in im.items() if k not in ('sha256','url')} !=
-                                    {k:v for k,v in prev.items() if k not in ('sha256','url')}):
+                            if not re.fullmatch('[a-f0-9]{64}',str(expected_sha)) or im.get('sha256')!=expected_sha or im.get('url')!=expected_url:
+                                ok=False;break
+                            if prev.get('placeholder') is True:
+                                github=im.get('github') or {}
+                                prefix=f'overrides/{parts[1]}/{ch["id"]}/{i}-{expected_sha}.'
+                                if (im.get('recovered') is not True or github.get('repo')!='open-reader' or
+                                        not str(github.get('path','')).startswith(prefix) or
+                                        not str(github['path']).endswith(('.jpg','.png','.webp')) or
+                                        im.get('width')!=prev.get('width') or im.get('height')!=prev.get('height')):
+                                    ok=False;break
+                                ch['images'][i-1]=prev
+                                continue
+                            if {k:v for k,v in im.items() if k not in ('sha256','url')} != {k:v for k,v in prev.items() if k not in ('sha256','url')}:
                                 ok=False;break
                             im.update({'sha256':prev['sha256'],'url':prev['url']})
                         if not ok:break
@@ -1332,7 +1396,12 @@ def publish(engine, db, *, dry_run=False):
         return registry.get('worker_url', '')
     with tempfile.TemporaryDirectory(prefix='comic-open-reader-') as tmp:
         stage = Path(tmp)
-        payload = stage_worker_assets(engine.ROOT, registry, stage)
+        partial_records = None
+        if streaming_mode:
+            from reusable.partial_chapter_publish import publish_partial_checkpoints
+            partial_records = publish_partial_checkpoints(engine.ROOT, engine, owner, token)
+        payload = stage_worker_assets(engine.ROOT, registry, stage,
+                                      partial_records=partial_records)
         if live is not None and canonical(live) == canonical(payload):
             # The old Worker is still live, and the frontend/manifest bytes match.
             # No deployed Worker version is replaced unnecessarily.

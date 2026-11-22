@@ -31,3 +31,54 @@ html.or-flip-exit .or-page-flip::before{animation:or-close 420ms cubic-bezier(.3
 @keyframes or-close{from{transform:rotateY(-97deg);opacity:.25}to{transform:rotateY(0deg);opacity:1}}
 @media(max-width:480px){#reader-panel:not([hidden]){width:100vw}#reader-panel .panel-heading{padding:12px 15px}#reader-panel .panel-controls{padding:14px}#or-library-back:not([hidden]){font-size:12px;padding:10px 12px}}
 @media(prefers-reduced-motion:reduce){.or-page-flip{display:none!important}}
+
+/* Only when a requested chapter has not been published. Never substitute images. */
+#pages > .or-unpublished-chapter{box-sizing:border-box;width:min(94vw,680px);margin:clamp(40px,10vh,120px) auto;padding:clamp(22px,5vw,38px);border:1px solid #5c6470;border-top:4px solid #ff9900;border-radius:7px;background:#232f3e;color:#fff;font:15px/1.55 Arial,Helvetica,sans-serif}
+#pages > .or-unpublished-chapter h1{font-size:clamp(21px,4vw,30px);margin:0 0 12px}
+#pages > .or-unpublished-chapter p{color:#e5eaf0;margin:0 0 20px}
+#pages > .or-unpublished-chapter a{display:inline-block;padding:10px 15px;border-radius:5px;background:#ffd814;color:#0f1111;font-weight:700;text-decoration:none}
+#pages > .or-unpublished-chapter a:hover,#pages > .or-unpublished-chapter a:focus-visible{background:#febd69}
+
+/* Back icon is the actual transparent gold favicon from the library. */
+#or-library-back:not([hidden]) {
+  box-sizing:border-box;
+  width:56px;height:56px;min-height:56px;max-width:56px;
+  padding:0;border:0;border-radius:8px;
+  background:transparent url('/favicon.svg') center/43px 43px no-repeat;
+  box-shadow:none;color:transparent;font-size:0;line-height:0;
+  opacity:.97;transition:background-color .15s ease,opacity .15s ease;
+}
+#or-library-back:hover,#or-library-back:focus-visible {
+  background-color:rgba(255,189,105,.17);
+  background-image:url('/favicon.svg');background-position:center;
+  background-size:43px 43px;background-repeat:no-repeat;box-shadow:none;
+  outline:2px solid #febd69;outline-offset:2px;
+}
+@media(max-width:480px){#or-library-back:not([hidden]){
+  width:52px;height:52px;min-height:52px;max-width:52px;padding:0;
+  background-size:40px 40px;
+}}
+
+/* A missing numbered panel occupies ONLY one tiny native-style icon.
+   Never reserve its original image dimensions or insert blank page height. */
+#pages > figure.or-missing-panel {
+  box-sizing:border-box;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  width:18px!important;
+  max-width:18px!important;
+  height:18px!important;
+  min-height:18px!important;
+  max-height:18px!important;
+  aspect-ratio:auto!important;
+  margin:0;
+  padding:0;
+  border:0;
+  background:transparent;
+  color:#a7afb7;
+  line-height:0;
+  overflow:hidden;
+  flex:none;
+}
+#pages > figure.or-missing-panel svg { display:block; width:16px; height:16px; }

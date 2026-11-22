@@ -8,7 +8,9 @@
   home.id = 'or-library-back';
   home.hidden = true;
   home.setAttribute('aria-label', 'Return to the Open Reader homepage');
-  home.textContent = '\u2190 Open Reader';
+  // The homepage's transparent golden favicon is also the only back icon.
+  home.textContent = '';
+  home.title = 'Return to the Open Reader homepage';
   document.body.append(home);
   const flip = document.createElement('div');
   flip.className = 'or-page-flip'; flip.setAttribute('aria-hidden', 'true');
@@ -24,8 +26,24 @@
     setTimeout(()=>location.assign(target),420);
   };
   home.addEventListener('click',()=>leave('/'));
-  const syncBack = () => {home.hidden=panel.hidden};
+  // Reveal on actual mouse movement or when the navigation bar opens.
+  // Hide after five seconds of no movement, regardless of whether the bar is open.
+  let backIdleTimer = 0;
+  const revealBack = () => {
+    if(leaving)return;
+    home.hidden = false;
+    clearTimeout(backIdleTimer);
+    backIdleTimer = setTimeout(() => {home.hidden = true}, 5000);
+  };
+  const syncBack = () => {if(!panel.hidden)revealBack()};
   new MutationObserver(syncBack).observe(panel,{attributes:true,attributeFilter:['hidden']});
+  window.addEventListener('pointermove', e => {
+    if(e.pointerType === 'mouse')revealBack();
+  }, {passive:true});
+  window.addEventListener('mousemove', e => {
+    // Fallback for browsers that do not implement Pointer Events.
+    if(!window.PointerEvent)revealBack();
+  }, {passive:true});
   syncBack();
 
   // Trigger the animation only on entering from outside another chapter page.

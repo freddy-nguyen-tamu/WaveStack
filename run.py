@@ -185,6 +185,7 @@ _PREFLIGHT_PYTHON = (
     ('test_managed_tab_recycle_resume.py', 2),
     ('test_resume_deferred_and_reader_host.py', 8),
     ('test_open_reader_bell_integration.py', 4),
+    ('test_partial_chapter_streaming.py', 4),
 )
 _PREFLIGHT_JAVASCRIPT = (
     'extension_persistent_autoconnect.js',

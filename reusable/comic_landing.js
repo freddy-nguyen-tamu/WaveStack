@@ -33,7 +33,8 @@
      const a=document.createElement('a');a.className='chapter-card'+(ch.id===saved.chapter?' is-current':'');
      a.href=chapterUrl(ch.id);
      const title=document.createElement('strong');title.textContent=label;
-     const hint=document.createElement('span');hint.textContent=ch.id===saved.chapter?'Continue here · Open chapter':'Read chapter';
+     const hint=document.createElement('span');hint.textContent=ch.source_unavailable===true?'Some panels missing · Read available pages':ch.id===saved.chapter?'Continue here · Open chapter':'Read chapter';
+     if(ch.source_unavailable===true)a.classList.add('chapter-unavailable');
      a.append(title,hint);attachLink(a);list.append(a);n++;
    }
    if(!n){const empty=document.createElement('div');empty.className='empty';empty.textContent='No matching chapters';list.append(empty)}

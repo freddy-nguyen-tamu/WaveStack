@@ -186,6 +186,7 @@ const STREAM_RE = /^\/api\/github-image\/([a-z0-9-]+)\/([A-Za-z0-9_.-]{1,160})\/
 const WRITE_RE = /^\/api\/admin\/github-image\/([a-z0-9-]+)\/([A-Za-z0-9_.-]{1,160})\/([1-9][0-9]*)$/;
 const REPO_RE = /^[a-z0-9-]+-vol-[0-9]{3}$/;
 const FILE_RE = /^chapters\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const PARTIAL_FILE_RE = /^partial\/([a-z0-9-]+)\/([A-Za-z0-9_.-]{1,160})\/([0-9]{4,})-([a-f0-9]{64})\.(?:jpg|png|webp|gif)$/;
 const toHex = b => Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
 const githubConfigured = env => !!(env.GITHUB_OWNER && /^\d+$/.test(String(env.GITHUB_APP_ID||'')) &&
   /^\d+$/.test(String(env.GITHUB_APP_INSTALLATION_ID||'')) &&
@@ -247,9 +248,19 @@ async function locate(req,env,slug,chapter,index) {
   const row=manifest?.chapters.find(ch=>String(ch.id)===chapter);
   const image=row?.images?.[index-1];
   const src=image?.github;
-  if(!src || !REPO_RE.test(src.repo) || !src.repo.startsWith(slug+'-vol-') ||
-     !FILE_RE.test(src.path) ||
-     !/^[a-f0-9]{64}$/.test(String(image.sha256||'')))return null;
+  // The source-confirmed missing position exists even when no bytes are saved.
+  // Admin may repair ONLY one of those registered positions through GitHub.
+  if(image?.placeholder===true && Number(image.panel)===index){
+    const cases=await baseCases(req,env);
+    if(cases.cases.some(c=>c.work_slug===slug && String(c.episode_id)===chapter && Number(c.panel)===index))
+      return {image,src:null};
+    return null;
+  }
+  if(!src || !/^[a-f0-9]{64}$/.test(String(image.sha256||'')))return null;
+  if(src.repo==='open-reader'){
+    const m=PARTIAL_FILE_RE.exec(src.path||'');
+    if(!m || m[1]!==slug || m[2]!==chapter || Number(m[3])!==index || m[4]!==image.sha256)return null;
+  } else if(!REPO_RE.test(src.repo) || !src.repo.startsWith(slug+'-vol-') || !FILE_RE.test(src.path))return null;
   return {image,src};
 }
 function decodeB64(s){
@@ -296,6 +307,7 @@ async function serveGithubImage(req,env,ctx,slug,chapter,index){
   let selected;
   try{selected=await readCurrent(req,env,slug,chapter,index,loc)}
   catch(e){return error('GitHub override index unavailable; original archive preserved: '+e.message,503)}
+  if(!selected.src)return error('Panel not yet archived or repaired',404);
   const key=new Request(new URL(`/api/github-image/${slug}/${chapter}/${index}?v=${selected.sha}`,req.url));
   const cached=await caches.default.match(key);
   if(cached)return cached;
@@ -348,7 +360,7 @@ async function uploadGithubImage(req,env,slug,chapter,index){
   if(!await validSession(req,env))return error('Admin sign-in required',401);
   if(!githubConfigured(env))return error('GitHub App credentials not configured',503);
   const loc=await locate(req,env,slug,chapter,index);
-  if(!loc)return error('No matching archived panel',404);
+  if(!loc)return error('No matching verified or registered missing panel',404);
   const mime=(req.headers.get('Content-Type')||'').split(';')[0].toLowerCase();
   if(!['image/jpeg','image/png','image/webp'].includes(mime))return error('JPEG PNG or WebP only',415);
   if(Number(req.headers.get('Content-Length')||0)>MAX_BYTES)return error('File too large',413);
@@ -374,8 +386,14 @@ async function overlayGithubManifest(req,env){
       const entry=overrides[overrideKey(slug,String(ch.id),i+1)];
       if(!entry)continue;
       if(!safeOverride(entry,slug,String(ch.id),i+1))return error('Invalid override index',503);
-      ch.images[i]={...ch.images[i],url:`/api/github-image/${encodeURIComponent(slug)}/${encodeURIComponent(ch.id)}/${i+1}?v=${entry.sha256}`,
-        sha256:entry.sha256};
+      const newUrl=`/api/github-image/${encodeURIComponent(slug)}/${encodeURIComponent(ch.id)}/${i+1}?v=${entry.sha256}`;
+      if(ch.images[i]?.placeholder===true){
+        // A real admin-uploaded image replaces precisely one missing placeholder.
+        ch.images[i]={url:newUrl,sha256:entry.sha256,width:ch.images[i].width||1100,
+          height:ch.images[i].height||1500,github:{repo:'open-reader',path:entry.path},recovered:true};
+      }else{
+        ch.images[i]={...ch.images[i],url:newUrl,sha256:entry.sha256};
+      }
       changed=true;
     }
   }

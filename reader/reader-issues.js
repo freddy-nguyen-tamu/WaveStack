@@ -79,25 +79,27 @@
       group.append(heading);
       const hint=text('p',`Missing panel${issues.length===1?'':'s'}: ${issues.map(c=>c.panel).sort((a,b)=>a-b).join(', ')}`,'ri-chapter-hint');
       group.append(hint);
-      // A source-missing chapter may not be published yet. In that case
-      // link to its actual source chapter rather than a nonexistent reader
-      // route. For published missing-panel cases use the reader query route.
-      let destination='';
-      const published=window.OpenReaderGithubUpload?.hasChapter?.(first.work_slug,first.episode_id);
-      if(published && /^[a-z0-9-]+$/.test(first.work_slug) && /^[A-Za-z0-9_.-]+$/.test(first.episode_id)){
-        destination='/comics/'+encodeURIComponent(first.work_slug)+'/?chapter='+encodeURIComponent(first.episode_id);
+      // Two independent destinations: never label an external source link
+      // as an Open Reader chapter. Keep both links side by side.
+      const actions=document.createElement('div');actions.className='ri-chapter-actions';
+      if(typeof first.source_chapter_url==='string'){
+        try{
+          const u=new URL(first.source_chapter_url);
+          if(u.protocol==='https:' && u.hostname && !u.username && !u.password){
+            const source=text('a','Open original source','ri-chapter-link ri-source-link');
+            source.href=u.href;source.target='_blank';source.rel='noopener noreferrer';
+            source.title='Open the original publisher chapter in a new tab';
+            actions.append(source);
+          }
+        }catch{}
       }
-      if(!destination && typeof first.source_chapter_url==='string'){
-        try{const u=new URL(first.source_chapter_url);if(u.protocol==='https:' && !u.username && !u.password){destination=u.href}}catch{}
+      if(/^[a-z0-9-]+$/.test(first.work_slug) && /^[A-Za-z0-9_.-]+$/.test(first.episode_id)){
+        const reader=text('a','Open affected chapter','ri-chapter-link ri-reader-link');
+        reader.href='/comics/'+encodeURIComponent(first.work_slug)+'/?chapter='+encodeURIComponent(first.episode_id);
+        reader.title='Open this exact chapter inside Open Reader';
+        actions.append(reader);
       }
-      if(!destination && !window.OpenReaderGithubUpload && /^[a-z0-9-]+$/.test(first.work_slug) && /^[A-Za-z0-9_.-]+$/.test(first.episode_id)){
-        destination='/comics/'+encodeURIComponent(first.work_slug)+'/?chapter='+encodeURIComponent(first.episode_id);
-      }
-      if(destination){
-        const link=text('a','Open affected chapter','ri-chapter-link');link.href=destination;
-        if(destination.startsWith('https://')){link.target='_blank';link.rel='noopener noreferrer'}
-        group.append(link);
-      }
+      if(actions.childElementCount)group.append(actions);
       for(const c of issues){
         const ordinal=Number(c.panel);
         if(!Number.isSafeInteger(ordinal)||ordinal<=0)continue;

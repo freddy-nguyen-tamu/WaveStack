@@ -14,7 +14,12 @@
 .ri-chapter{padding:12px 16px;border-top:1px solid #ffffff1c}
 .ri-chapter-title{font-weight:650;color:#fff;overflow-wrap:anywhere}
 .ri-chapter-hint{margin:5px 0 8px;color:#aebbd1}
-.ri-chapter-link{display:inline-block;margin-bottom:6px;color:#67d3e2}
+.ri-chapter-link{display:inline-flex;align-items:center;min-height:35px;padding:7px 10px;text-decoration:none;line-height:1.3;border-radius:5px;font-weight:650;font-size:12px;border:1px solid #62788f;color:#e5ebf3;background:#253447}
+.ri-chapter-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:8px 0 10px}
+.ri-chapter-link:hover,.ri-chapter-link:focus-visible{border-color:#ff9900;color:#0f1111;background:#febd69;outline-offset:2px}
+.ri-reader-link{border-color:#dcad46;color:#111;background:#ffd814}
+.ri-reader-link:hover,.ri-reader-link:focus-visible{background:#febd69}
+.ri-source-link{color:#e4ebf4;background:#344357}
 .ri-panel{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 0}
 .ri-panel-label{font-size:12px;color:#d5dbe7}
 .ri-upload,#ri-login button[type=submit]{border:1px solid #5489ac;background:#1a5164;border-radius:8px;color:#fff;cursor:pointer;padding:6px 9px;font:600 11px system-ui;flex-shrink:0}
