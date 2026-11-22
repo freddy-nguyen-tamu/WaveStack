@@ -1,9 +1,10 @@
-/* Shared open-reader notifications. Included on the homepage and every comic route.
+/* Shared open-reader notifications. Included ONLY on the shared homepage.
  * Counts AFFECTED CHAPTERS, lists exact missing panels, and permits authenticated
  * upload/overwrite of a registered missing-source panel only. Never stores secrets.
  */
 (() => {
   'use strict';
+  if(!['/','/index.html'].includes(location.pathname))return;
   if(document.getElementById('reader-issues-widget'))return;
   const css=document.createElement('link');
   css.rel='stylesheet';css.href='/reader-issues.css';document.head.append(css);
@@ -25,6 +26,12 @@
   const setStatus=str=>{feedback.textContent=str};
   async function upload(c,file,secondTry=false) {
     if(!file)return;
+    // The GitHub-only homepage uploader is additive. It writes to the verified
+    // panel slot instead of the legacy R2 replacement endpoint.
+    if(window.OpenReaderGithubUpload){
+      await window.OpenReaderGithubUpload.uploadIssue(c,file);
+      return;
+    }
     if(!['image/jpeg','image/png','image/webp'].includes(file.type) || file.size>12*1024*1024 || file.size<32) {
       setStatus('Choose a JPEG, PNG or WebP image up to 12 MiB.');return;
     }
@@ -72,12 +79,34 @@
       group.append(heading);
       const hint=text('p',`Missing panel${issues.length===1?'':'s'}: ${issues.map(c=>c.panel).sort((a,b)=>a-b).join(', ')}`,'ri-chapter-hint');
       group.append(hint);
-      if(typeof first.reader_url==='string'){
-        try{const u=new URL(first.reader_url,location.origin);if(u.origin===location.origin){const link=text('a','Open comic','ri-chapter-link');link.href=u.href;group.append(link)}}catch{}
+      // A source-missing chapter may not be published yet. In that case
+      // link to its actual source chapter rather than a nonexistent reader
+      // route. For published missing-panel cases use the reader query route.
+      let destination='';
+      const published=window.OpenReaderGithubUpload?.hasChapter?.(first.work_slug,first.episode_id);
+      if(published && /^[a-z0-9-]+$/.test(first.work_slug) && /^[A-Za-z0-9_.-]+$/.test(first.episode_id)){
+        destination='/comics/'+encodeURIComponent(first.work_slug)+'/?chapter='+encodeURIComponent(first.episode_id);
+      }
+      if(!destination && typeof first.source_chapter_url==='string'){
+        try{const u=new URL(first.source_chapter_url);if(u.protocol==='https:' && !u.username && !u.password){destination=u.href}}catch{}
+      }
+      if(!destination && !window.OpenReaderGithubUpload && /^[a-z0-9-]+$/.test(first.work_slug) && /^[A-Za-z0-9_.-]+$/.test(first.episode_id)){
+        destination='/comics/'+encodeURIComponent(first.work_slug)+'/?chapter='+encodeURIComponent(first.episode_id);
+      }
+      if(destination){
+        const link=text('a','Open affected chapter','ri-chapter-link');link.href=destination;
+        if(destination.startsWith('https://')){link.target='_blank';link.rel='noopener noreferrer'}
+        group.append(link);
       }
       for(const c of issues){
+        const ordinal=Number(c.panel);
+        if(!Number.isSafeInteger(ordinal)||ordinal<=0)continue;
         const line=text('div','','ri-panel');
-        const display=text('span',`Panel ${c.panel}` + (c.replacement_present?' · replacement saved':' · source unavailable'),'ri-panel-label');
+        const status=Number(c.http_status);
+        const reason=c.replacement_present?' · replacement saved':
+          (Number.isInteger(status)&&status>=400&&status<=599?' · confirmed HTTP '+status:
+           ' · confirmed original placeholder');
+        const display=text('span','Panel '+ordinal+reason,'ri-panel-label');
         line.append(display);
         const chooser=document.createElement('input');chooser.type='file';chooser.accept='image/jpeg,image/png,image/webp';chooser.hidden=true;
         chooser.setAttribute('aria-label',`Replacement image for ${c.work} ${c.episode} panel ${c.panel}`);

@@ -2822,7 +2822,11 @@ def deploy_run(db, mode='shared-worker'):
         # image-volume host. A GitHub-verified archive with no Pages host was
         # silently omitted before this preflight, despite intact image files.
         from .shared_reader_volume import ensure_current_image_hosts, verify_current_in_shared_reader
-        ensure_current_image_hosts(sys.modules[__name__], db)
+        from .github_streaming import load_mode
+        if not load_mode(ROOT):
+            ensure_current_image_hosts(sys.modules[__name__], db)
+        else:
+            print('Cloudflare: GitHub streaming mode: skipping all Pages image-volume transfers.', flush=True)
         from .open_reader import publish
         url = publish(sys.modules[__name__], db)
         verify_current_in_shared_reader(sys.modules[__name__], db, url)

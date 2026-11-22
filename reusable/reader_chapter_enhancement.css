@@ -1,0 +1,33 @@
+/* Reader-only, staged CSS. No changes to its page images, manifest or native controls. */
+#pages { touch-action:manipulation; }
+#pages > figure { font-size:0; line-height:0; }
+#pages > figure + figure { margin-top:-1px; } /* close fractional-pixel seams */
+#pages > figure img { display:block; margin-block:0; vertical-align:bottom; }
+#reader-panel:not([hidden]) { width:min(425px,92vw); background:#eaeded; color:#0f1111; box-shadow:-12px 0 36px #0008; font:14px/1.4 Arial,Helvetica,system-ui,sans-serif; }
+#reader-panel .panel-heading { background:#131921; color:#fff; min-height:76px; padding:15px 19px; border-bottom:4px solid #ff9900; font-size:17px; font-weight:750; gap:12px; }
+#reader-panel #panel-series {color:#fff}
+#reader-panel #panel-close { color:#fff; border:1px solid #fff5; background:#273545; border-radius:5px; width:38px; height:38px; }
+#reader-panel #panel-close:hover,#reader-panel #panel-close:focus-visible {background:#36495d;color:#febd69}
+#reader-panel .panel-controls {background:#232f3e;color:#fff;padding:18px;gap:12px;border-bottom:0}
+#reader-panel #panel-speed-text {color:#febd69}
+#reader-panel input[type=range],#reader-panel .panel-toggle input {accent-color:#ff9900}
+#reader-panel .panel-toggle {color:#fff}
+#reader-panel input[type=number],#reader-panel input[type=search] {border:2px solid #febd69;border-radius:5px;background:#fff;color:#0f1111;padding:10px 12px}
+#reader-panel input:focus-visible {outline:3px solid #ff990077;outline-offset:2px}
+#reader-panel #panel-chapter-count {padding:12px 18px;color:#565959;background:#f0f2f2;border-bottom:1px solid #d5d9d9;font-weight:700}
+#reader-panel #panel-chapters {padding:12px 11px 25px;background:#eaeded;scrollbar-color:#a2a6a6 #eaeded}
+#reader-panel .panel-chapter {color:#0f1111;background:#fff;border:1px solid #d5d9d9;border-radius:6px;padding:13px 14px;margin:5px 0;font-size:14px}
+#reader-panel .panel-chapter small {color:#565959}
+#reader-panel .panel-chapter:hover,#reader-panel .panel-chapter:focus-visible {background:#f7fafa;color:#007185;border-color:#febd69}
+#reader-panel .panel-chapter.active {background:#fff9e7;color:#0f1111;border:1px solid #e8bd58;border-left:4px solid #ff9900;padding-left:11px;font-weight:700}
+#or-library-back:not([hidden]) { position:fixed;left:max(12px,env(safe-area-inset-left));top:max(12px,env(safe-area-inset-top));z-index:905;display:inline-flex;align-items:center;gap:8px;max-width:min(48vw,270px);padding:12px 16px;min-height:44px;white-space:nowrap;color:#0f1111;background:#ffd814;border:1px solid #cf9b1c;border-radius:6px;font:700 13px Arial,sans-serif;box-shadow:0 3px 15px #0005;cursor:pointer; }
+#or-library-back:hover,#or-library-back:focus-visible{background:#febd69;outline:3px solid #ff990077;outline-offset:3px}
+.or-page-flip {position:fixed;inset:0;z-index:1200;pointer-events:none;visibility:hidden;perspective:1400px;}
+.or-page-flip::before{content:"";display:block;position:absolute;inset:-1px;transform-origin:left center;backface-visibility:hidden;background:linear-gradient(95deg,#fff 0%,#fff9ec 65%,#ebd5a7 100%);box-shadow:-10px 1px 35px #0005;}
+html.or-flip-enter .or-page-flip,html.or-flip-exit .or-page-flip{visibility:visible}
+html.or-flip-enter .or-page-flip::before{animation:or-open 420ms cubic-bezier(.35,.03,.4,1) both}
+html.or-flip-exit .or-page-flip::before{animation:or-close 420ms cubic-bezier(.36,.02,.58,1) both}
+@keyframes or-open{from{transform:rotateY(0deg);opacity:1}to{transform:rotateY(97deg);opacity:.25}}
+@keyframes or-close{from{transform:rotateY(-97deg);opacity:.25}to{transform:rotateY(0deg);opacity:1}}
+@media(max-width:480px){#reader-panel:not([hidden]){width:100vw}#reader-panel .panel-heading{padding:12px 15px}#reader-panel .panel-controls{padding:14px}#or-library-back:not([hidden]){font-size:12px;padding:10px 12px}}
+@media(prefers-reduced-motion:reduce){.or-page-flip{display:none!important}}

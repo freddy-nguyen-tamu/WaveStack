@@ -20,6 +20,8 @@ from urllib.parse import quote, urlsplit
 
 import requests
 
+from . import github_streaming
+
 WORKER_NAME = 'open-reader'
 REGISTRY_DESCRIPTION = 'Universal Comic Archiver shared open-reader registry (metadata only)'
 SCHEMA = 2
@@ -57,7 +59,14 @@ def normalize_chapters(chapters):
                 raise ValueError('Image entry is not an object')
             url = str(item.get('url') or '')
             parts = urlsplit(url)
-            if (parts.scheme != 'https' or not parts.netloc or parts.username or
+            github = item.get('github')
+            if github:
+                if (not isinstance(github, dict) or
+                        not github_streaming.REPO.fullmatch(str(github.get('repo',''))) or
+                        not github_streaming.PATH.fullmatch(str(github.get('path',''))) or
+                        not re.fullmatch(r'/api/github-image/[a-z0-9-]+/[A-Za-z0-9_.-]+/[1-9][0-9]*\?v=[a-f0-9]{64}',url)):
+                    raise ValueError('Invalid indexed GitHub image source')
+            elif (parts.scheme != 'https' or not parts.netloc or parts.username or
                     parts.password or parts.fragment or not parts.hostname or
                     not (parts.hostname.endswith('.pages.dev') or
                          parts.hostname.endswith('.workers.dev'))):
@@ -65,8 +74,11 @@ def normalize_chapters(chapters):
             checksum = str(item.get('sha256') or '').lower()
             if not re.fullmatch(r'[a-f0-9]{64}', checksum):
                 raise ValueError('Archived image lacks SHA-256')
-            images.append({'url': url, 'width': int(item.get('width') or 1),
-                           'height': int(item.get('height') or 1), 'sha256': checksum})
+            record = {'url': url, 'width': int(item.get('width') or 1),
+                      'height': int(item.get('height') or 1), 'sha256': checksum}
+            if github:
+                record['github'] = {'repo':github['repo'],'path':github['path']}
+            images.append(record)
         title = str(chapter.get('title') or chapter.get('label') or f'Chapter {ident}').strip()
         label = str(chapter.get('label') or title).strip()
         result.append({'id': ident, 'number': str(chapter.get('number') or ident),
@@ -104,7 +116,7 @@ def merge_comics(a, b):
             continue
         # If the image set has changed, prefer the independently validated new
         # archive. Only call this with verified candidates.
-        merged = dict(chapter if len(chapter['images']) >= len(previous['images']) else previous)
+        merged = dict(github_streaming.preferred_chapter(chapter, previous))
         for key in ('title', 'label'):
             old_title, new_title = previous.get(key, ''), chapter.get(key, '')
             if _is_placeholder(new_title, ident) and not _is_placeholder(old_title, ident):
@@ -182,10 +194,11 @@ def local_candidates(engine):
                 deployed = {r['project']: r['production_url'] for r in conn.execute(
                     'SELECT project,production_url FROM deployments WHERE production_url IS NOT NULL')}
                 chapters, complete = [], True
+                streaming = github_streaming.load_mode(engine.ROOT)
                 for row in rows:
                     image_repo = row['repository']
                     host = deployed.get(image_repo[:58])
-                    if not host:
+                    if not host and not streaming:
                         complete = False
                         break
                     manifest = json.loads(row['pages_json'] or '{}')
@@ -194,10 +207,17 @@ def local_candidates(engine):
                         complete = False
                         break
                     items = []
-                    for file, image in zip(files, images):
-                        items.append({'url': host.rstrip('/') + '/' + file,
-                                      'width': image.get('width'), 'height': image.get('height'),
-                                      'sha256': image.get('sha256')})
+                    for index, (file, image) in enumerate(zip(files, images),1):
+                        digest = image.get('sha256')
+                        if streaming:
+                            items.append({'url': github_streaming.route(slug,row['chapter_id'],index,digest),
+                                          'github':{'repo':image_repo,'path':file},
+                                          'width':image.get('width'), 'height':image.get('height'),
+                                          'sha256':digest})
+                        else:
+                            items.append({'url': host.rstrip('/') + '/' + file,
+                                          'width': image.get('width'), 'height': image.get('height'),
+                                          'sha256': digest})
                     chapters.append({'id': row['chapter_id'], 'label': row['label'],
                                      'title': manifest.get('chapter_title') or row['label'],
                                      'number': row['chapter_id'], 'images': items})
@@ -292,7 +312,8 @@ def _volume_manifest_candidates(engine, owner, token, repos, page_projects, exis
         if slug in existing:  # current local DB, GitHub reader or legacy Pages is richer
             continue
         host = page_projects.get(repo)
-        if not host:
+        streaming = github_streaming.load_mode(getattr(engine, 'ROOT', Path(__file__).resolve().parent.parent))
+        if not host and not streaming:
             continue
         tree = engine.github_http('GET',
             f'{engine.GITHUB_API}/repos/{owner}/{repo}/git/trees/main?recursive=1', token)
@@ -315,9 +336,14 @@ def _volume_manifest_candidates(engine, owner, token, repos, page_projects, exis
                              'number': chapter_id,
                              'title': manifest.get('chapter_title') or manifest.get('label') or f'Chapter {chapter_id}',
                              'label': manifest.get('label') or f'Chapter {chapter_id}',
-                             'images': [{'url': host.rstrip('/') + '/' + p,
-                                         'sha256': im['sha256'], 'width': im.get('width'),
-                                         'height': im.get('height')} for p, im in zip(paths, pages)]})
+                             'images': [({'url': github_streaming.route(slug,chapter_id,i,im['sha256']),
+                                           'github':{'repo':repo,'path':p},
+                                           'sha256':im['sha256'],'width':im.get('width'),'height':im.get('height')}
+                                          if streaming else
+                                          {'url': host.rstrip('/') + '/' + p,
+                                           'sha256':im['sha256'],'width':im.get('width'),
+                                           'height':im.get('height')})
+                                         for i,(p,im) in enumerate(zip(paths,pages),1)]})
         # Do not mistake lexicographic filename order for episode order.
         chapters.sort(key=lambda c: (0, int(c['id'])) if c['id'].isdigit() else (1, c['id']))
         comic = validate_comic(slug, slug.replace('-', ' ').title(), chapters)
@@ -422,9 +448,19 @@ def _reader_hash(root):
              if p.is_file()}
     files['open-reader-homepage'] = sha(_index_html().encode('utf-8'))
     for relative in ('reusable/open_reader_homepage_addon.py',
-                     'reusable/worker_addon/panel_replacement_worker.mjs'):
+                     'reusable/worker_addon/panel_replacement_worker.mjs',
+                     'reusable/github_streaming.py', 'reusable/github_upload_bell.js',
+                     'reusable/comic_landing.py', 'reusable/comic_landing.css',
+                     'reusable/comic_landing.js', 'reusable/reader_progress.js',
+                     'reusable/reader_chapter_enhancement.css',
+                     'reusable/reader_chapter_enhancement.js',
+                     'reusable/gold_favicon.py'):
         file = Path(root) / relative
         if not file.is_file():
+            # Legacy and isolated non-streaming test projects do not have the
+            # optional GitHub transport. Refuse only in configured mode.
+            if relative in ('reusable/github_streaming.py', 'reusable/github_upload_bell.js') and not github_streaming.load_mode(root):
+                continue
             raise RuntimeError('Missing shared-reader integration source: ' + relative)
         files[relative] = sha(file.read_bytes())
     return sha(canonical(files))
@@ -742,9 +778,17 @@ def stage_worker_assets(root, registry, stage):
     (stage / 'registry.json').write_bytes(canonical(payload))
     summary = {'comics': [{'slug': slug, 'title': comic['title'],
                            'chapters': len(comic['chapters']),
-                           'route': f'/comics/{slug}/'}
+                           'route': f'/comics/{slug}/overview/'}
                           for slug, comic in sorted(registry['comics'].items())]}
     (stage / 'library.json').write_bytes(canonical(summary))
+    from .comic_landing import HTML as COMIC_LANDING_HTML
+    for source_name, staged_name in (
+        ('comic_landing.css', 'comic-landing.css'),
+        ('comic_landing.js', 'comic-landing.js'),
+        ('reader_progress.js', 'reader-progress.js'),
+        ('reader_chapter_enhancement.css', 'reader-chapter-enhancement.css'),
+    ):
+        shutil.copy2(Path(root) / 'reusable' / source_name, stage / staged_name)
     for slug, comic in sorted(registry['comics'].items()):
         dest = stage / 'comics' / slug
         dest.mkdir(parents=True, exist_ok=True)
@@ -753,11 +797,46 @@ def stage_worker_assets(root, registry, stage):
                 shutil.copy2(file, dest / file.name)
         (dest / 'manifest.json').write_bytes(canonical({'title': comic['title'],
                                                         'chapters': comic['chapters']}))
-    # Same staging hook handles the generated homepage AND nested reader HTML.
+        overview = dest / 'overview'
+        overview.mkdir(exist_ok=True)
+        (overview / 'index.html').write_text(COMIC_LANDING_HTML, encoding='utf-8')
+        # Add local-device resume tracking, a seamless page surface and new
+        # input shortcuts to STAGED assets only. The original reader/app.js,
+        # style.css, and all existing controls remain unmodified on disk.
+        reader_html = dest / 'index.html'
+        original = reader_html.read_text(encoding='utf-8')
+        insert = ('<link rel="stylesheet" href="/reader-chapter-enhancement.css">'
+                  '<script src="/reader-progress.js"></script>')
+        if '</head>' not in original:
+            raise RuntimeError('Staged reader has no head element')
+        reader_html.write_text(original.replace('</head>', insert + '</head>', 1), encoding='utf-8')
+        app = dest / 'app.js'
+        native_app = app.read_text(encoding='utf-8')
+        # Prevent cross-comic progress leakage from the old shared settings key.
+        needle = "let desired=params.get('chapter')||settings.lastChapter||manifest.chapters[0].id;"
+        updated = "let desired=params.get('chapter')||window.OpenReaderLocalProgress?.chapter||manifest.chapters[0].id;"
+        if native_app.count(needle) != 1:
+            raise RuntimeError('Reader chapter selection has changed; refusing an unsafe progress patch')
+        native_app = native_app.replace(needle, updated, 1)
+        nav_addon = (Path(root) / 'reusable' / 'reader_chapter_enhancement.js').read_text(encoding='utf-8')
+        if 'open-reader:skip-entry-flip' in native_app:
+            raise RuntimeError('Existing reader app contains the supplemental navigation logic; refusing duplicates')
+        app.write_text(native_app + '\n' + nav_addon + '\n', encoding='utf-8')
+    if github_streaming.load_mode(root):
+        (stage / 'upload-catalog.json').write_bytes(canonical(github_streaming.catalog(registry)))
+        script = Path(root) / 'reusable' / 'github_upload_bell.js'
+        if not script.is_file():
+            raise RuntimeError('Missing GitHub bell integration')
+        shutil.copy2(script, stage / 'github-upload-bell.js')
+        home = stage / 'index.html'
+        html = home.read_text(encoding='utf-8')
+        html = html.replace('</head>', '<script defer src="/github-upload-bell.js"></script></head>', 1)
+        home.write_text(html, encoding='utf-8')
+    # The staging hook adds favicons to every route, but the issue bell to the homepage only.
     # Never mutate the local reader/ files or any downloaded chapter archive.
     from reusable.open_reader_homepage_addon import augment_assets
     stats = augment_assets(stage, root)
-    print(f'open-reader: notification bell + favicon staged on {stats["html_documents"]} routes; '
+    print(f'open-reader: golden favicon on {stats["html_documents"]} routes, homepage-only notifications; '
           f'{stats["affected_chapters"]} affected chapters ({stats["issues"]} panels)', flush=True)
     return payload
 
@@ -776,6 +855,11 @@ def _worker_config(stage, config_dir, root=None):
                       # issue/manifest routes invoke the Worker first.
                       'run_worker_first': ['/api/*', '/source-issues.json',
                                            '/comics/*/manifest.json']}}
+    streaming = github_streaming.load_mode(root)
+    if streaming:
+        cfg['vars'] = {'GITHUB_OWNER':streaming['owner'],
+                       'GITHUB_APP_ID':str(streaming['app_id']),
+                       'GITHUB_APP_INSTALLATION_ID':str(streaming['installation_id'])}
     settings_file = root / '.archiver_state' / 'open_reader_uploads.json'
     if settings_file.is_file():
         settings = json.loads(settings_file.read_text(encoding='utf-8'))
@@ -846,9 +930,12 @@ def _verify_published(worker_url, staged, registry):
                          headers={'Cache-Control':'no-cache'}, timeout=40)
     if check.status_code != 200 or check.json().get('script') != 'open-reader-panel-replacement-v1':
         raise RuntimeError('Open Reader Worker backend is absent or outdated; refusing success')
+    if (stage / 'upload-catalog.json').is_file() and not check.json().get('github_streaming_configured'):
+        raise RuntimeError('GitHub App credentials missing on Worker; preserving previous Cloudflare image volumes')
     expected_feed = json.loads((stage / 'source-issues.json').read_text(encoding='utf-8'))
     source_ids = {c['id'] for c in expected_feed['cases']}
     live_feed = None
+    github_replacements = None
 
     def validate_feed(data):
         if (not isinstance(data, dict) or
@@ -864,6 +951,39 @@ def _verify_published(worker_url, staged, registry):
         expected = json.loads((stage / relative).read_text(encoding='utf-8'))
         if canonical(expected) == canonical(deployed):
             return True
+        # GitHub manual replacements may alter only the exact image revision
+        # identified by an independently fetched, read-only overrides catalog.
+        nonlocal github_replacements
+        if (stage / 'upload-catalog.json').is_file() and isinstance(deployed,dict):
+            parts=Path(relative).parts
+            if len(parts)==3 and parts[0]=='comics' and parts[2]=='manifest.json':
+                if github_replacements is None:
+                    response=requests.get(worker_url.rstrip('/')+'/api/github-replacements.json',timeout=30)
+                    if response.ok and response.json().get('schema')=='reader-github-replacements-v1':
+                        github_replacements=response.json().get('panels') or {}
+                    else:
+                        github_replacements={}
+                original=json.loads(json.dumps(expected))
+                edited=json.loads(json.dumps(deployed))
+                if (isinstance(edited.get('chapters'),list) and
+                        len(edited['chapters'])==len(original.get('chapters',[]))):
+                    ok=True
+                    for ch,prev_ch in zip(edited['chapters'],original['chapters']):
+                        if ch.get('id')!=prev_ch.get('id') or len(ch.get('images',[]))!=len(prev_ch.get('images',[])):
+                            ok=False;break
+                        for i,(im,prev) in enumerate(zip(ch['images'],prev_ch['images']),1):
+                            if im==prev:continue
+                            expected_sha=github_replacements.get(f'{parts[1]}:{ch["id"]}:{i}')
+                            expected_url=github_streaming.route(parts[1],str(ch['id']),i,str(expected_sha))
+                            if (not re.fullmatch('[a-f0-9]{64}',str(expected_sha)) or
+                                    im.get('sha256')!=expected_sha or im.get('url')!=expected_url or
+                                    {k:v for k,v in im.items() if k not in ('sha256','url')} !=
+                                    {k:v for k,v in prev.items() if k not in ('sha256','url')}):
+                                ok=False;break
+                            im.update({'sha256':prev['sha256'],'url':prev['url']})
+                        if not ok:break
+                    if ok and canonical(edited)==canonical(original):
+                        return True
         if live_feed is None or not isinstance(deployed, dict):
             return False
         parts = Path(relative).parts
@@ -942,6 +1062,24 @@ def _verify_published(worker_url, staged, registry):
             raise RuntimeError(f'Open Reader live URL is unavailable or outdated: {url} '
                                f'({problem}); refusing to claim deployment complete')
         print(f'open-reader: HTTP 200 + integrity OK {url}', flush=True)
+    if (stage / 'upload-catalog.json').is_file():
+        # Inspect actual Worker -> private GitHub -> browser bytes BEFORE any
+        # old Pages project could be considered redundant.
+        found = {}
+        for slug, comic in registry['comics'].items():
+            for ch in comic['chapters']:
+                for im in ch['images']:
+                    orig=im.get('github')
+                    if orig:
+                        found.setdefault(orig['repo'],[]).append(im)
+        for repo, images in sorted(found.items()):
+            for im in (images[:1]+images[-1:] if len(images)>1 else images):
+                target=worker_url.rstrip('/')+im['url']
+                response=requests.get(target,timeout=60,headers={'Cache-Control':'no-cache'})
+                if response.status_code!=200 or sha(response.content)!=im['sha256']:
+                    raise RuntimeError('Worker GitHub image verification failed: '+repo+': '+target+
+                                       ' (HTTP '+str(response.status_code)+')')
+            print('open-reader: live GitHub-on-demand pixels verified '+repo,flush=True)
 
 
 def _sync_github_readme(engine, owner, token, repo, slug, route):
@@ -1174,9 +1312,19 @@ def publish(engine, db, *, dry_run=False):
     if not registry['comics']:
         raise RuntimeError('No verified legacy or local comics available for open-reader')
     print(f'open-reader: verifying archived image hosts for {len(registry["comics"])} comics...', flush=True)
-    for slug, comic in registry['comics'].items():
-        _validate_live_assets(comic, engine)
-        print(f'  Verified {slug}: {len(comic["chapters"])} chapters; no image downloads from source', flush=True)
+    streaming_mode = github_streaming.load_mode(engine.ROOT)
+    if streaming_mode:
+        if owner.lower()!=streaming_mode['owner'].lower():
+            raise RuntimeError('Streaming config Github owner differs from active archive account')
+        count=github_streaming.convert_registry(registry)
+        # GitHub itself is the only permanent image store; no Pages-volume
+        # preflight or asset reconstruction is performed in this mode.
+        github_streaming.validate_github_samples(engine,owner,token,registry)
+        print(f'open-reader: indexed {count} GitHub image routes without Pages uploads',flush=True)
+    else:
+        for slug, comic in registry['comics'].items():
+            _validate_live_assets(comic, engine)
+            print(f'  Verified {slug}: {len(comic["chapters"])} chapters; no image downloads from source', flush=True)
     if dry_run:
         print('open-reader library audit (no remote changes):', flush=True)
         for slug, comic in sorted(registry['comics'].items()):

@@ -87,14 +87,20 @@ async function casesAndHistory(req,env) {
 }
 async function issuesResponse(req,env) {
   const cases=await casesAndHistory(req,env);
+  let githubOverrides={};
+  if(githubConfigured(env)){
+    try{githubOverrides=await getOverrides(env)}
+    catch(e){return error('GitHub repair index temporarily unavailable: '+e.message,503)}
+  }
   const enriched=await Promise.all(cases.map(async c=>{
-    const replacement=env.PANEL_REPLACEMENTS ? await env.PANEL_REPLACEMENTS.head('panels/'+c.id) : null;
-    return {...c,replacement_present:!!replacement,
-      replacement_sha256:replacement?.customMetadata?.sha256||null};
+    const record=githubOverrides[overrideKey(c.work_slug,String(c.episode_id),Number(c.panel))];
+    const replacement=(record || !env.PANEL_REPLACEMENTS) ? null : await env.PANEL_REPLACEMENTS.head('panels/'+c.id);
+    return {...c,replacement_present:!!record||!!replacement,
+      replacement_sha256:record?.sha256||replacement?.customMetadata?.sha256||null};
   }));
   const chapters=new Set(cases.map(c=>c.work_slug+'\x00'+c.episode_id));
   return json({schema:'comicarchiver.source_issue_feed.v1',count:enriched.length,affected_chapters:chapters.size,affected_works:new Set(cases.map(c=>c.work_slug)).size,
-    upload_enabled:!!(env.PANEL_REPLACEMENTS && typeof env.READER_ADMIN_PASSWORD==='string' && env.READER_ADMIN_PASSWORD.length>=20 && typeof env.READER_SESSION_HMAC_KEY==='string' && env.READER_SESSION_HMAC_KEY.length>=32),cases:enriched});
+    upload_enabled:!!((githubConfigured(env)||env.PANEL_REPLACEMENTS) && typeof env.READER_ADMIN_PASSWORD==='string' && env.READER_ADMIN_PASSWORD.length>=20 && typeof env.READER_SESSION_HMAC_KEY==='string' && env.READER_SESSION_HMAC_KEY.length>=32),cases:enriched});
 }
 async function login(req,env) {
   if(!sameOriginPost(req))return error('Same-origin request required',403);
@@ -155,9 +161,11 @@ async function decorateManifest(req,env) {
   }
   return changed ? json(m,200,{'Cache-Control':'no-store'}) : original;
 }
-function injectHeader(html) {
+function injectHeader(html, path) {
+  // Notifications belong to the main library only; not chapter routes.
+  if(path!=='/' && path!=='/index.html')return html;
   if(html.includes('src="/reader-issues.js"'))return html;
-  const tags='<link rel="icon" href="/favicon.ico" sizes="any"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"><link rel="apple-touch-icon" href="/favicon-180.png"><script defer src="/reader-issues.js"></script>';
+  const tags='<link rel="icon" type="image/svg+xml" href="/favicon.svg"><script defer src="/reader-issues.js"></script>';
   return /<\/head\s*>/i.test(html) ? html.replace(/<\/head\s*>/i,tags+'</head>') : html;
 }
 async function htmlResponse(req,env) {
@@ -166,14 +174,229 @@ async function htmlResponse(req,env) {
   const headers=new Headers(original.headers);
   headers.delete('content-length');headers.delete('etag');headers.delete('content-encoding');
   headers.set('Cache-Control','no-cache');
-  return new Response(injectHeader(await original.text()),{status:original.status,headers});
+  return new Response(injectHeader(await original.text(),new URL(req.url).pathname),{status:original.status,headers});
 }
+/* GitHub App-backed on-demand images and browser-authenticated corrections.
+ * Only archived panel identities appear in manifests. A caller cannot choose a
+ * repository, file path or write destination. Secrets never enter HTML/assets.
+ */
+let githubInstallation = null;
+let overridesMemo = null;
+const STREAM_RE = /^\/api\/github-image\/([a-z0-9-]+)\/([A-Za-z0-9_.-]{1,160})\/([1-9][0-9]*)$/;
+const WRITE_RE = /^\/api\/admin\/github-image\/([a-z0-9-]+)\/([A-Za-z0-9_.-]{1,160})\/([1-9][0-9]*)$/;
+const REPO_RE = /^[a-z0-9-]+-vol-[0-9]{3}$/;
+const FILE_RE = /^chapters\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const toHex = b => Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
+const githubConfigured = env => !!(env.GITHUB_OWNER && /^\d+$/.test(String(env.GITHUB_APP_ID||'')) &&
+  /^\d+$/.test(String(env.GITHUB_APP_INSTALLATION_ID||'')) &&
+  typeof env.GITHUB_APP_PRIVATE_KEY==='string' && env.GITHUB_APP_PRIVATE_KEY.includes('BEGIN PRIVATE KEY'));
+function pemBytes(pem){
+  const raw=pem.replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\s/g,'');
+  return Uint8Array.from(atob(raw),x=>x.charCodeAt(0));
+}
+async function githubToken(env) {
+  if(!githubConfigured(env))throw new Error('GitHub App secrets not configured');
+  if(githubInstallation && githubInstallation.expires>Date.now()+120000)return githubInstallation.value;
+  const key=await crypto.subtle.importKey('pkcs8',pemBytes(env.GITHUB_APP_PRIVATE_KEY),
+    {name:'RSASSA-PKCS1-v1_5',hash:'SHA-256'},false,['sign']);
+  const now=Math.floor(Date.now()/1000);
+  const header=base64url(te.encode(JSON.stringify({alg:'RS256',typ:'JWT'})));
+  const claims=base64url(te.encode(JSON.stringify({iat:now-60,exp:now+540,iss:String(env.GITHUB_APP_ID)})));
+  const input=header+'.'+claims;
+  const signed=new Uint8Array(await crypto.subtle.sign('RSASSA-PKCS1-v1_5',key,te.encode(input)));
+  const jwt=input+'.'+base64url(signed);
+  const r=await fetch(`https://api.github.com/app/installations/${env.GITHUB_APP_INSTALLATION_ID}/access_tokens`,{
+    method:'POST',headers:{Accept:'application/vnd.github+json', Authorization:'Bearer '+jwt,
+      'X-GitHub-Api-Version':'2026-03-10','User-Agent':'open-reader-streaming'},
+    body:'{}'
+  });
+  if(!r.ok)throw new Error('GitHub App installation rejected credential: '+r.status);
+  const data=await r.json();
+  if(typeof data.token!=='string' || !data.expires_at)throw new Error('Invalid installation token response');
+  githubInstallation={value:data.token,expires:Date.parse(data.expires_at)};
+  return githubInstallation.value;
+}
+async function gh(env, method, repo, path, {accept='application/vnd.github+json', data}={}) {
+  if(!/^[A-Za-z0-9-]{1,39}$/.test(String(env.GITHUB_OWNER||'')))throw new Error('Bad GitHub account config');
+  if(repo!=='open-reader' && !REPO_RE.test(repo))throw new Error('Unrecognized archive repository');
+  if(!path.split('/').every(p=>/^[A-Za-z0-9_.-]+$/.test(p) && p!=='.' && p!=='..'))throw new Error('Unsafe archive path');
+  const url=`https://api.github.com/repos/${env.GITHUB_OWNER}/${repo}/contents/`+
+    path.split('/').map(encodeURIComponent).join('/');
+  const token=await githubToken(env);
+  return fetch(url,{method,headers:{'Authorization':'Bearer '+token,'Accept':accept,
+    'X-GitHub-Api-Version':'2026-03-10','User-Agent':'open-reader-streaming',
+    ...(data?{'Content-Type':'application/json'}:{})},
+    ...(data?{body:JSON.stringify(data)}:{})});
+}
+async function githubFile(env, repo, path) {
+  const response=await gh(env,'GET',repo,path,{accept:'application/vnd.github.raw+json'});
+  if(!response.ok)return {status:response.status};
+  const body=new Uint8Array(await response.arrayBuffer());
+  return {status:200,body};
+}
+async function shaHex(bytes) {return toHex(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)));}
+async function archiveManifest(req,env,slug) {
+  const url=new URL(`/comics/${slug}/manifest.json`,req.url);
+  const resp=await env.ASSETS.fetch(new Request(url));
+  if(!resp.ok)return null;
+  const data=await resp.json().catch(()=>null);
+  return Array.isArray(data?.chapters)?data:null;
+}
+async function locate(req,env,slug,chapter,index) {
+  const manifest=await archiveManifest(req,env,slug);
+  const row=manifest?.chapters.find(ch=>String(ch.id)===chapter);
+  const image=row?.images?.[index-1];
+  const src=image?.github;
+  if(!src || !REPO_RE.test(src.repo) || !src.repo.startsWith(slug+'-vol-') ||
+     !FILE_RE.test(src.path) ||
+     !/^[a-f0-9]{64}$/.test(String(image.sha256||'')))return null;
+  return {image,src};
+}
+function decodeB64(s){
+  return atob(s.replace(/\s+/g,''));
+}
+async function getOverrides(env, fresh=false) {
+  if(!fresh && overridesMemo && Date.now()-overridesMemo.time<15000)return overridesMemo.value;
+  const response=await gh(env,'GET','open-reader','overrides.json');
+  if(response.status===404){overridesMemo={time:Date.now(),value:{},blob:null};return overridesMemo.value;}
+  if(!response.ok)throw new Error('Cannot read immutable GitHub override index: HTTP '+response.status);
+  const meta=await response.json();
+  if(meta?.type!=='file' || typeof meta.sha!=='string' || typeof meta.content!=='string')throw new Error('Invalid overrides.json metadata');
+  const jsonText=decodeB64(meta.content);
+  const bytes=Uint8Array.from(jsonText,x=>x.charCodeAt(0));
+  const payload=JSON.parse(new TextDecoder().decode(bytes));
+  if(!payload || payload.schema!=='reader-github-overrides-v1' || typeof payload.panels!=='object')throw new Error('Invalid override catalog');
+  overridesMemo={time:Date.now(),value:payload.panels,blob:meta.sha};
+  return overridesMemo.value;
+}
+function overrideKey(slug,chapter,index){return slug+':'+chapter+':'+index;}
+function safeOverride(entry,slug,chapter,index){
+  return entry && entry.repo==='open-reader' &&
+   new RegExp('^overrides/'+slug+'/'+chapter+'/'+index+'-[a-f0-9]{64}\\.(?:png|jpg|webp)$').test(entry.path||'') &&
+   /^[a-f0-9]{64}$/.test(entry.sha256||'') && typeof entry.content_type==='string';
+}
+async function readCurrent(req,env,slug,chapter,index,loc) {
+  const overrides=await getOverrides(env);
+  const o=overrides[overrideKey(slug,chapter,index)];
+  if(o && !safeOverride(o,slug,chapter,index))throw new Error('Unsafe override index entry');
+  return o?{src:o,sha:o.sha256,contentType:o.content_type}:
+           {src:loc.src,sha:loc.image.sha256,contentType:null};
+}
+function guessMime(bytes) {
+  if(bytes[0]===255 && bytes[1]===216 && bytes[2]===255)return 'image/jpeg';
+  if([137,80,78,71,13,10,26,10].every((x,i)=>bytes[i]===x))return 'image/png';
+  if(String.fromCharCode(...bytes.slice(0,4))==='RIFF' && String.fromCharCode(...bytes.slice(8,12))==='WEBP')return 'image/webp';
+  if(bytes[0]===71 && bytes[1]===73 && bytes[2]===70 && bytes[3]===56)return 'image/gif';
+  return null;
+}
+async function serveGithubImage(req,env,ctx,slug,chapter,index){
+  if(!githubConfigured(env))return error('GitHub App is not configured',503);
+  const loc=await locate(req,env,slug,chapter,index);
+  if(!loc)return error('Unindexed image',404);
+  let selected;
+  try{selected=await readCurrent(req,env,slug,chapter,index,loc)}
+  catch(e){return error('GitHub override index unavailable; original archive preserved: '+e.message,503)}
+  const key=new Request(new URL(`/api/github-image/${slug}/${chapter}/${index}?v=${selected.sha}`,req.url));
+  const cached=await caches.default.match(key);
+  if(cached)return cached;
+  let result;
+  try{result=await githubFile(env,selected.src.repo,selected.src.path)}
+  catch(e){return error('GitHub temporarily unavailable: '+e.message,502)}
+  if(result.status!==200)return error('GitHub image unavailable: HTTP '+result.status,502);
+  const mime=guessMime(result.body);
+  if(!mime || result.body.length>25*1024*1024 || result.body.length<32)return error('GitHub returned invalid image bytes',502);
+  if(await shaHex(result.body)!==selected.sha)return error('GitHub image SHA-256 mismatch; refusing corrupt panel',502);
+  const response=new Response(result.body,{headers:{'Content-Type':mime,'Cache-Control':'public,max-age=86400,immutable',
+    'ETag':'"'+selected.sha+'"','X-Content-Type-Options':'nosniff'}});
+  if(ctx?.waitUntil)ctx.waitUntil(caches.default.put(key,response.clone()));
+  return response;
+}
+async function addOverride(env,slug,chapter,index,bytes,mime){
+  const sha=await shaHex(bytes);
+  const ext={'image/png':'png','image/jpeg':'jpg','image/webp':'webp'}[mime];
+  const path=`overrides/${slug}/${chapter}/${index}-${sha}.${ext}`;
+  const encodeBytes=bytes=>{
+    const parts=[];for(let i=0;i<bytes.length;i+=8192)parts.push(String.fromCharCode(...bytes.subarray(i,i+8192)));
+    return btoa(parts.join(''));
+  };
+  // immutable content-addressed file; no overwrites of original archives.
+  const content=encodeBytes(bytes);
+  let sent=await gh(env,'PUT','open-reader',path,{data:{message:`Add verified reader panel ${slug}/${chapter}/${index}`,
+    content}});
+  if(sent.status===422){
+    const existed=await githubFile(env,'open-reader',path);
+    if(existed.status!==200 || await shaHex(existed.body)!==sha)throw new Error('Existing replacement file conflicts');
+  }else if(sent.status!==201)throw new Error('GitHub refused replacement image: HTTP '+sent.status);
+  const key=overrideKey(slug,chapter,index);
+  for(let attempt=0;attempt<4;attempt++){
+    await getOverrides(env,true);
+    const before=overridesMemo;
+    const updated={...before.value,[key]:{repo:'open-reader',path,sha256:sha,content_type:mime}};
+    const payload=JSON.stringify({schema:'reader-github-overrides-v1',panels:updated});
+    const data={message:`Update reader panel index ${slug}/${chapter}/${index}`,
+                content:btoa(unescape(encodeURIComponent(payload)))};
+    if(before.blob)data.sha=before.blob;
+    const response=await gh(env,'PUT','open-reader','overrides.json',{data});
+    if(response.ok){overridesMemo={time:Date.now(),value:updated,blob:response.json? (await response.json()).content?.sha:null};
+      return {sha,path};}
+    if(![409,422].includes(response.status))throw new Error('GitHub index update failed: HTTP '+response.status);
+  }
+  throw new Error('GitHub overrides index changed concurrently; image preserved; retry this upload');
+}
+async function uploadGithubImage(req,env,slug,chapter,index){
+  if(!sameOriginPost(req))return error('Same-origin required',403);
+  if(!await validSession(req,env))return error('Admin sign-in required',401);
+  if(!githubConfigured(env))return error('GitHub App credentials not configured',503);
+  const loc=await locate(req,env,slug,chapter,index);
+  if(!loc)return error('No matching archived panel',404);
+  const mime=(req.headers.get('Content-Type')||'').split(';')[0].toLowerCase();
+  if(!['image/jpeg','image/png','image/webp'].includes(mime))return error('JPEG PNG or WebP only',415);
+  if(Number(req.headers.get('Content-Length')||0)>MAX_BYTES)return error('File too large',413);
+  const bytes=await boundedBody(req);
+  if(!bytes || bytes.length<32 || !images[mime](bytes))return error('Invalid or oversized image',415);
+  try{
+    const record=await addOverride(env,slug,chapter,index,bytes,mime);
+    return json({ok:true,slug,chapter,index,sha256:record.sha,stored_in:'private GitHub open-reader repository'});
+  }catch(e){return error('GitHub upload failed; original images were not altered: '+e.message,502)}
+}
+async function overlayGithubManifest(req,env){
+  const original=await env.ASSETS.fetch(req);
+  if(!original.ok || !githubConfigured(env))return original;
+  let manifest;
+  try{manifest=await original.clone().json()}catch{return original}
+  if(!Array.isArray(manifest?.chapters))return original;
+  const slug=new URL(req.url).pathname.split('/')[2];
+  let overrides;
+  try{overrides=await getOverrides(env)}catch{return error('Image override index unavailable',503)}
+  let changed=false;
+  for(const ch of manifest.chapters){
+    for(let i=0;i<(ch.images||[]).length;i++){
+      const entry=overrides[overrideKey(slug,String(ch.id),i+1)];
+      if(!entry)continue;
+      if(!safeOverride(entry,slug,String(ch.id),i+1))return error('Invalid override index',503);
+      ch.images[i]={...ch.images[i],url:`/api/github-image/${encodeURIComponent(slug)}/${encodeURIComponent(ch.id)}/${i+1}?v=${entry.sha256}`,
+        sha256:entry.sha256};
+      changed=true;
+    }
+  }
+  return changed?json(manifest,200,{'Cache-Control':'no-store'}):original;
+}
+
 export default {
-  async fetch(req,env) {
+  async fetch(req,env,ctx) {
     if(!env.ASSETS)return error('Static assets binding missing',503);
     const u=new URL(req.url), path=u.pathname;
     if(path==='/api/reader-health' && req.method==='GET')return json({ok:true,script:'open-reader-panel-replacement-v1',
-      storage_configured:!!env.PANEL_REPLACEMENTS});
+      storage_configured:!!env.PANEL_REPLACEMENTS,github_streaming_configured:githubConfigured(env)});
+    const streaming=path.match(STREAM_RE);
+    if(streaming && req.method==='GET')return serveGithubImage(req,env,ctx,streaming[1],streaming[2],Number(streaming[3]));
+    const writing=path.match(WRITE_RE);
+    if(writing && req.method==='POST')return uploadGithubImage(req,env,writing[1],writing[2],Number(writing[3]));
+    if(path==='/api/github-replacements.json' && req.method==='GET' && githubConfigured(env)){
+      try {const x=await getOverrides(env);return json({schema:'reader-github-replacements-v1',panels:
+        Object.fromEntries(Object.entries(x).map(([key,value])=>[key,value.sha256]))});}
+      catch(e){return error('GitHub replacements unavailable: '+e.message,503)}
+    }
     if(path==='/source-issues.json' && req.method==='GET')return issuesResponse(req,env);
     if(path==='/api/admin/login' && req.method==='POST')return login(req,env);
     const imagePath=path.match(/^\/api\/panel-replacements\/([a-f0-9]{20})$/);
@@ -182,6 +405,8 @@ export default {
       if(req.method==='GET')return panelImage(req,env,imagePath[1]);
       return error('Method not allowed',405);
     }
+    if(/^\/comics\/[^/]+\/manifest\.json$/.test(path) && req.method==='GET' && githubConfigured(env))
+      return overlayGithubManifest(req,env);
     if(/^\/comics\/[^/]+\/manifest\.json$/.test(path) && req.method==='GET')return decorateManifest(req,env);
     if(req.method==='GET' && (path==='/' || path.endsWith('/') || path.endsWith('.html')))return htmlResponse(req,env);
     return env.ASSETS.fetch(req);

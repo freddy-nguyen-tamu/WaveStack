@@ -29,7 +29,10 @@ class ReaderHomepageTests(unittest.TestCase):
         (self.project/'reusable/worker_addon').mkdir(parents=True)
         for item in (ROOT/'reader').iterdir():
             if item.is_file():shutil.copy2(item, self.project/'reader'/item.name)
-        for name in ('open_reader_homepage_addon.py',):
+        for name in ('open_reader_homepage_addon.py', 'comic_landing.py',
+                     'comic_landing.css', 'comic_landing.js', 'reader_progress.js',
+                     'reader_chapter_enhancement.css', 'reader_chapter_enhancement.js',
+                     'gold_favicon.py'):
             shutil.copy2(ROOT/'reusable'/name,self.project/'reusable'/name)
         shutil.copy2(ROOT/'reusable/worker_addon/panel_replacement_worker.mjs',
                      self.project/'reusable/worker_addon/panel_replacement_worker.mjs')
@@ -58,15 +61,21 @@ class ReaderHomepageTests(unittest.TestCase):
         self.stage = Path(self.tmp.name)/'staged'
         reader.stage_worker_assets(self.project,{'comics':{'comic-a':self.comic}},self.stage)
 
-    def test_homepage_every_route_favicon_one_bell(self):
+    def test_homepage_only_bell_transparent_gold_favicon_all_routes(self):
         self.assertEqual(2,json.loads((self.stage/'source-issues.json').read_text(encoding='utf-8'))['count'])
-        for fn in ('index.html','comics/comic-a/index.html','comics/comic-a/settings.html'):
+        for fn in ('index.html','comics/comic-a/index.html','comics/comic-a/settings.html',
+                   'comics/comic-a/overview/index.html'):
             html = (self.stage/fn).read_text(encoding='utf-8')
-            self.assertEqual(html.count('src="/reader-issues.js"'),1)
+            self.assertEqual(html.count('src="/reader-issues.js"'),1 if fn=='index.html' else 0)
+            self.assertEqual(html.count('href="/favicon.svg"'),1)
             self.assertEqual(html.count('href="/favicon.ico"'),1)
             self.assertNotIn('src="./source-issue-bell.js"',html)
-        for fn in ('favicon.ico','favicon-32.png','reader-issues.js','reader-issues.css'):
+        for fn in ('favicon.ico','favicon.svg','favicon-32.png','reader-issues.js','reader-issues.css'):
             self.assertTrue((self.stage/fn).is_file())
+        from PIL import Image
+        icon=Image.open(self.stage/'favicon-32.png').convert('RGBA')
+        self.assertEqual(icon.getpixel((0,0))[3],0)
+        self.assertTrue(any(p[0]>p[2] and p[1]>p[2] and p[3] for p in icon.get_flattened_data()))
         original=(self.stage/'source-issues.json').read_bytes()
         reader.stage_worker_assets(self.project,{'comics':{'comic-a':self.comic}},self.stage)
         self.assertEqual(original,(self.stage/'source-issues.json').read_bytes())

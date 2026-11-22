@@ -13,7 +13,7 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 
 def _utc():
@@ -119,6 +119,12 @@ def build_issue_feed(project_root: Path, *, reader_base='') -> dict:
                     'reason': evidence['reason'],
                     'first_reported_at': str(report.get('recorded_at') or ''),
                 }
+                # The original chapter URL remains useful when the broken
+                # chapter was never published in the shared reader. Drop
+                # query/fragment to avoid leaking session-sensitive URLs.
+                source_parts=urlsplit(str(source_url or ''))
+                if source_parts.scheme=='https' and source_parts.hostname and not source_parts.username and not source_parts.password:
+                    case['source_chapter_url']=urlunsplit((source_parts.scheme,source_parts.netloc,source_parts.path,'',''))
                 if reader_base:
                     # Do not assert a chapter route without the Worker registry's
                     # own route mapping. This is a work-level navigation URL.
