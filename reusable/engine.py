@@ -3498,6 +3498,8 @@ def build_parser():
     a.add_argument('--archive-needed', action='store_true', help='Reconcile old/new remote GitHub archives, then print READY or NEEDS_ARCHIVE without visiting the source website')
     a.add_argument('--skip-initial-github-check', action='store_true',
                    help='Skip full remote reconciliation of previously archived chapters for this run only; new uploads still verified')
+    a.add_argument('--skip-open-reader-sync', action='store_true',
+                   help='Archive only: skip all shared Open Reader discovery, deployment and verification this run')
     a.add_argument('--refresh-extension', action='store_true', help='Regenerate site-scoped extension from site_specific/site_adapter.py')
     a.add_argument("--inspect", action="store_true", help="Only inspect source HTML; no account access or downloads")
     a.add_argument("--github-login", action="store_true")
@@ -3627,6 +3629,19 @@ def main():
             raise RuntimeError("No saved comic URL or archive identity. Run with --source-url and --archive")
         args.archive = True
         args.deploy = True
+    # Archive-only opt-out is per run. Do not call the shared reader publisher:
+    # it scans old GitHub repos, validates all archived hosts, checks Worker assets,
+    # and synchronizes READMEs. Newly uploaded chapter integrity checks stay on.
+    if args.skip_open_reader_sync:
+        if args.cloudflare_mode != 'shared-worker':
+            raise SystemExit('--skip-open-reader-sync is only for the shared-worker reader mode')
+        if args.deploy:
+            print('Shared Open Reader publication + remote verification skipped for THIS run. '
+                  'Previously published websites remain unchanged; new chapters await sync.', flush=True)
+            args.deploy = False
+        if args.shutdown_on_complete:
+            print('Automatic shutdown disabled: this run will not verify reader publication.', flush=True)
+            args.shutdown_on_complete = False
     deployment_url = None
     try:
         if args.archive:

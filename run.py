@@ -126,6 +126,34 @@ def _shutdown_choice(args, *, platform=None, interactive=None, prompt=None):
 
 
 
+def _open_reader_sync_choice(args, *, interactive=None, prompt=None):
+    """Archive-only opt-out: keep new GitHub upload verification, skip reader sync.
+
+    This is never remembered: the next run defaults to publishing normally.
+    """
+    args = list(args)
+    if '--skip-open-reader-sync' in args:
+        print('Shared Open Reader synchronization skipped by explicit flag.', flush=True)
+        return True
+    if args and not ({'--resume', '--deploy'} & set(args)):
+        return False  # No shared-reader deployment requested.
+    interactive = sys.stdin.isatty() if interactive is None else interactive
+    if not interactive:
+        return False  # Unattended runs retain the existing full-sync default.
+    prompt = input if prompt is None else prompt
+    try:
+        answer = prompt('Sync and verify shared Open Reader (all GitHub/Cloudflare comics) this run? [Y/n]: ').strip().lower()
+    except EOFError:
+        answer = ''
+    if answer in ('n', 'no'):
+        print('Archive-only this run: no account-wide GitHub reader scan, Cloudflare '
+              'deployment/verification, or README synchronization. Newly archived '
+              'chapters will remain pending reader publication.', flush=True)
+        return True
+    print('Shared Open Reader synchronization enabled.', flush=True)
+    return False
+
+
 def _initial_github_check_choice(args, *, interactive=None, prompt=None):
     """Ask once about optional *full* startup checks for this interactive run.
 
@@ -186,6 +214,8 @@ _PREFLIGHT_PYTHON = (
     ('test_resume_deferred_and_reader_host.py', 8),
     ('test_open_reader_bell_integration.py', 4),
     ('test_partial_chapter_streaming.py', 4),
+    ('test_open_reader_journey.py', 3),
+    ('test_skip_open_reader_sync.py', 7),
 )
 _PREFLIGHT_JAVASCRIPT = (
     'extension_persistent_autoconnect.js',
@@ -206,6 +236,7 @@ _PREFLIGHT_JAVASCRIPT = (
     'extension_same_url_reload.js',
     'extension_managed_tab_recycle.js',
     'open_reader_worker.test.mjs',
+    'open_reader_journey.test.mjs',
 )
 
 
@@ -391,6 +422,7 @@ def main() -> None:
     # expensive local suites and old GitHub audit may be explicitly skipped
     # for this interactive run; --self-test-only ALWAYS runs all tests.
     self_test_only = '--self-test-only' in sys.argv[1:]
+    skip_reader_sync = (False if self_test_only else _open_reader_sync_choice(sys.argv[1:]))
     chosen, run_full_tests = (list(sys.argv[1:]), True) if self_test_only else (
         _initial_github_check_choice(sys.argv[1:]))
     _run_preflight(run_tests=run_full_tests)
@@ -409,11 +441,18 @@ def main() -> None:
     if not args:
         _preferences()
         args = ['--resume', '--authorized']
+    if skip_reader_sync and '--skip-open-reader-sync' not in args:
+        args.append('--skip-open-reader-sync')
     if '--skip-initial-github-check' in chosen and '--skip-initial-github-check' not in args:
         args.append('--skip-initial-github-check')
     # Also cover explicit `python run.py --deploy --authorized`: the old code
     # silently skipped the shutdown question whenever command-line args existed.
-    args = _shutdown_choice(args)
+    # Archiving-only runs cannot satisfy the publish-and-verify shutdown gate.
+    if '--skip-open-reader-sync' not in args:
+        args = _shutdown_choice(args)
+    elif '--shutdown-on-complete' in args:
+        print('Automatic shutdown suppressed: shared-reader publication was skipped.', flush=True)
+        args = [value for value in args if value != '--shutdown-on-complete']
     sys.argv = ['comic_archiver.py', *args]
     engine.main()
 

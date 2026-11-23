@@ -1,3 +1,4 @@
+import { journeyRoute, journeyConfigured, purgeJourneyEvents } from './journey_worker.mjs';
 /* Cloudflare Worker entrypoint for the EXISTING shared-reader assets.
  * Required bindings: env.ASSETS (Workers static assets), env.PANEL_REPLACEMENTS
  * (R2 bucket), secrets READER_ADMIN_PASSWORD and READER_SESSION_HMAC_KEY.
@@ -403,9 +404,11 @@ async function overlayGithubManifest(req,env){
 export default {
   async fetch(req,env,ctx) {
     if(!env.ASSETS)return error('Static assets binding missing',503);
+    const journey = await journeyRoute(req,env,(r,e)=>validSession(r,e));
+    if(journey)return journey;
     const u=new URL(req.url), path=u.pathname;
     if(path==='/api/reader-health' && req.method==='GET')return json({ok:true,script:'open-reader-panel-replacement-v1',
-      storage_configured:!!env.PANEL_REPLACEMENTS,github_streaming_configured:githubConfigured(env)});
+      storage_configured:!!env.PANEL_REPLACEMENTS,github_streaming_configured:githubConfigured(env),journey_storage_configured:journeyConfigured(env)});
     const streaming=path.match(STREAM_RE);
     if(streaming && req.method==='GET')return serveGithubImage(req,env,ctx,streaming[1],streaming[2],Number(streaming[3]));
     const writing=path.match(WRITE_RE);
@@ -428,5 +431,6 @@ export default {
     if(/^\/comics\/[^/]+\/manifest\.json$/.test(path) && req.method==='GET')return decorateManifest(req,env);
     if(req.method==='GET' && (path==='/' || path.endsWith('/') || path.endsWith('.html')))return htmlResponse(req,env);
     return env.ASSETS.fetch(req);
-  }
+  },
+  async scheduled(_event,env,_ctx){await purgeJourneyEvents(env);}
 };

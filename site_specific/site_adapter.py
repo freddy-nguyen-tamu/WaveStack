@@ -1,4 +1,4 @@
-"""MangaDex / Wotaku ni Koi wa Muzukashii: sole site-specific adapter.
+"""MangaDex: sole site-specific adapter; series verified from seed chapter.
 
 Chapter traversal and rendered panel filenames are verified against MangaDex's
 public API. The normal Chrome/Comic Bridge profile, state, checksums, and
@@ -17,11 +17,11 @@ import requests
 from bs4 import BeautifulSoup
 
 SOURCE_BROWSER_TRANSPORT = 'extension'
-SOURCE_NAME = 'mangadex-wotakoi-en'
+SOURCE_NAME = 'mangadex-3f1f5eee-290d-4c66-acff-293b28ecedd4'
 STATE_STORAGE_MODE = 'scoped'
-TITLE_ADAPTER_VERSION = 'mangadex-api-feed-v1'
-SERIES_SLUG_HINT = 'wotaku-ni-koi-wa-muzukashii'
-DEFAULT_START_URL = 'https://mangadex.org/chapter/a2524342-07a7-4b9d-998d-c1ac081f7b3c/2'
+TITLE_ADAPTER_VERSION = 'mangadex-api-feed-v1-seed-3f1f5eee'
+SERIES_SLUG_HINT = ''
+DEFAULT_START_URL = 'https://mangadex.org/chapter/3f1f5eee-290d-4c66-acff-293b28ecedd4'
 ALLOWED_HOSTS = ('mangadex.org',)
 BRIDGE_IMAGE_HOSTS = ('api.mangadex.org', 'uploads.mangadex.org')
 EXTENSION_MATCHES = ('https://mangadex.org/chapter/*',)
@@ -185,7 +185,9 @@ def title_from_html(soup):
     if match:return match.group(1).strip()
     og=soup.select_one('meta[property="og:title"]')
     if og and og.get('content'):return og['content'].strip()
-    return 'Wotaku ni Koi wa Muzukashii' if '/chapter/' in title else None
+    if title:
+        raise RuntimeError('MangaDex page did not provide a verifiable series title; refusing an ambiguous archive')
+    return None  # Empty initial metadata is legitimate before the browser opens.
 
 
 def chapter_title_from_anchor(anchor,fallback): return fallback

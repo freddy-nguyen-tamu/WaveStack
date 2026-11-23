@@ -463,6 +463,11 @@ def _reader_hash(root):
                 continue
             raise RuntimeError('Missing shared-reader integration source: ' + relative)
         files[relative] = sha(file.read_bytes())
+    # Source-agnostic statistics implementation affects deployed frontend hash.
+    for relative in ('reusable/open_reader_journey.py',
+                     'reusable/worker_addon/journey_worker.mjs'):
+        file=Path(__file__).parent.parent/relative
+        if file.is_file(): files[relative]=sha(file.read_bytes())
     return sha(canonical(files))
 
 
@@ -893,6 +898,9 @@ def stage_worker_assets(root, registry, stage, *, partial_records=None):
     stats = augment_assets(stage, root, partial_records)
     print(f'open-reader: golden favicon on {stats["html_documents"]} routes, homepage-only notifications; '
           f'{stats["affected_chapters"]} affected chapters ({stats["issues"]} panels)', flush=True)
+    from .open_reader_journey import augment_assets as stage_journey
+    journey = stage_journey(stage)
+    print(f'open-reader: Your Journey tracking on {journey["tracked_html_routes"]} HTML routes', flush=True)
     return payload
 
 
@@ -922,6 +930,18 @@ def _worker_config(stage, config_dir, root=None):
         if not isinstance(bucket, str) or not re.fullmatch(r'[a-z0-9][a-z0-9-]{2,62}', bucket):
             raise RuntimeError('Invalid R2 bucket configuration: ' + str(settings_file))
         cfg['r2_buckets'] = [{'binding':'PANEL_REPLACEMENTS','bucket_name':bucket}]
+    # One account-wide D1 store, independent of source website/adapter.
+    journey_cfg = root / '.archiver_state' / 'open_reader_journey.json'
+    if journey_cfg.is_file():
+        settings=json.loads(journey_cfg.read_text(encoding='utf-8'))
+        database_id=settings.get('database_id') if isinstance(settings,dict) else None
+        if not isinstance(database_id,str) or not re.fullmatch(r'[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}',database_id):
+            raise RuntimeError('Invalid Journey D1 database ID: '+str(journey_cfg))
+        cfg['d1_databases']=[{'binding':'JOURNEY_DB','database_name':'open-reader-journey',
+                              'database_id':database_id}]
+        cfg['triggers']={'crons':['0 4 * * *']}
+    else:
+        print('WARNING: Your Journey D1 database not configured. Visit events cannot be recorded until configured.',flush=True)
     path = Path(config_dir) / 'wrangler.json'
     path.write_bytes(canonical(cfg))
     return path
