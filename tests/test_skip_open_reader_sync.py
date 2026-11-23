@@ -67,10 +67,11 @@ class SkipSyncRegression(unittest.TestCase):
     def test_first_prompt_precedes_existing_preflight_and_archive_safety_preserved(self):
         run = (ROOT / 'run.py').read_text(encoding='utf-8-sig')
         engine = (ROOT / 'reusable/engine.py').read_text(encoding='utf-8-sig')
-        self.assertLess(run.index('skip_reader_sync = (False if self_test_only'),
+        self.assertLess(run.index('scope, skip_old, run_full_tests ='),
                         run.index('    _run_preflight(run_tests=run_full_tests)'))
         self.assertIn("args = ['--resume', '--authorized']", run)
-        self.assertIn("if skip_reader_sync and '--skip-open-reader-sync' not in args:", run)
+        self.assertNotIn("skip_reader_sync = (False if self_test_only", run)
+        self.assertIn('def _reader_workflow_choices(', run)
         self.assertIn('skip_initial_github_check=args.skip_initial_github_check', engine)
         self.assertIn('archive_run(db, args.source_html', engine)
         self.assertIn('if args.deploy:', engine)

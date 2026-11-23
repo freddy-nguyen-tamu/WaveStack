@@ -154,6 +154,64 @@ def _open_reader_sync_choice(args, *, interactive=None, prompt=None):
     return False
 
 
+def _reader_workflow_choices(argv, *, interactive=None, prompt=None):
+    """Choose publication work and independent, optional checks for this run.
+
+    Defaults preserve the existing full workflow for unattended automation.
+    Noninteractive flags can select a narrower workflow explicitly.
+    """
+    argv=list(argv)
+    options={'--status','--archive-needed','--inspect','--audit-resources',
+             '--github-login','--github-logout','--github-account',
+             '--github-switch-account','--default-source-url',
+             '--refresh-extension','--self-test-only','--library-audit'}
+    if options.intersection(argv):
+        return 'full', False, True
+    scope='full'
+    if '--open-reader-update-scope' in argv:
+        ix=argv.index('--open-reader-update-scope')
+        if ix+1>=len(argv):
+            raise SystemExit('--open-reader-update-scope requires full, comic, or site')
+        scope=argv[ix+1]
+        if scope not in ('full','comic','site'):
+            raise SystemExit('Unrecognized Open Reader update scope: '+scope)
+    interactive=sys.stdin.isatty() if interactive is None else interactive
+    if not interactive:
+        return scope, ('--skip-initial-github-check' in argv), True
+    prompt=input if prompt is None else prompt
+    if '--open-reader-update-scope' not in argv and '--skip-open-reader-sync' not in argv:
+        print('What changed in Open Reader?\n'
+              '  1) Current comic only (new chapters/new comic; update library listing)\n'
+              '  2) Homepage, Your Journey, or other shared routes only (no comic changes)\n'
+              '  3) Full library synchronization (default)',flush=True)
+        answer=prompt('Choose publication workflow [1/2/3]: ').strip().lower()
+        if answer in ('1','comic'):
+            scope='comic'
+        elif answer in ('2','site'):
+            scope='site'
+        elif answer in ('','3','full'):
+            scope='full'
+        else:
+            raise SystemExit('Invalid publication choice; nothing changed.')
+    old_check=('--skip-initial-github-check' not in argv)
+    if old_check:
+        # Focused work normally does not need any historical GitHub scan.
+        default='N' if scope in ('comic','site') else 'Y'
+        question = ('Recheck all older comics remotely (turns targeted update into full sync)? ' if scope in ('comic','site')
+                    else 'Reconcile old local GitHub archive history? (Full library scan still runs) ')
+        reply=prompt(question + ('[y/N]: ' if default=='N' else '[Y/n]: ')).strip().lower()
+        if reply in ('y','yes'):
+            old_check=True
+        elif reply in ('n','no',''):
+            old_check=(default=='Y' and reply=='')
+        else:
+            raise SystemExit('Invalid historical-check choice; nothing changed.')
+    answer=prompt('Run optional regression test suites? [Y/n]: ').strip().lower()
+    if answer not in ('','y','yes','n','no'):
+        raise SystemExit('Invalid test-suite choice; nothing changed.')
+    return scope, not old_check, answer not in ('n','no')
+
+
 def _initial_github_check_choice(args, *, interactive=None, prompt=None):
     """Ask once about optional *full* startup checks for this interactive run.
 
@@ -216,6 +274,7 @@ _PREFLIGHT_PYTHON = (
     ('test_partial_chapter_streaming.py', 4),
     ('test_open_reader_journey.py', 3),
     ('test_skip_open_reader_sync.py', 7),
+    ('test_open_reader_scoped_updates.py', 8),
 )
 _PREFLIGHT_JAVASCRIPT = (
     'extension_persistent_autoconnect.js',
@@ -422,9 +481,9 @@ def main() -> None:
     # expensive local suites and old GitHub audit may be explicitly skipped
     # for this interactive run; --self-test-only ALWAYS runs all tests.
     self_test_only = '--self-test-only' in sys.argv[1:]
-    skip_reader_sync = (False if self_test_only else _open_reader_sync_choice(sys.argv[1:]))
-    chosen, run_full_tests = (list(sys.argv[1:]), True) if self_test_only else (
-        _initial_github_check_choice(sys.argv[1:]))
+    scope, skip_old, run_full_tests = (('full', False, True) if self_test_only else
+                                        _reader_workflow_choices(sys.argv[1:]))
+    chosen = list(sys.argv[1:])
     _run_preflight(run_tests=run_full_tests)
     if '--self-test-only' in sys.argv[1:]:
         if len(sys.argv) != 2:
@@ -441,14 +500,14 @@ def main() -> None:
     if not args:
         _preferences()
         args = ['--resume', '--authorized']
-    if skip_reader_sync and '--skip-open-reader-sync' not in args:
-        args.append('--skip-open-reader-sync')
-    if '--skip-initial-github-check' in chosen and '--skip-initial-github-check' not in args:
+    if '--open-reader-update-scope' not in args and '--skip-open-reader-sync' not in args:
+        args.extend(['--open-reader-update-scope', scope])
+    if (skip_old or '--skip-initial-github-check' in chosen) and '--skip-initial-github-check' not in args:
         args.append('--skip-initial-github-check')
     # Also cover explicit `python run.py --deploy --authorized`: the old code
     # silently skipped the shutdown question whenever command-line args existed.
     # Archiving-only runs cannot satisfy the publish-and-verify shutdown gate.
-    if '--skip-open-reader-sync' not in args:
+    if '--skip-open-reader-sync' not in args and scope != 'site':
         args = _shutdown_choice(args)
     elif '--shutdown-on-complete' in args:
         print('Automatic shutdown suppressed: shared-reader publication was skipped.', flush=True)

@@ -992,7 +992,7 @@ def _deploy(engine, stage, registry):
                        'Check Cloudflare Workers > open-reader for its production URL.')
 
 
-def _verify_published(worker_url, staged, registry):
+def _verify_published(worker_url, staged, registry, *, verify_slugs=None):
     """Validate all deployed assets, allowing *only* registered panel overlays.
 
     /source-issues.json is computed dynamically with R2 replacement states.
@@ -1110,6 +1110,12 @@ def _verify_published(worker_url, staged, registry):
 
     for source in sorted(p for p in stage.rglob('*') if p.is_file()):
         relative = source.relative_to(stage).as_posix()
+        # For a focused update, verify only the chosen comic and common routes.
+        # Skipped files remain in the complete deployment asset manifest.
+        if verify_slugs is not None and relative.startswith('comics/'):
+            parts = Path(relative).parts
+            if len(parts) < 3 or parts[1] not in verify_slugs:
+                continue
         public_path = relative[:-len('index.html')] if relative.endswith('index.html') else relative
         expected_hash = sha(source.read_bytes())
         url = worker_url.rstrip('/') + '/' + public_path
@@ -1151,6 +1157,8 @@ def _verify_published(worker_url, staged, registry):
         # old Pages project could be considered redundant.
         found = {}
         for slug, comic in registry['comics'].items():
+            if verify_slugs is not None and slug not in verify_slugs:
+                continue
             for ch in comic['chapters']:
                 for im in ch['images']:
                     orig=im.get('github')

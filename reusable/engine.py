@@ -2846,8 +2846,15 @@ def _publish_reader_on_verified_volume(db, reader_stage, grouped, owner,
     return url, project
 
 
-def deploy_run(db, mode='shared-worker'):
+def deploy_run(db, mode='shared-worker', update_scope='full'):
     if mode == 'shared-worker':
+        if update_scope in ('comic','site'):
+            from .open_reader_focused import publish as publish_focused
+            url=publish_focused(sys.modules[__name__],db,scope=update_scope)
+            if update_scope == 'comic':
+                from .shared_reader_volume import verify_current_in_shared_reader
+                verify_current_in_shared_reader(sys.modules[__name__],db,url)
+            return url
         # The shared publisher enumerates only comics with a trusted public
         # image-volume host. A GitHub-verified archive with no Pages host was
         # silently omitted before this preflight, despite intact image files.
@@ -3498,6 +3505,8 @@ def build_parser():
     a.add_argument('--archive-needed', action='store_true', help='Reconcile old/new remote GitHub archives, then print READY or NEEDS_ARCHIVE without visiting the source website')
     a.add_argument('--skip-initial-github-check', action='store_true',
                    help='Skip full remote reconciliation of previously archived chapters for this run only; new uploads still verified')
+    a.add_argument('--open-reader-update-scope', choices=['full','comic','site'], default='full',
+                   help='Full library, current comic only, or shared site routes only')
     a.add_argument('--skip-open-reader-sync', action='store_true',
                    help='Archive only: skip all shared Open Reader discovery, deployment and verification this run')
     a.add_argument('--refresh-extension', action='store_true', help='Regenerate site-scoped extension from site_specific/site_adapter.py')
@@ -3629,6 +3638,12 @@ def main():
             raise RuntimeError("No saved comic URL or archive identity. Run with --source-url and --archive")
         args.archive = True
         args.deploy = True
+    if args.open_reader_update_scope == 'site':
+        if args.cloudflare_mode != 'shared-worker':
+            raise SystemExit('Shared-route-only updates require shared-worker mode')
+        print('Shared routes only: skipping source crawling, comic metadata reconciliation, and historic image checks.',flush=True)
+        args.archive=False
+        args.shutdown_on_complete=False
     # Archive-only opt-out is per run. Do not call the shared reader publisher:
     # it scans old GitHub repos, validates all archived hosts, checks Worker assets,
     # and synchronizes READMEs. Newly uploaded chapter integrity checks stay on.
@@ -3656,7 +3671,7 @@ def main():
         # Check ALL archived chapters (including previously published ones),
         # just once per adapter revision; no image crawl, lazy scrolling or
         # repeated upload. Failed source title extraction is always optional.
-        if args.archive or args.deploy or args.refresh_titles:
+        if (args.archive or args.deploy or args.refresh_titles) and args.open_reader_update_scope != 'site':
             from .title_reconcile import reconcile_native_titles
             source_url = (args.source_url or get_option(db, 'source_url') or
                           getattr(ADAPTER, 'DEFAULT_START_URL', ''))
@@ -3671,7 +3686,9 @@ def main():
         if args.deploy:
             if not args.authorized:
                 raise RuntimeError("Public deployment requires explicit --authorized rights confirmation")
-            deployment_url = deploy_run(db, mode=args.cloudflare_mode)
+            deployment_url = deploy_run(db, mode=args.cloudflare_mode) if (
+                args.open_reader_update_scope == 'full' or not args.skip_initial_github_check
+            ) else deploy_run(db, mode=args.cloudflare_mode, update_scope=args.open_reader_update_scope)
     except Exception as ex:
         original_error = str(ex)
         if ("Target page, context or browser has been closed" in original_error or
@@ -3687,7 +3704,7 @@ def main():
         event("RUN_PAUSED", reason=original_error)
         raise
     else:
-        completed = bool(args.deploy and all_work_completed(
+        completed = bool(args.deploy and args.open_reader_update_scope != 'site' and all_work_completed(
             db, mode=args.cloudflare_mode, worker_url=deployment_url))
         if completed:
             print('RUN COMPLETE: shared reader and all known chapters are published and verified. '
