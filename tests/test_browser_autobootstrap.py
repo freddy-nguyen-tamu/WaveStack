@@ -68,4 +68,100 @@ class AutomaticBridgeBootstrapTests(unittest.TestCase):
                     seen.append(json.load(resp)['token'])
             finally:bridge.close()
         self.assertNotEqual(*seen)
+
+
+# Additive regression cases for one-shot terminal-side quiet image readiness.
+# Keep the original bootstrap and credential boundary tests unchanged.
+from unittest.mock import patch
+from reusable import browser_bridge as quiet_bridge
+
+
+class QuietImageGraceRegression(unittest.TestCase):
+    def test_first_probe_quiet_wait_retries_exactly_once(self):
+        from unittest.mock import Mock
+        client = Mock()
+        client.rpc.side_effect = [
+            quiet_bridge.BrowserBridgeError('Browser probe failed: Error: No decoded CDN image on the selected page'),
+            {'base64': 'saved-byte-proof'},
+        ]
+        with patch.object(quiet_bridge.time, 'sleep') as sleep:
+            out = quiet_bridge._probe_with_one_quiet_image_grace(client, ['.generic-reader'])
+        self.assertEqual(out['base64'], 'saved-byte-proof')
+        self.assertEqual(client.rpc.call_count, 2)
+        sleep.assert_called_once_with(10)
+        self.assertEqual(client.rpc.call_args_list[0], client.rpc.call_args_list[1])
+
+    def test_first_probe_stops_after_one_quiet_retry(self):
+        from unittest.mock import Mock
+        client = Mock()
+        issue = quiet_bridge.BrowserBridgeError('No decoded CDN image on the selected page')
+        client.rpc.side_effect = [issue, issue]
+        with patch.object(quiet_bridge.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(quiet_bridge.BrowserBridgeError, 'Stopping without touching'):
+                quiet_bridge._probe_with_one_quiet_image_grace(client, ())
+        self.assertEqual(client.rpc.call_count, 2)
+        sleep.assert_called_once_with(10)
+
+    def test_other_probe_errors_fail_without_delay(self):
+        from unittest.mock import Mock
+        client = Mock()
+        client.rpc.side_effect = quiet_bridge.BrowserBridgeError('Permission denied')
+        with patch.object(quiet_bridge.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(quiet_bridge.BrowserBridgeError, 'Permission denied'):
+                quiet_bridge._probe_with_one_quiet_image_grace(client, ())
+        client.rpc.assert_called_once()
+        sleep.assert_not_called()
+
+    def test_empty_chapter_snapshot_one_quiet_retry(self):
+        from unittest.mock import Mock
+        from types import SimpleNamespace
+        client = Mock()
+        client.tab_url = 'https://example.org/chapter/next'
+        client.rpc.side_effect = [
+            {'imgs': [], 'total': 0},
+            {'imgs': [{'key': '1', 'url': 'https://example.org/one.png'}], 'total': 1},
+        ]
+        context = SimpleNamespace(bridge=client, reader_selectors=['.reader'], image_attributes=['src'])
+        page = quiet_bridge.BridgePage(context)
+        page._expect_reader_images = True
+        with patch.object(quiet_bridge.time, 'sleep') as sleep:
+            result = page.evaluate('/* MutationObserver */')
+        self.assertEqual(len(result['imgs']), 1)
+        self.assertEqual(client.rpc.call_count, 2)
+        sleep.assert_called_once_with(10)
+
+    def test_still_empty_chapter_stops_after_one_retry(self):
+        from unittest.mock import Mock
+        from types import SimpleNamespace
+        client = Mock()
+        client.tab_url = 'https://example.org/chapter/next'
+        client.rpc.return_value = {'imgs': []}
+        page = quiet_bridge.BridgePage(SimpleNamespace(bridge=client, reader_selectors=[], image_attributes=[]))
+        page._expect_reader_images = True
+        with patch.object(quiet_bridge.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(quiet_bridge.BrowserBridgeError, 'Stopping this chapter'):
+                page.evaluate('/* MutationObserver */')
+        self.assertEqual(client.rpc.call_count, 2)
+        sleep.assert_called_once_with(10)
+
+    def test_normal_lazy_slots_and_unproven_pages_are_unchanged(self):
+        from unittest.mock import Mock
+        from types import SimpleNamespace
+        client = Mock()
+        client.tab_url = 'https://example.org/chapter/next'
+        client.rpc.return_value = {'imgs': [{'key': '1', 'loaded': False}], 'total': 1}
+        page = quiet_bridge.BridgePage(SimpleNamespace(bridge=client, reader_selectors=[], image_attributes=[]))
+        page._expect_reader_images = True
+        with patch.object(quiet_bridge.time, 'sleep') as sleep:
+            self.assertEqual(page.evaluate('/* MutationObserver */')['total'], 1)
+        client.rpc.assert_called_once()
+        sleep.assert_not_called()
+        client.reset_mock()
+        client.rpc.return_value = {'imgs': []}
+        page._expect_reader_images = False
+        with patch.object(quiet_bridge.time, 'sleep') as sleep:
+            self.assertEqual(page.evaluate('/* MutationObserver */')['imgs'], [])
+        client.rpc.assert_called_once()
+        sleep.assert_not_called()
+
 if __name__=='__main__':unittest.main()

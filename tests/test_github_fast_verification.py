@@ -110,3 +110,65 @@ class FastGitVerification(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+# COMICARCHIVER_AUTH_BLOB_TRANSFER_20261122 — GCM reuse is checked by run.py normal GitHub preflight
+from tests.test_auth_and_decoded_blob_bridge import GcmReuseTests
+# COMIC_GIT_PARTIAL_CLONE_MISSING_OK_REGRESSION_V1
+class PartialCloneWriteTreeRegression(unittest.TestCase):
+    """Avoid fetching archived images just to construct a new Git tree."""
+
+    def test_partial_clone_preserves_old_blobs_without_lazy_fetch(self):
+        import os
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory(prefix='partial-git-tree-test-') as tmp:
+            root = Path(tmp)
+            source, remote, publisher = root / 'old', root / 'remote.git', root / 'publisher'
+            def run(*args, cwd=None, env=None, check=True):
+                p = subprocess.run(['git', *map(str, args)], cwd=cwd, env=env,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+                if check and p.returncode:
+                    raise AssertionError(p.stderr.decode('utf-8', 'replace'))
+                return p
+
+            run('init', '--bare', remote)
+            run('--git-dir=' + str(remote), 'config', 'uploadpack.allowFilter', 'true')
+            run('init', source)
+            run('config', 'user.name', 'Offline Test', cwd=source)
+            run('config', 'user.email', 'offline@example.invalid', cwd=source)
+            for i in range(8):
+                img = source / 'chapters' / ('old%02d' % i) / '0001.png'
+                img.parent.mkdir(parents=True, exist_ok=True)
+                img.write_bytes((str(i) + 'archive-original-bytes-').encode() * 1000)
+            run('add', '.', cwd=source)
+            run('commit', '-m', 'Previous verified images', cwd=source)
+            run('branch', '-M', 'main', cwd=source)
+            run('remote', 'add', 'origin', 'file://' + remote.as_posix(), cwd=source)
+            run('push', 'origin', 'main', cwd=source)
+
+            run('init', '-b', 'main', publisher)
+            run('remote', 'add', 'origin', 'file://' + remote.as_posix(), cwd=publisher)
+            run('fetch', '--depth=1', '--filter=blob:none', 'origin', 'main', cwd=publisher)
+            run('read-tree', 'FETCH_HEAD', cwd=publisher)
+            new_img = publisher / 'new-image.png'
+            new_img.write_bytes(b'valid image bytes for new panel')
+            oid = run('hash-object', '-w', new_img, cwd=publisher).stdout.decode().strip()
+            run('update-index', '--add', '--cacheinfo',
+                '100644,%s,chapters/new-chapter/0001.png' % oid, cwd=publisher)
+            no_lazy = dict(os.environ, GIT_NO_LAZY_FETCH='1')
+            # Ordinary write-tree demands all old promised blobs even though
+            # they are still present on the remote. The fixed command must not.
+            original = run('write-tree', cwd=publisher, env=no_lazy, check=False)
+            self.assertNotEqual(original.returncode, 0)
+            new_tree = run('write-tree', '--missing-ok', cwd=publisher, env=no_lazy)
+            self.assertRegex(new_tree.stdout.decode().strip(), r'^[0-9a-f]{40,64}$')
+            # Preserve the existing, remotely held image paths in the new tree.
+            entries = run('ls-tree', '-r', new_tree.stdout.decode().strip(), cwd=publisher)
+            self.assertEqual(len(entries.stdout.splitlines()), 9)
+            self.assertIn(b'chapters/new-chapter/0001.png', entries.stdout)
+            self.assertIn(b'chapters/old00/0001.png', entries.stdout)
+            # The one-line production change is deliberately limited to the
+            # write-tree call inside stage_one_chapter.
+            import inspect
+            self.assertIn("g('write-tree', '--missing-ok', cwd=work)",
+                          inspect.getsource(engine.stage_one_chapter))

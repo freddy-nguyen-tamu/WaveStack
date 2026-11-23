@@ -2,9 +2,9 @@
 (() => {
   // Versioned guard: a previously installed extension may have injected
   // an older content script into this tab. Upgrade without refreshing it.
-  if (window.__comicBridgeContentLoadedVersion === 9 &&
+  if (window.__comicBridgeContentLoadedVersion === 10 &&
       typeof window.__comicBridgeDirect === 'function') return;
-  window.__comicBridgeContentLoadedVersion = 9;
+  window.__comicBridgeContentLoadedVersion = 10;
   window.__comicBridgeContentLoaded = true;
 
   const html = () => ({url: location.href, html: '<!doctype html>\n' + document.documentElement.outerHTML});
@@ -47,7 +47,9 @@
       const candidates = im.naturalWidth > 0
         ? [(im.currentSrc || '').trim(), ...attrs.map(a => (im.getAttribute(a) || '').trim())]
         : [...attrs.map(a => (im.getAttribute(a) || '').trim()), (im.currentSrc || '').trim()];
-      const url = candidates.find(s => s && !/^(data:|blob:|about:)/i.test(s)) || '';
+      const url = candidates.find(s => s && !/^(data:|blob:|about:)/i.test(s)) ||
+        (im.complete && im.naturalWidth>0 && im.naturalHeight>0
+          ? candidates.find(s => s && /^blob:https:\/\//i.test(s)) || '' : '');
       if (!url) missingSlots++;
       if (!im.complete || !im.naturalWidth || !im.naturalHeight) unloadedSlots++;
       const ordinal = im.closest('[data-page]')?.getAttribute('data-page') ||
@@ -171,6 +173,25 @@
         if (image) break;
       }
     }
+    // A browser can display same-origin blob: pages whose original CDN URL
+    // never appears in the DOM. This is a generic rendered-image fallback.
+    // Use the existing selected-tab screenshot capture, not a second fetch.
+    if (!image && !Array.isArray(options)) {
+      for(const selector of (Array.isArray(options?.reader_selectors) ? options.reader_selectors : [])) {
+        let root; try {root=document.querySelector(selector);} catch {continue;}
+        if (!root) continue;
+        const original=[...root.querySelectorAll('img')].find(im=>im.complete && im.naturalWidth>0 &&
+          im.naturalHeight>0 && (im.currentSrc||im.src||'').startsWith('blob:'));
+        if (!original) continue;
+        const source=abs(original.currentSrc||original.src);
+        // A clean-reader extension may hide the original image DOM and show a
+        // visible clone. Both point at the exact same already-decoded blob URL.
+        // Prefer that visible clone so screenshot capture cannot target 0x0.
+        image=[...document.images].find(im => im.complete && im.naturalWidth>0 &&
+          abs(im.currentSrc||im.src)===source && (()=>{const r=im.getBoundingClientRect?.();return r&&r.width>0&&r.height>0;})()) || original;
+        break;
+      }
+    }
     return {url:image ? abs(image.currentSrc) : ''};
   };
   // Background/minimized Chrome tabs can stop delivering requestAnimationFrame.
@@ -211,7 +232,12 @@
     return target;
   }
   async function imageTile(p) {
-    const img=[...document.images].find(im=>matchesImage(im,p.url));
+    // Hidden source widgets and visible reader clones may share the same
+    // blob URL. Prefer the decoded, visible image instead of a zero-size node.
+    const candidates=[...document.images].filter(im=>matchesImage(im,p.url) &&
+      im.complete && im.naturalWidth>0 && im.naturalHeight>0);
+    const img=candidates.find(im=>{const r=im.getBoundingClientRect();
+      return r.width>0 && r.height>0;}) || candidates[0];
     if(!img) return {ok:false,reason:'No image DOM element matches requested URL'};
     if(!img.complete || !img.naturalWidth || !img.naturalHeight)
       return {ok:false,reason:'Source image has not decoded'};

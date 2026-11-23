@@ -23,7 +23,7 @@ async function contentCase(painted) {
     requestAnimationFrame:raf,scrollTo:window.scrollTo,
     getComputedStyle:()=>({}),URL,setTimeout,clearTimeout,Promise,Number,String,Math,Date,Error,console};
   vm.createContext(sandbox); vm.runInContext(content,sandbox);
-  assert.equal(window.__comicBridgeContentLoadedVersion,9);
+  assert.equal(window.__comicBridgeContentLoadedVersion,10);
   const start=Date.now();
   const result=await window.__comicBridgeDirect({type:'CAPTURE_IMAGE_TILE',payload:{url:image,offsetCss:200}});
   const elapsed=Date.now()-start;

@@ -17,6 +17,10 @@ from site_specific import site_adapter as adapter
 from reusable import engine
 
 SOURCE = adapter.DEFAULT_START_URL
+# This transport regression suite must work after switching the one site adapter.
+IMAGE_HOST = adapter.BRIDGE_IMAGE_HOSTS[0] if adapter.BRIDGE_IMAGE_HOSTS else SOURCE.split('/')[2]
+IMAGE_URL = 'https://' + IMAGE_HOST + '/img.jpg'
+PANEL_URL = 'https://' + IMAGE_HOST + '/panel.jpg'
 
 
 class BrowserBridgeTests(unittest.TestCase):
@@ -49,7 +53,7 @@ class BrowserBridgeTests(unittest.TestCase):
     def test_image_restriction_and_site_domain(self):
         b=bridge.LocalBridge(SOURCE,image_hosts=adapter.BRIDGE_IMAGE_HOSTS)
         b.validate_chapter(SOURCE)
-        b.validate_image('https://i.tngcdn.com/panel.jpg')
+        b.validate_image(PANEL_URL)
         for url in ['http://www.toongod.org/webtoon/annoying-alice/chapter-1/',
                     'https://example.com/chapter-2/']:
             with self.assertRaises(bridge.BrowserBridgeError):b.validate_chapter(url)
@@ -63,7 +67,8 @@ class BrowserBridgeTests(unittest.TestCase):
         origin='chrome-extension://test-extension'
         def api(path,data=None,secret=None,origin_header=origin):
             payload=json.dumps(data).encode() if data is not None else None
-            headers={'X-Comic-Bridge-Token':secret or b.secret,'Origin':origin_header}
+            headers={'X-Comic-Bridge-Token':secret or b.secret,'Origin':origin_header,
+                     'X-Comic-Bridge-Client':'test-broker-client-123'}
             if data is not None:headers['Content-Type']='application/json'
             request=Request(url+path,data=payload,headers=headers,method='POST' if data is not None else 'GET')
             with urlopen(request,timeout=5) as response:
@@ -96,7 +101,7 @@ class BrowserBridgeTests(unittest.TestCase):
                     seen.append(command['action'])
                     data = {'url':SOURCE,'html':'<html>example</html>'} if command['action']=='page' else \
                            {'url':SOURCE,'status':200} if command['action']=='navigate' else \
-                           {'status':200,'url':'https://i.tngcdn.com/img.jpg','base64':base64.b64encode(b'bytes').decode()}
+                           {'status':200,'url':IMAGE_URL,'base64':base64.b64encode(b'bytes').decode()}
                     api('/result',{'id':command['id'],'ok':True,'data':data})
             t=threading.Thread(target=simulate,daemon=True)
             t.start()
@@ -104,7 +109,7 @@ class BrowserBridgeTests(unittest.TestCase):
             page=ctx.pages[0]
             self.assertIn('example',page.content())
             self.assertEqual(page.goto(SOURCE).status,200)
-            img=ctx.request.get('https://i.tngcdn.com/img.jpg')
+            img=ctx.request.get(IMAGE_URL)
             self.assertEqual(img.body(),b'bytes')
             self.assertEqual(seen,['page','navigate','image'])
             t.join(timeout=2)
@@ -115,9 +120,9 @@ class BrowserBridgeTests(unittest.TestCase):
         b=bridge.LocalBridge(SOURCE,image_hosts=adapter.BRIDGE_IMAGE_HOSTS)
         b.ready.set();b.tab_url=SOURCE
         ctx=bridge.BridgeContext(b,adapter.READER_SELECTORS,adapter.IMAGE_ATTRIBUTES)
-        with patch.object(b,'rpc',return_value={'status':403,'url':'https://i.tngcdn.com/img.jpg','base64':''}):
+        with patch.object(b,'rpc',return_value={'status':403,'url':IMAGE_URL,'base64':''}):
             with self.assertRaises(SourceAccessPaused) as raised:
-                ctx.request.get('https://i.tngcdn.com/img.jpg')
+                ctx.request.get(IMAGE_URL)
             self.assertIn('CDN',str(raised.exception))
             self.assertIn('debugger',str(raised.exception))
 
@@ -131,7 +136,7 @@ class BrowserBridgeTests(unittest.TestCase):
             target=bridge.ensure_generated_extensions(root,adapter,18765)
             m=json.loads((target/'chrome'/'manifest.json').read_text('utf-8'))
             self.assertIn('debugger',m['permissions'])
-            self.assertIn('https://i.tngcdn.com/*',m['host_permissions'])
+            self.assertIn('https://' + IMAGE_HOST + '/*',m['host_permissions'])
             self.assertNotIn('debugger',json.loads((target/'firefox'/'manifest.json').read_text('utf-8'))['permissions'])
 
     def test_one_tab_no_page_close_and_operations(self):

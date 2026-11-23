@@ -31,7 +31,7 @@ async function run(){
   let r=await call('/api/reader-health');assert.equal((await r.json()).script,'open-reader-panel-replacement-v1');
   r=await call('/source-issues.json');assert.equal(r.status,200);
   let feed=await r.json();assert.equal(feed.count,2);assert.equal(feed.affected_chapters,1);
-  r=await call('/');assert.equal(r.status,200);let html=await r.text();assert.match(html,/favicon.ico/);assert.match(html,/reader-issues.js/);
+  r=await call('/');assert.equal(r.status,200);let html=await r.text();assert.match(html,/<link\s+rel="icon"\s+type="image\/svg\+xml"\s+href="\/favicon\.svg">/);assert.match(html,/reader-issues.js/);
   r=await call('/api/panel-replacements/'+id,{method:'POST',headers:{Origin:ORIGIN,'Content-Type':'image/png'},body:png});assert.equal(r.status,401);
   r=await call('/api/admin/login',{method:'POST',headers:{Origin:ORIGIN,'Content-Type':'application/json'},body:JSON.stringify({password:'wrong'})});assert.equal(r.status,401);
   r=await call('/api/admin/login',{method:'POST',headers:{Origin:ORIGIN,'Content-Type':'application/json'},body:JSON.stringify({password:env.READER_ADMIN_PASSWORD})});assert.equal(r.status,200);

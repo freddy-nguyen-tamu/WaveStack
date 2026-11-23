@@ -13,7 +13,9 @@
     "storage",
     "webRequest",
     "http://127.0.0.1:18765/*",
-    "https://tritinia.org/*"
+    "https://mangadex.org/*",
+    "https://api.mangadex.org/*",
+    "https://uploads.mangadex.org/*"
   ],
   "background": {
     "scripts": [
@@ -27,7 +29,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://tritinia.org/manga/we-may-be-an-inexperienced-couple-but/*"
+        "https://mangadex.org/chapter/*"
       ],
       "js": [
         "content.js"

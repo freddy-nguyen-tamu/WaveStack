@@ -6,6 +6,10 @@
 #reader-panel:not([hidden]) { width:min(425px,92vw); background:#eaeded; color:#0f1111; box-shadow:-12px 0 36px #0008; font:14px/1.4 Arial,Helvetica,system-ui,sans-serif; }
 #reader-panel .panel-heading { background:#131921; color:#fff; min-height:76px; padding:15px 19px; border-bottom:4px solid #ff9900; font-size:17px; font-weight:750; gap:12px; }
 #reader-panel #panel-series {color:#fff}
+#reader-panel .or-comic-overview-link { display:inline-flex;min-width:0;max-width:100%;align-items:center;
+  color:#fff;text-decoration:none;cursor:pointer;border-radius:4px;padding:6px 4px;margin:-6px -4px; }
+#reader-panel .or-comic-overview-link:hover,#reader-panel .or-comic-overview-link:focus-visible {
+  color:#febd69;text-decoration:underline;text-underline-offset:4px;outline:2px solid #febd69;outline-offset:3px; }
 #reader-panel #panel-close { color:#fff; border:1px solid #fff5; background:#273545; border-radius:5px; width:38px; height:38px; }
 #reader-panel #panel-close:hover,#reader-panel #panel-close:focus-visible {background:#36495d;color:#febd69}
 #reader-panel .panel-controls {background:#232f3e;color:#fff;padding:18px;gap:12px;border-bottom:0}

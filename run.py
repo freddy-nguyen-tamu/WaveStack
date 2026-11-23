@@ -199,6 +199,9 @@ _PREFLIGHT_JAVASCRIPT = (
     'extension_recovery_transport_fallback.js',
     'extension_scroll_stability.js',
     'extension_exact_image_recovery.js',
+    'extension_probe_additive_compat.js',
+    'extension_blob_reader.js',
+    'reader_final_chapter_overview.js',
     'extension_fetch_exception_screenshot_fallback.js',
     'extension_same_url_reload.js',
     'extension_managed_tab_recycle.js',
@@ -306,7 +309,7 @@ def _run_preflight(*, run_tests=True) -> None:
             fail('normal scroll has reverted to oversized viewport jumps')
         if 'pending_key = next((key for key in slot_order if key not in saved_keys), None)' not in engine:
             fail('resume lacks forward-only ordered recovery')
-        if b'__comicBridgeContentLoadedVersion === 9' not in content:
+        if b'__comicBridgeContentLoadedVersion === 10' not in content:
             fail('old content-script version guard would preserve a stale page handler')
 
         # One editable provider adapter; generated binaries must come from the

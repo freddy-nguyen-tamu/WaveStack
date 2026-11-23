@@ -6,6 +6,7 @@ import io
 import json
 import shutil
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import subprocess
@@ -55,7 +56,7 @@ class PartialChapterTests(unittest.TestCase):
         (self.root/'reusable/worker_addon/panel_replacement_worker.mjs').write_bytes(
              (ROOT/'reusable/worker_addon/panel_replacement_worker.mjs').read_bytes())
         state=self.root/'.archiver_state/sites/comic-a';state.mkdir(parents=True)
-        with sqlite3.connect(state/'state.sqlite') as con:
+        with closing(sqlite3.connect(state/'state.sqlite')) as con, con:
             con.execute('CREATE TABLE options (key TEXT,value TEXT)')
             con.execute('CREATE TABLE chapters (chapter_id TEXT,label TEXT,url TEXT,status TEXT)')
             con.execute('INSERT INTO options VALUES (?,?)',('series_slug',json.dumps('comic-a')))

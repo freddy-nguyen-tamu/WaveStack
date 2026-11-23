@@ -989,6 +989,12 @@ def isolated_git_environment():
     env.update({"GIT_CONFIG_GLOBAL": str(cfg), "GIT_CONFIG_NOSYSTEM": "1",
                 "GCM_NAMESPACE": "universal-comic-archiver-2026", "GCM_GITHUB_AUTHMODES": "browser",
                 "GCM_PROVIDER": "github", "GIT_TERMINAL_PROMPT": "1"})
+    # COMICARCHIVER_AUTH_BLOB_TRANSFER_20261122 — use existing selected GitHub auth; no background OAuth.
+    shared_auth = _shared_github_auth_metadata()
+    if shared_auth is not None:
+        env['GCM_NAMESPACE'] = shared_auth[1]
+    env['GCM_INTERACTIVE'] = '0'
+    env['GIT_TERMINAL_PROMPT'] = '0'
     # Fix the *child* environment only. No system/user PATH changes; no
     # git config --global, credential-helper overwrite or other account logout.
     git_bin, gcm_bin = _app_git_tools()
@@ -1025,6 +1031,9 @@ def github_login(db, force=False):
     env = isolated_git_environment()
     env["GCM_NAMESPACE"] = namespace
     env["GCM_GITHUB_AUTHMODES"] = "browser"
+    # Only this explicit login path may open browser OAuth.
+    env['GCM_INTERACTIVE'] = 'auto'
+    env['GIT_TERMINAL_PROMPT'] = '1'
     print("\nGITHUB SIGN-IN")
     print("Git Credential Manager will open GitHub's official browser sign-in.")
     print("Choose the account for this comic archiver, not necessarily your terminal's account.")
@@ -1067,16 +1076,18 @@ def credential_for_selected(db):
     _inherit_shared_github_auth(db)
     owner = get_option(db, "github_owner")
     if not owner:
-        return github_login(db)
+        raise RuntimeError('No saved GitHub account. Run python run.py --github-login once; normal archiving must not start OAuth.')
     env = isolated_git_environment()
     namespace = get_option(db, "github_credential_namespace")
     if not namespace:
-        return github_login(db, force=True)
+        raise RuntimeError('Saved GitHub namespace missing. Run python run.py --github-login once; no implicit OAuth attempted.')
     env["GCM_NAMESPACE"] = namespace
     p = subprocess.run(["git", "credential", "fill"], input=f"protocol=https\nhost=github.com\nusername={owner}\n\n",
                        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     if p.returncode:
-        return github_login(db, force=True)
+        raise RuntimeError('Saved GitHub credential lookup failed for the selected namespace. '
+                           'Run python run.py --github-login once; no repeated OAuth will launch. '
+                           + p.stderr[-240:])
     values = dict(line.split("=", 1) for line in p.stdout.splitlines() if "=" in line)
     token = values.get("password")
     if not token:
@@ -1323,7 +1334,7 @@ def stage_one_chapter(db, repo, chapter, files, manifest, token):
                                 input=records, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if staged.returncode:
             raise RuntimeError('Git batch index update failed: ' + staged.stderr.decode('utf-8', 'replace')[-900:])
-        tree = g('write-tree', cwd=work)
+        tree = g('write-tree', '--missing-ok', cwd=work)
         env['GIT_AUTHOR_NAME'] = owner
         env['GIT_AUTHOR_EMAIL'] = f'{owner}@users.noreply.github.com'
         env['GIT_COMMITTER_NAME'] = owner

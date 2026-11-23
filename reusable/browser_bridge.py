@@ -427,6 +427,17 @@ class BridgePage:
                 self.context.bridge.validate_image(urljoin(self.url, im['url']))
                 return True
             except BrowserBridgeError:
+                # A decoded image can be an in-memory blob: created by the
+                # *same* verified source tab (e.g. browser-native image viewer).
+                # It must never be treated as an HTTP download URL. This is
+                # passive readiness evidence only; image transfer still needs
+                # actual bytes and SHA-256 verification by the generic engine.
+                candidate = urlsplit(str(im['url']))
+                if candidate.scheme == 'blob':
+                    origin = urlsplit(candidate.path)
+                    if (origin.scheme == 'https' and
+                            origin.hostname == self.context.bridge.allowed_site):
+                        return True
                 continue
         return False
 
@@ -447,8 +458,23 @@ class BridgePage:
                 raise BrowserManagedTabRecycled('Browser tab recycled after a stalled scroll; re-scan from checkpoint')
             return result
         if 'return {imgs' in script or 'imgs:data' in script or 'MutationObserver' in script:
-            return self.context.bridge.rpc('snapshot', {'reader_selectors': self.context.reader_selectors,
-                                                       'image_attributes': self.context.image_attributes})
+            payload = {'reader_selectors': self.context.reader_selectors,
+                       'image_attributes': self.context.image_attributes}
+            result = self.context.bridge.rpc('snapshot', payload)
+            # A verified reader expecting image slots may be temporarily showing
+            # a self-clearing interstitial. Do not touch the browser during the
+            # one quiet interval; retry the exact original snapshot just once.
+            # Existing empty unproven pages and partially loaded slots are unchanged.
+            if not (result.get('imgs') or []) and getattr(self, '_expect_reader_images', False):
+                _quiet_reader_image_wait('expected chapter image slots temporarily absent')
+                result = self.context.bridge.rpc('snapshot', payload)
+                if not (result.get('imgs') or []):
+                    raise BrowserBridgeError(
+                        'Expected chapter image list is still empty after a single '
+                        'quiet 10-second wait. Stopping this chapter without more '
+                        'scrolling, page reloads or publication. If the source '
+                        'has a real verification screen, complete it normally.')
+            return result
         raise BrowserBridgeError('Unsupported browser script. Use the documented generic DOM operations.')
 
     def recover_unloaded_image(self, key, url, *, force_position=False, refresh_source=False):
@@ -542,6 +568,40 @@ class BridgeContext:
         self.bridge.close()
 
 
+# Provider-independent grace for a reader that currently has no decoded image.
+# During this entire delay Python does not issue browser/extension commands.
+QUIET_READER_IMAGE_GRACE_SECONDS = 10
+
+
+def _quiet_reader_image_wait(reason):
+    print('BROWSER_READER_QUIET_WAIT: ' + reason +
+          f'; leaving the browser untouched for {QUIET_READER_IMAGE_GRACE_SECONDS}s '
+          '(no polling, clicks, scrolls or reloads).', flush=True)
+    time.sleep(QUIET_READER_IMAGE_GRACE_SECONDS)
+
+
+def _probe_with_one_quiet_image_grace(bridge, reader_selectors):
+    """Keep the existing proof, retrying only the empty-decoded-image error."""
+    payload = {'reader_selectors': list(reader_selectors)}
+    try:
+        return bridge.rpc('probe', payload, timeout=55)
+    except BrowserBridgeError as error:
+        if 'No decoded CDN image on the selected page' not in str(error):
+            raise
+    _quiet_reader_image_wait('initial image not decoded yet')
+    try:
+        return bridge.rpc('probe', payload, timeout=55)
+    except BrowserBridgeError as error:
+        if 'No decoded CDN image on the selected page' in str(error):
+            raise BrowserBridgeError(
+                'Source reader still has no decoded image after a single quiet '
+                '10-second wait. Stopping without touching the tab again. '
+                'If a verification/login page remains, complete it normally; '
+                'otherwise check the site adapter reader selectors and reload '
+                'the installed extension only if it is outdated.') from error
+        raise
+
+
 @contextmanager
 def source_extension_context(data_dir: Path, source_url: str, *,
                              adapter, reader_selectors=(), initial_chapter_url=None):
@@ -572,7 +632,7 @@ def source_extension_context(data_dir: Path, source_url: str, *,
         # This transfers a decoded image across extension -> localhost -> Python,
         # validates bytes, and gives the user an on-disk artifact to inspect.
         try:
-            result = bridge.rpc('probe', {'reader_selectors': list(reader_selectors)}, timeout=55)
+            result = _probe_with_one_quiet_image_grace(bridge, reader_selectors)
         except BrowserBridgeError as exc:
             if 'Unsupported command' in str(exc):
                 raise BrowserBridgeError(
@@ -601,6 +661,9 @@ def source_extension_context(data_dir: Path, source_url: str, *,
               f'{via} | {proof}', flush=True)
         if via == 'rendered-png':
             print('IMAGE FIDELITY NOTICE: browser-rendered PNG, NOT original CDN JPEG bytes.', flush=True)
+        # A successful byte proof confirms that future chapter snapshots
+        # should contain image slots. Standalone/unproven pages are untouched.
+        ctx.pages[0]._expect_reader_images = True
         yield ctx
     finally:
         ctx.close()

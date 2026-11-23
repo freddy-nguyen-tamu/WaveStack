@@ -26,6 +26,21 @@
     setTimeout(()=>location.assign(target),420);
   };
   home.addEventListener('click',()=>leave('/'));
+  // The comic title is a genuine overview link. Keep the original #panel-series
+  // element in place so native title updates and panel controls still work.
+  const seriesName = $('#panel-series');
+  const seriesLink = document.createElement('a');
+  seriesLink.className = 'or-comic-overview-link';
+  seriesLink.href = new URL('./overview/', location.href).href;
+  seriesLink.setAttribute('aria-label', 'Open this comic homepage and browse chapters');
+  seriesLink.title = 'Browse chapters of this comic';
+  seriesName.parentNode.insertBefore(seriesLink, seriesName);
+  seriesLink.append(seriesName);
+  seriesLink.addEventListener('click', event => {
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+    event.preventDefault();
+    leave(seriesLink.href);
+  });
   // Reveal on actual mouse movement or when the navigation bar opens.
   // Hide after five seconds of no movement, regardless of whether the bar is open.
   let backIdleTimer = 0;
@@ -78,6 +93,16 @@
   const chapterNext = nextChapter;
   nextChapter = function(direction, auto=false) {
     const target = manifest?.chapters?.[chapterIndex + direction];
+    // Going FORWARD past the final published chapter leaves this comic's reader
+    // and opens its overview with the same page-flip as any other exit.
+    // Normal chapter-to-chapter flow stays inside the unmodified original.
+    if(!target && direction > 0 && manifest?.chapters?.length &&
+       chapterIndex === manifest.chapters.length - 1 && !transitioning &&
+       !(auto && !allLoaded())) {
+      if(auto){settings.auto=false;write();}
+      leave(seriesLink.href);
+      return;
+    }
     if(target && !transitioning && !(auto && !allLoaded())){
       sessionStorage.setItem('open-reader:skip-entry-flip',location.pathname);
       window.OpenReaderTrackChapter?.(target.id,0);

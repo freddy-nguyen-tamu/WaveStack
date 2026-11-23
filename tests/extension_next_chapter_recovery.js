@@ -63,7 +63,7 @@ function createPage(url,alreadyLoaded) {
   vm.createContext(sandbox);
   const inject=()=>vm.runInContext(content,sandbox);
   inject();
-  assert.equal(window.__comicBridgeContentLoadedVersion,9,'upgrade must replace old in-page content transport');
+  assert.equal(window.__comicBridgeContentLoadedVersion,10,'upgrade must replace old in-page content transport');
   return {img,inject,window,
     send(message,callback){
       assert.ok(listeners.length);

@@ -36,7 +36,7 @@ async function directTabCommand(id, payload) {
       const dispatch = async () => {
         const reply=await chrome.scripting.executeScript({target,
           func: command => {
-            if(window.__comicBridgeContentLoadedVersion !== 9 ||
+            if(window.__comicBridgeContentLoadedVersion !== 10 ||
                typeof window.__comicBridgeDirect !== 'function')
               return {__bridgeError:'Page command transport not initialized'};
             return window.__comicBridgeDirect(command);
@@ -503,7 +503,17 @@ async function selectedTabScreenshot(tab) {
 
 async function captureVisibleImage(url) {
   const key=normalizeResourceUrl(url);
-  if(!imagePermission(key)) throw Error('Image URL not allowed by adapter');
+  // Same-origin blob images can already be fully decoded in the selected
+  // browser tab. Only accept an actual decoded DOM image and an exact origin
+  // match, then capture its rendered pixels. Never fetch arbitrary blob URLs.
+  let selectedBlob=false;
+  if(key.startsWith('blob:')) {
+    const selected=await checkedIO(tabsGet(state.tabId),'verify blob owning tab');
+    const blobOrigin=new URL(key).origin;
+    selectedBlob=sourceMatches(selected.url) && blobOrigin===new URL(selected.url).origin &&
+      !!(await checkedIO(send(state.tabId,{type:'IMAGE_STATUS',payload:{url:key}}),'verify decoded blob')).loaded;
+  }
+  if(!imagePermission(key) && !selectedBlob) throw Error('Image URL not allowed by adapter or decoded tab');
   const prior=visualImages.get(key);
   if(prior) return {base64:prior,via:'rendered-png'};
   if ((!chrome.tabs.captureVisibleTab && !chrome.debugger?.attach) ||
@@ -754,6 +764,55 @@ async function execute(job) {
     const result=await waitContent(85000, desired.href);
     return {url:result.url,status:200};
   }
+  // COMICARCHIVER_AUTH_BLOB_TRANSFER_20261122 provider-neutral extension action follows
+  // Generic browser-memory transfer for a decoded blob: image.  This reads
+  // the image that the source page ALREADY created, in its own main world.
+  // There is no external fetch, cookie copy, extension-origin CDN request,
+  // redirect or bypass. Source selectors are supplied by the ONE site adapter.
+  if (action === 'read_loaded_blob') {
+    const tab=await tabsGet(state.tabId);
+    if (!sourceMatches(tab.url)) throw Error('Decoded image requested outside the selected site');
+    const origin=new URL(tab.url).origin;
+    const wanted=String(payload?.url||'').trim();
+    if (!wanted.startsWith('blob:'+origin+'/'))
+      throw Error('Decoded blob does not belong to the selected source page');
+    const roots=Array.isArray(payload?.reader_selectors)?payload.reader_selectors:[];
+    if (!roots.length || roots.length>12 || roots.some(x=>typeof x!=='string' || x.length>180))
+      throw Error('Decoded image requires adapter-defined reader selectors');
+    const raw=await checkedIO(chrome.scripting.executeScript({
+      target:{tabId:state.tabId}, world:'MAIN',
+      func:async (blobUrl,selectors,expectedOrigin)=>{
+        if (location.origin!==expectedOrigin || !blobUrl.startsWith('blob:'+location.origin+'/'))
+          return {status:403,reason:'Blob origin/document mismatch'};
+        const roots=selectors.map(s=>{try{return document.querySelector(s);}catch{return null;}}).filter(Boolean);
+        const images=roots.flatMap(r=>[...r.querySelectorAll('img')]);
+        const matches=images.filter(im=>(im.currentSrc||im.src||'')===blobUrl &&
+          im.complete && im.naturalWidth>0 && im.naturalHeight>0);
+        if (!matches.length) return {status:424,reason:'No decoded matching image in the current reader'};
+        try {
+          // This is a local browser blob read, not a request to the image CDN.
+          const result=await fetch(blobUrl);
+          if(!result.ok) return {status:424,reason:'The local blob is no longer accessible'};
+          const bytes=new Uint8Array(await result.arrayBuffer());
+          if(!bytes.length || bytes.length>20*1024*1024)
+            return {status:413,reason:'Decoded reader image exceeds size limit'};
+          const chunks=[];
+          for(let i=0;i<bytes.length;i+=16384)
+            chunks.push(String.fromCharCode(...bytes.subarray(i,i+16384)));
+          return {status:200,base64:btoa(chunks.join('')),via:'decoded-source-tab-blob',
+            headers:{'content-type':result.headers.get('content-type')||'application/octet-stream'}};
+        }catch(e){return {status:424,reason:'Source document cannot read its decoded blob: '+String(e).slice(0,120)};}
+      },args:[wanted,roots,origin]
+    }), 'read exact decoded image from managed browser tab',35000);
+    const value=raw?.[0]?.result;
+    if(!value || !Number.isInteger(value.status))
+      throw Error('Decoded browser image returned no structured result');
+    if (value.status===200 && (!value.base64 || value.base64.length>MAX_IMAGE_BYTES*4/3+8))
+      throw Error('Decoded image result exceeds transport limit');
+    return {url:wanted,status:value.status,base64:value.base64||'',
+      headers:value.headers||{},via:value.via||'decoded-source-tab-blob',
+      reason:value.reason||''};
+  }
   if (action === 'probe') {
     // Open tabs predating extension installation need content-script injection.
     await waitContent(10000);
@@ -761,7 +820,11 @@ async function execute(job) {
     if(!first?.url) throw Error('No decoded CDN image on the selected page; scroll to the first chapter image and retry pairing');
     const already=capturedImages.get(normalizeResourceUrl(first.url));
     const original=already ? {base64:already.base64,via:'captured-during-scroll'} : null;
-    const result=original || await captureVisibleImage(first.url);
+    // For browser-created blob URLs, original bytes are intentionally not
+    // recoverable via the CDN cache. Prove real displayed pixels instead.
+    const result=first.url.startsWith('blob:')
+      ? await captureVisibleImage(first.url)
+      : (original || await captureVisibleImage(first.url));
     return {url:first.url,status:200,base64:result.base64,via:result.via};
   }
   if (action === 'image') {

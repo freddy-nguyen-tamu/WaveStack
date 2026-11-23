@@ -32,7 +32,7 @@ async function contentCase() {
     console,Math,Number,String,Date,Promise,Error};
   Object.defineProperty(ctx,'scrollY',{get:()=>window.scrollY});
   vm.createContext(ctx);vm.runInContext(content,ctx);
-  assert.equal(window.__comicBridgeContentLoadedVersion,9);
+  assert.equal(window.__comicBridgeContentLoadedVersion,10);
   const recovered=await window.__comicBridgeDirect({type:'RECOVER_IMAGE',payload:{key:'1',url:imageUrl,
     reader_selectors:['main'],image_attributes:['src']}});
   assert.equal(recovered.loaded,true);

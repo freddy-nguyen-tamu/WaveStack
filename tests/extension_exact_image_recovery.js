@@ -25,7 +25,7 @@ async function scenario({decoded,forcePosition,refreshSource}) {
     requestAnimationFrame:cb=>setTimeout(cb,0),setTimeout,clearTimeout,Math,Number,String,Date,
     Promise,Error,console,innerHeight:800,innerWidth:900};
   vm.createContext(box);vm.runInContext(src,box);
-  assert.equal(window.__comicBridgeContentLoadedVersion,9);
+  assert.equal(window.__comicBridgeContentLoadedVersion,10);
   const ans=await window.__comicBridgeDirect({type:'RECOVER_IMAGE',payload:{key:'1',url:image,
     reader_selectors:['.reader'],image_attributes:['src'],force_position:forcePosition,
     refresh_source:refreshSource}});
