@@ -90,4 +90,81 @@ class RecycleTests(unittest.TestCase):
         self.assertEqual(manifest['total_images'],1)
         self.assertTrue(any(x[0][0]=='BROWSER_MANAGED_TAB_RECOVERED' for x in events))
 
+
+class RecycledTabPartialDomRegression(unittest.TestCase):
+    def test_recycled_tab_rehydrates_short_dom_without_redownloading_verified_images(self):
+        """15 verified panels + recycled tab exposing 1 -> 15 must not fail."""
+        chapter_url = 'https://example.test/chapter/83/'
+        image_urls = {str(i): f'https://cdn.example.test/{i:04d}.jpg' for i in range(1, 16)}
+        downloads = []
+        snapshots = []
+
+        def snapshot(keys):
+            return ({'imgs': [{'key': key, 'url': image_urls[key], 'loaded': True,
+                               'width': 1200, 'height': 1500, 'pageY': 0} for key in keys],
+                     'total': len(keys), 'scrollY': 0, 'viewportHeight': 900,
+                     'physicalAtBottom': False, 'missingSlots': 0},
+                    list(keys),
+                    {key: {'url': image_urls[key], 'width': 1200, 'height': 1500}
+                     for key in keys})
+
+        class Page:
+            url = chapter_url
+            def goto(self, *args, **kwargs): return None
+            def content(self): return '<title>Chapter 83</title>'
+            def close(self): return None
+
+        class Checkpoint:
+            def __init__(self, *args): self.recorded = {}
+            def catalog_matches(self, *args): return False
+            def reuse(self, *args): return None
+            def record_image(self, key, position, url, path, meta):
+                self.recorded[key] = (path, meta)
+                return path, meta
+
+        def fake_download(ctx, url, dest, chapter, **kwargs):
+            downloads.append(url)
+            position = int(Path(dest).name)
+            return (Path(str(dest) + '.jpg'),
+                    {'filename': f'{position:04d}.jpg', 'order': position,
+                     'source_url': url, 'bytes': 12})
+
+        def fake_scan(page, *args, **kwargs):
+            progress = kwargs['on_progress']
+            full = [str(i) for i in range(1, 16)]
+            if not snapshots:
+                info, keys, seen = snapshot(full)
+                saved = progress(info, keys, seen, True)
+                self.assertEqual(saved, set(full))
+                snapshots.append('before-recycle')
+                raise BrowserManagedTabRecycled('replacement owned tab')
+            info, keys, seen = snapshot(['1'])
+            self.assertEqual(progress(info, keys, seen, False), {'1'})
+            snapshots.append('temporary-short-dom')
+            info, keys, seen = snapshot(full)
+            self.assertEqual(progress(info, keys, seen, True), set(full))
+            snapshots.append('fully-rehydrated')
+            return [(key, seen[key]) for key in keys]
+
+        with tempfile.TemporaryDirectory() as temp:
+            context = SimpleNamespace(new_page=lambda: Page(),
+                                      request=SimpleNamespace(reuses_loaded_page_images=True))
+            chapter = SimpleNamespace(chapter_id='83', url=chapter_url, label='Chapter 83')
+            with patch.object(engine, 'ChapterImageCheckpoint', Checkpoint), \
+                 patch.object(engine, 'scan_browser_images', fake_scan), \
+                 patch.object(engine, 'image_download', fake_download), \
+                 patch.object(engine, 'chapter_title_from_source', lambda raw, label: label), \
+                 patch.object(engine, 'event', lambda *args, **kwargs: None), \
+                 patch.object(engine, 'ADAPTER', SimpleNamespace()):
+                files, manifest = engine.acquire_chapter(context, chapter, Path(temp),
+                    config={'max_pages_per_chapter': 100, 'download_retries': 1,
+                            'page_scan_steps': 20, 'page_scan_stability_steps': 2},
+                    guard=None, visible=True)
+        self.assertEqual(snapshots, ['before-recycle', 'temporary-short-dom', 'fully-rehydrated'])
+        self.assertEqual(len(downloads), 15)
+        self.assertEqual(len(set(downloads)), 15)
+        self.assertEqual(len(files), 15)
+        self.assertEqual(manifest['total_images'], 15)
+        self.assertEqual([p['order'] for p in manifest['images']], list(range(1, 16)))
+
 if __name__=='__main__': unittest.main()

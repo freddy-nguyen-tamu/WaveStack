@@ -1691,7 +1691,13 @@ def acquire_chapter(context, chapter: Chapter, storage: Path, config=CONFIG, gua
         saved = {}
         attempts = {}
         server_failures = {}
+        # RECYCLED_TAB_SAVED_ORDINALS_V1: a replacement browser tab can expose
+        # only a prefix of the chapter before its DOM repopulates. Preserve ALL
+        # already-verified saved images, but report only slots in that one
+        # transient snapshot to the scanner. Normal strict validation stays on.
+        recycled_tab_rehydrating = False
         def save_as_scroll_reveals(info, slot_order, seen, at_bottom):
+            nonlocal recycled_tab_rehydrating
             if len(slot_order) > config['max_pages_per_chapter']:
                 raise RuntimeError('Chapter page count exceeds configured safety limit')
             by_key = {str(im.get('key','')): im for im in info['imgs']}
@@ -1754,6 +1760,18 @@ def acquire_chapter(context, chapter: Chapter, storage: Path, config=CONFIG, gua
                 saved[key] = checkpoint.record_image(key, i, resolved['url'], path, meta)
                 event('IMAGE_VALIDATED',chapter=chapter.chapter_id,image=i,
                       total=len(slot_order),bytes=meta['bytes'],during_scroll=True)
+            # Only after an explicit managed-tab replacement may earlier
+            # verified ordinals temporarily be absent from the NEW document.
+            # Do not discard them from `saved`: all are checked again against
+            # the complete final source catalog before chapter publication.
+            if recycled_tab_rehydrating:
+                previous_ordinal_keys = set(saved)
+                current_ordinal_keys = set(slot_order)
+                if not previous_ordinal_keys.issubset(current_ordinal_keys):
+                    return previous_ordinal_keys.intersection(current_ordinal_keys)
+                # Full original saved set is visible again: re-enable the
+                # scanner's unmodified strict out-of-catalog rejection.
+                recycled_tab_rehydrating = False
             return set(saved)
         def confirm_server_failure(key, classification):
             if key in saved:
@@ -1788,6 +1806,7 @@ def acquire_chapter(context, chapter: Chapter, storage: Path, config=CONFIG, gua
                 event('BROWSER_MANAGED_TAB_RECOVERED', chapter=chapter.chapter_id,
                       attempt=managed_reset+1, verified_images=len(saved),
                       recovery='new-extension-owned-tab; restart scanner from checkpoint')
+                recycled_tab_rehydrating = True
                 attempts.clear()
                 # tabs.create already navigated this NEW managed document.
                 # Do not navigate/reload a second time: that can retrigger the
