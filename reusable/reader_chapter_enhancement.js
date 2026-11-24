@@ -177,24 +177,28 @@
   // Only the ACTIVE chapter is checked, and only its unavailable slots are
   // fetched. Do not cause an adjacent chapter request or scroll jump.
   const repairedInFlight=new Set();
-  let repairCheckBusy=false;
+  let repairCheckBusy=false,repairRerun=false;
   async function refreshCurrentChapterRepairs(){
-    if(document.hidden || repairCheckBusy || !chapter || !known.length ||
-       (typeof chapterSequentialQueueComplete!=='undefined' && !chapterSequentialQueueComplete))return;
-    const figures=[...pages.children].filter(el=>el.tagName==='FIGURE');
-    if(figures.length!==known.length)return;
-    const broken=known.some((entry,i)=>entry.placeholder || figures[i].classList.contains('or-missing-panel'));
+    if(document.hidden || !chapter || !known.length)return;
+    if(repairCheckBusy){repairRerun=true;return;}
+    // During the ordered queue some figures are not mounted yet. Only update
+    // an already visible missing panel; the queue resolves future slots itself.
+    const figures=known.map(entry=>entry.placeholder?entry.el:entry.el?.parentElement);
+    const broken=known.some((entry,i)=>entry.placeholder || figures[i]?.classList?.contains('or-missing-panel'));
     if(!broken)return;
     repairCheckBusy=true;
     try{
-      const response=await fetch('./manifest.json?repair-check='+Date.now(),{cache:'no-store'});
+      const refreshUrl=new URL('./manifest.json',location.href);
+      refreshUrl.searchParams.set('refresh-repairs-for',String(chapter.id));
+      refreshUrl.searchParams.set('repair-check',String(Date.now()));
+      const response=await fetch(refreshUrl.href,{cache:'no-store'});
       if(!response.ok)return;
       const fresh=await response.json();
       const row=fresh?.chapters?.find(c=>String(c.id)===String(chapter.id));
       if(!row || row.images?.length!==known.length)return;
       for(let i=0;i<known.length;i++){
         const entry=known[i], target=figures[i], item=row.images[i];
-        if(!item || item.placeholder===true || typeof item.url!=='string' ||
+        if(!target?.isConnected || !item || item.placeholder===true || typeof item.url!=='string' ||
            !(entry.placeholder || target.classList.contains('or-missing-panel')) ||
            repairedInFlight.has(i))continue;
         let link;
@@ -227,8 +231,35 @@
         im.src=link.href;
       }
     }catch(error){console.warn('OPEN_READER_REPAIR_CHECK_FAILED',String(error))}
-    finally {repairCheckBusy=false}
+    finally {
+      repairCheckBusy=false;
+      if(repairRerun){repairRerun=false;queueMicrotask(refreshCurrentChapterRepairs)}
+    }
   }
+  // OPEN_READER_INSTANT_UPLOAD_SIGNAL_V1: same-origin only, with validated
+  // identity; signal is advisory, never an image URL or authorization token.
+  let lastSignalKey='';
+  const receiveRepairSignal=data=>{
+    if(!data || typeof data!=='object' || !/^[a-z0-9-]+$/.test(data.slug||'') ||
+       !/^[A-Za-z0-9_.-]+$/.test(data.chapter||'') ||
+       !Number.isSafeInteger(data.panel) || data.panel<1 || data.panel>5000)return;
+    const activeSlug=location.pathname.match(/^\/comics\/([a-z0-9-]+)\//)?.[1];
+    if(activeSlug!==data.slug || String(chapter?.id)!==data.chapter)return;
+    const signalKey=`${data.slug}/${data.chapter}/${data.panel}/${data.at}`;
+    if(signalKey===lastSignalKey)return; // BroadcastChannel + storage fallback
+    lastSignalKey=signalKey;
+    window.OpenReaderRefreshQueuedRepairs?.();
+    refreshCurrentChapterRepairs();
+  };
+  if(typeof BroadcastChannel==='function'){
+    const channel=new BroadcastChannel('open-reader-panel-repairs-v1');
+    channel.onmessage=event=>receiveRepairSignal(event.data);
+    window.addEventListener('pagehide',()=>channel.close(),{once:true});
+  }
+  if(typeof window!=='undefined')window.addEventListener('storage',event=>{
+    if(event.key!=='open-reader:panel-repaired' || !event.newValue)return;
+    try{receiveRepairSignal(JSON.parse(event.newValue))}catch{}
+  });
   if(typeof setInterval==='function')setInterval(refreshCurrentChapterRepairs,20000);
   document.addEventListener('visibilitychange',()=>{
     if(!document.hidden)refreshCurrentChapterRepairs();

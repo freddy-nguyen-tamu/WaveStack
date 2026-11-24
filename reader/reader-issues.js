@@ -81,6 +81,17 @@
       const data=await r.json().catch(()=>({}));
       if(!r.ok)throw new Error(data.error || `Upload failed: HTTP ${r.status}`);
       pending=null;login.hidden=true;password.value='';setStatus(data.readback_verified?'Replacement saved and independently verified; open chapter updates automatically.':'Replacement saved. Open chapter will check for the new image.');
+      // OPEN_READER_INSTANT_UPLOAD_SIGNAL_V1: tell already-open same-origin
+      // chapter tabs to re-check the published manifest, never trust user data.
+      const signal={slug:c.work_slug,chapter:String(c.episode_id),panel:Number(c.panel),at:Date.now()};
+      try{
+        if(typeof BroadcastChannel==='function'){
+          const channel=new BroadcastChannel('open-reader-panel-repairs-v1');
+          channel.postMessage(signal);channel.close();
+        }
+      }catch(error){console.debug('Reader upload channel unavailable',String(error))}
+      try{localStorage.setItem('open-reader:panel-repaired',JSON.stringify(signal));}
+      catch(error){console.debug('Reader upload storage signal unavailable',String(error))}
       await refresh(true);
     } catch(err){setStatus(String(err?.message||err));}
   }

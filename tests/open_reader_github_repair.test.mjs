@@ -89,7 +89,7 @@ try{
     classList:{contains:name=>classes.has(name),remove:name=>classes.delete(name)},
     removeAttribute(){},replaceChildren(img){this.child=img;}}));
   const pages={children:figures};
-  const known=[{status:'loaded',placeholder:false},{status:'loaded',placeholder:true},{status:'loaded',placeholder:false}];
+  const known=[{status:'loaded',placeholder:false,el:{parentElement:figures[0]}},{status:'loaded',placeholder:true,el:figures[1]},{status:'loaded',placeholder:false,el:{parentElement:figures[2]}}];
   const windowLocation='https://open-reader.example.test/comics/test-comic/?chapter=82';
   const freshManifest={chapters:[{id:'82',images:[chapter.images[0],
     {url:'/api/github-image/test-comic/82/2?v='+('f'.repeat(64)),width:21,height:38},chapter.images[2]]}]};

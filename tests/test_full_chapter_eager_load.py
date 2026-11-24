@@ -36,9 +36,10 @@ class SequentialAndUploadTests(unittest.TestCase):
     def test_stage_contains_chapter_only_ordered_queue_not_parallel_gate(self):
         code=self.app.read_text(encoding='utf8')
         self.assertIn('const chapterSequentialLoading=true;',code)
-        self.assertIn('for(const entry of known){',code)
+        self.assertIn('const WINDOW_SIZE=3;',code)
+        self.assertIn('for(let ordinal=0;ordinal<known.length;ordinal++){',code)
         self.assertIn('await new Promise(resolve=>setTimeout(resolve,100));',code)
-        self.assertIn('pages.insertBefore(figure,loading);',code)
+        self.assertIn('pages.insertBefore(prepared.figure,loading);',code)
         self.assertIn("if(chapterSequentialLoading||!known.length)return;",code)
         self.assertNotIn('realImages.forEach(needPreload)',code)
         self.assertNotIn('chapterLoadGateActive',code)
@@ -96,18 +97,18 @@ async function tick(){const idx=scheduled.findIndex(x=>x.ms===100);if(idx<0)thro
 (async()=>{
  await flush();
  const expected=selected==='partial' ? [img('a').url,img('c').url]:[img('a').url,img('b').url,img('c').url];
- assert.deepEqual(requested,[expected[0]],'only first image requested before completion');
+ assert.deepEqual(requested,expected,'max three current-chapter images request immediately');
  const pages=elem('#pages');assert.equal(pages.children.length,1);assert.equal(pages.children[0].className,'or-chapter-load-screen');
  imgs[0].naturalWidth=10;imgs[0].onload();await tick();
  assert.equal(pages.children[0].tag,'figure','first panel visible immediately');
  assert.equal(pages.children[0].children[0],imgs[0]);
- assert.deepEqual(requested,expected.slice(0,2),'next image starts regardless of scrolling');
+ assert.deepEqual(requested,expected,'early window remains bounded regardless of scrolling');
  if(selected==='partial')assert.equal(pages.children[1].className,'or-missing-panel','missing marker in exact second slot');
  assert.equal(pages.children.at(-1).className,'or-chapter-load-screen','spinner remains until done');
  imgs[1].naturalWidth=10;imgs[1].onload();await tick();
- assert.equal(requested.length,selected==='complete'?3:2,'only next selected-chapter image requested');
+ assert.equal(requested.length,selected==='complete'?3:2,'only selected-chapter images requested');
  if(selected==='complete'){
-   assert.deepEqual(requested,expected,'third started after second loaded');
+   assert.deepEqual(requested,expected,'three ordered chapter requests');
    imgs[2].naturalWidth=10;imgs[2].onload();await tick();
  }
  assert.equal(pages.children.length,3,'three ordered panels, no spinner after finish');
@@ -151,8 +152,10 @@ const fetch=async(url,options={})=>{
    return {ok:true,status:200,json:async()=>({ok:true})};}
  return {ok:false,status:404,json:async()=>({error:'unexpected'})};
 };
+const posted=[],stored=[];
+class Channel { constructor(name){assert.equal(name,'open-reader-panel-repairs-v1')} postMessage(value){posted.push(value)} close(){} }
 const ctx={document,window:{addEventListener(){}},location:{origin:'https://reader.test',pathname:'/'},
- URL,fetch,console,setTimeout(){},};
+ URL,fetch,console,setTimeout(){},BroadcastChannel:Channel,localStorage:{setItem(key,value){stored.push({key,value})}}};
 vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),ctx,{filename:'reader-issues.js'});
 (async()=>{for(let i=0;i<60;i++)await Promise.resolve();
  const chooser=choosers.find(x=>x.attrs['aria-label']?.includes('panel 56'));
@@ -166,6 +169,9 @@ vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),ctx,{filename:'reader
  }
  const want=route.startsWith('github')?'/api/admin/github-image/annoying-alice/82/56':'/api/panel-replacements/4f6d7ab981769760c5dc';
  assert.deepEqual(uploadResult,route==='github-login'?[want,want]:[want]);
+ assert.equal(posted.length,1,'emit exactly after successful upload');
+ assert.equal(posted[0].slug,'annoying-alice');assert.equal(posted[0].chapter,'82');
+ assert.equal(posted[0].panel,56);assert.equal(stored[0]?.key,'open-reader:panel-repaired');
  console.log('PASS issue upload route '+route);
 })().catch(e=>{console.error(e);process.exitCode=1});
 '''

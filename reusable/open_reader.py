@@ -867,6 +867,11 @@ def stage_worker_assets(root, registry, stage, *, partial_records=None):
           '  if(chapterSequentialLoading||!known.length)return;\n  const y=scrollY, margin=',1)
         if 'if(chapterSequentialLoading||!known.length)return;' not in native_app:
             raise RuntimeError('Could not disable scroll-driven preloads in staged reader')
+        direct_loader='      known.filter(x=>x.status===\'waiting\').slice(0,4).forEach(needPreload);'
+        if native_app.count(direct_loader)!=1:
+            raise RuntimeError('Reader auto-scroll preload path changed; bounded queue cannot be guaranteed')
+        native_app=native_app.replace(direct_loader,
+           '      if(!chapterSequentialLoading)known.filter(x=>x.status===\'waiting\').slice(0,4).forEach(needPreload);',1)
         # Never auto-advance to the next chapter just because the final image
         # fired onload while it is still decoding or has not been inserted.
         old_all_loaded = "function allLoaded(){return known.length>0 && known.every(x=>x.status==='loaded');}"
@@ -885,9 +890,9 @@ def stage_worker_assets(root, registry, stage, *, partial_records=None):
                       "  // Load first few pages immediately. Subsequent images are loaded ahead by scrolling.\n"
                       "  known.slice(0,Math.min(5,known.length)).forEach(needPreload);\n"
                       "  triggerNearby();")
-        new_loader = r"""  // Sequential, chapter-only image queue. Initial state contains only the
-  // loading spinner; append each decoded image in its original manifest order.
-  // Subsequent downloads start even if the user never scrolls.
+        new_loader = r"""  // OPEN_READER_BOUNDED_WINDOW_V1: up to three current-chapter panels
+  // download/decode concurrently, but ALL panels reveal in manifest order.
+  // No scrollbar trigger, neighbor chapter, or speculative entire-chapter fetch.
   const pages=$('#pages');
   const loading=document.createElement('section');
   loading.className='or-chapter-load-screen';
@@ -900,12 +905,9 @@ def stage_worker_assets(root, registry, stage, *, partial_records=None):
   message.className='or-chapter-loading-message';
   loading.append(spinner,message);
   pages.replaceChildren(loading);
-  // OPEN_READER_ORDERED_REPAIR_MANIFEST_V2: resolve previously uploaded
-  // missing panels IN PARALLEL with the early image queue. This costs just one
-  // extra manifest request for a partial chapter and does not delay panel 1.
-  // Completed chapters make zero extra requests. The Worker reads the GitHub
-  // override index afresh only for a selected chapter with source-missing slots.
-  const repairProbe=known.some(x=>x.placeholder) ? (()=>{
+  // The extra lookup is only for a partial chapter, and runs alongside panel 1.
+  // A same-origin upload notification can invalidate it while the queue runs.
+  const requestRepairManifest=()=>{
     const url=new URL('./manifest.json',location.href);
     url.searchParams.set('refresh-repairs-for',String(chapter.id));
     return fetch(url.href,{cache:'no-store'}).then(response=>
@@ -916,18 +918,28 @@ def stage_worker_assets(root, registry, stage, *, partial_records=None):
         console.warn('OPEN_READER_EARLY_REPAIR_LOOKUP_FAILED',String(error));
         return null;
       });
-  })():null;
-  let resolvedRepairRows=null;
-  let settled=0;
-  for(const entry of known){
+  };
+  let repairProbe=known.some(x=>x.placeholder)?requestRepairManifest():null;
+  let resolvedRepairRows=null,repairGeneration=0;
+  window.OpenReaderRefreshQueuedRepairs=()=>{
+    if(!repairProbe)return;
+    repairGeneration++;
+    resolvedRepairRows=null;
+    repairProbe=requestRepairManifest();
+  };
+  async function prepareChapterPanel(order){
+    const entry=known[order];
     const figure=entry.placeholder?entry.el:entry.el.parentElement;
     if(!figure)throw Error('Image lost its original panel container');
-    message.textContent=`Loading panel ${entry.order+1} / ${known.length}`;
     let activeEntry=entry;
     if(entry.placeholder && repairProbe){
-      // Do not hold the first 55 panels for an update to panel 56.
-      if(resolvedRepairRows===null)resolvedRepairRows=(await repairProbe)||{images:[]};
-      const imageData=resolvedRepairRows.images?.[entry.order];
+      // A slow earlier lookup must not hide a newer upload notification.
+      let revision=repairGeneration;
+      let row=resolvedRepairRows;
+      if(row===null)row=(await repairProbe)||{images:[]};
+      if(revision!==repairGeneration)row=(await repairProbe)||{images:[]};
+      resolvedRepairRows=row;
+      const imageData=row.images?.[order];
       if(imageData && imageData.placeholder!==true && typeof imageData.url==='string' &&
          /^[a-f0-9]{64}$/.test(String(imageData.sha256||''))){
         let url=null;
@@ -941,42 +953,60 @@ def stage_worker_assets(root, registry, stage, *, partial_records=None):
           figure.className='';figure.style.aspectRatio=`${width}/${height}`;
           figure.removeAttribute('role');figure.removeAttribute('aria-label');figure.removeAttribute('title');
           figure.replaceChildren(img);
-          activeEntry={status:'waiting',el:img,url:url.href,order:entry.order};
-          known[entry.order]=activeEntry;
-          chapter.images[entry.order]=imageData;
+          activeEntry={status:'waiting',el:img,url:url.href,order};
+          known[order]=activeEntry;
+          chapter.images[order]=imageData;
         }
       }
     }
     if(!activeEntry.placeholder){
       needPreload(activeEntry);
-      // Retry callbacks belong to the original reader. A per-panel watchdog
-      // is used only if the browser never sends a load/error event at all.
+      // Retain existing retries. The watchdog limits a permanently hung panel;
+      // it does not let later panels leapfrog it on screen.
       const started=performance.now();
       while(activeEntry.status!=='loaded'){
         if(performance.now()-started>180000){
           activeEntry.el.onload=null;activeEntry.el.onerror=null;
           activeEntry.el.removeAttribute('src');
           activeEntry.status='loaded';
-          missingGlyph(figure,entry.order+1,'Image request timed out');
+          missingGlyph(figure,order+1,'Image request timed out');
           break;
         }
         await new Promise(resolve=>setTimeout(resolve,100));
       }
-      // An onload event means transfer completed; wait for the browser to
-      // decode the pixels before making the page visible when supported.
       if(activeEntry.el.parentElement===figure && typeof activeEntry.el.decode==='function' &&
          activeEntry.el.getAttribute('src')){
         await Promise.race([activeEntry.el.decode().catch(()=>{}),
           new Promise(resolve=>setTimeout(resolve,20000))]);
       }
-      // A replacement may have a different aspect ratio from other pages.
       if(activeEntry!==entry && activeEntry.el.naturalWidth>0 && activeEntry.el.naturalHeight>0)
         figure.style.aspectRatio=`${activeEntry.el.naturalWidth}/${activeEntry.el.naturalHeight}`;
     }
-    pages.insertBefore(figure,loading);
-    settled++;
+    return {figure,revision:repairGeneration};
+  }
+  const WINDOW_SIZE=3;
+  const outstanding=new Map();
+  let nextToStart=0;
+  const fillWindow=()=>{
+    while(nextToStart<known.length && outstanding.size<WINDOW_SIZE){
+      const ordinal=nextToStart++;
+      outstanding.set(ordinal,prepareChapterPanel(ordinal));
+    }
+  };
+  fillWindow();
+  for(let ordinal=0;ordinal<known.length;ordinal++){
+    message.textContent=`Loading panel ${ordinal+1} / ${known.length}`;
+    let prepared=await outstanding.get(ordinal);
+    outstanding.delete(ordinal);
+    // An upload can arrive after an off-screen placeholder was prepared but
+    // before its place is reached. Recheck that exact slot, never reorder it.
+    if(known[ordinal]?.placeholder && prepared.revision!==repairGeneration)
+      prepared=await prepareChapterPanel(ordinal);
+    pages.insertBefore(prepared.figure,loading);
+    fillWindow();
   }
   loading.remove();
+  window.OpenReaderRefreshQueuedRepairs=null;
   chapterSequentialQueueComplete=true;"""
         if native_app.count(old_loader) != 1:
             raise RuntimeError('Native initial loader changed; refusing sequential loading patch')

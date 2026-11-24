@@ -43,9 +43,19 @@ class OrderedUploadedReplacementTests(unittest.TestCase):
         old=" if(selected==='partial')assert.equal(pages.children[1].className,'or-missing-panel','missing marker in exact second slot');\n"
         self.assertIn(old,fixture)
         fixture=fixture.replace(old,'',1)
-        initial_assert=" assert.deepEqual(requested,[expected[0]],'only first image requested before completion');"
+        initial_assert=" assert.deepEqual(requested,expected,'max three current-chapter images request immediately');"
         self.assertIn(initial_assert,fixture)
-        fixture=fixture.replace(initial_assert,initial_assert+"\n if(selected==='partial'){ assert.equal(typeof globalThis.releaseRepair,'function'); globalThis.releaseRepair(); await new Promise(r=>setImmediate(r)); }",1)
+        fixture=fixture.replace(initial_assert," assert.deepEqual(requested,[expected[0],expected[2]],'only two known sources start before repaired panel becomes available');"+"\n if(selected==='partial'){ assert.equal(typeof globalThis.releaseRepair,'function'); globalThis.releaseRepair(); await new Promise(r=>setImmediate(r)); }",1)
+        fixture=fixture.replace(
+            " assert.deepEqual(requested,expected,'early window remains bounded regardless of scrolling');",
+            " assert.deepEqual(requested,[expected[0],expected[2],expected[1]],'three image requests, with replacement ordered for display');")
+        fixture=fixture.replace(
+            " assert.equal(requested.length,selected==='complete'?3:2,'only selected-chapter images requested');",
+            " assert.equal(requested.length,3,'only three selected-chapter images requested');")
+        fixture=fixture.replace("   assert.deepEqual(requested,expected,'three ordered chapter requests');",
+            "   assert.deepEqual(requested,[expected[0],expected[2],expected[1]],'three requests stay within chapter');")
+        fixture=fixture.replace(" assert.deepEqual(requested,expected);",
+            " assert.deepEqual(requested,[expected[0],expected[2],expected[1]]);",1)
         # The repaired image is constructed when its ordinal is reached, after
         # the existing source image nodes have already been created.
         original_second=' imgs[1].naturalWidth=10;imgs[1].onload();await tick();'
@@ -53,8 +63,8 @@ class OrderedUploadedReplacementTests(unittest.TestCase):
         fixture=fixture.replace(original_second," (selected==='partial'?imgs[2]:imgs[1]).naturalWidth=10;(selected==='partial'?imgs[2]:imgs[1]).onload();await tick();",1)
         original_third='   imgs[2].naturalWidth=10;imgs[2].onload();await tick();'
         self.assertIn(original_third,fixture)
-        fixture=fixture.replace(original_third,"   (selected==='partial'?imgs[1]:imgs[2]).naturalWidth=10;(selected==='partial'?imgs[1]:imgs[2]).onload();await tick();",1)
-        self.assertEqual(fixture.count("selected==='complete'"),2)
+        fixture=fixture.replace(original_third,"   (selected==='partial'?imgs[1]:imgs[2]).naturalWidth=10;(selected==='partial'?imgs[1]:imgs[2]).onload();for(let j=0;j<8 && pages.children.at(-1)?.tag!=='figure';j++)await tick();",1)
+        self.assertEqual(fixture.count("selected==='complete'"),1)
         fixture=fixture.replace("selected==='complete'","selected==='partial'")
         # The third panel starts only after the repaired second image finishes.
         with tempfile.TemporaryDirectory() as td:

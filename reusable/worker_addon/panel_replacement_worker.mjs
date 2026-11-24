@@ -324,8 +324,28 @@ async function serveGithubImage(req,env,ctx,slug,chapter,index){
   if(!githubConfigured(env))return error('GitHub App is not configured',503);
   const loc=await locate(req,env,slug,chapter,index);
   if(!loc)return error('Unindexed image',404);
+  // OPEN_READER_VERIFIED_CACHE_FASTPATH_V1: safe for the exact original
+  // manifest SHA only. Replacements still verify their current override index,
+  // so reuploads cannot expose an obsolete cached panel as the latest version.
+  const version=new URL(req.url).searchParams.get('v');
+  if(version && /^[a-f0-9]{64}$/.test(version) && version===loc.image?.sha256){
+    const key=new Request(new URL(`/api/github-image/${slug}/${chapter}/${index}?v=${version}`,req.url));
+    const hit=await caches.default.match(key);
+    if(hit)return hit;
+  }
   let selected;
-  try{selected=await readCurrent(req,env,slug,chapter,index,loc)}
+  try{
+    selected=await readCurrent(req,env,slug,chapter,index,loc);
+    // A freshly repaired source-missing panel may be served by an isolate whose
+    // 15-second memo predates the upload. Only a known missing position AND an
+    // exact SHA-versioned reader request may force one fresh index read.
+    // This neither refreshes complete chapters nor permits arbitrary paths.
+    if(!selected.src && loc.image?.placeholder===true &&
+       /^[a-f0-9]{64}$/.test(version||'')){
+      await getOverrides(env,true);
+      selected=await readCurrent(req,env,slug,chapter,index,loc);
+    }
+  }
   catch(e){return error('GitHub override index unavailable; original archive preserved: '+e.message,503)}
   if(!selected.src)return error('Panel not yet archived or repaired',404);
   const key=new Request(new URL(`/api/github-image/${slug}/${chapter}/${index}?v=${selected.sha}`,req.url));
@@ -338,9 +358,16 @@ async function serveGithubImage(req,env,ctx,slug,chapter,index){
   const mime=guessMime(result.body);
   if(!mime || result.body.length>25*1024*1024 || result.body.length<32)return error('GitHub returned invalid image bytes',502);
   if(await shaHex(result.body)!==selected.sha)return error('GitHub image SHA-256 mismatch; refusing corrupt panel',502);
-  const response=new Response(result.body,{headers:{'Content-Type':mime,'Cache-Control':'public,max-age=86400,immutable',
+  const versioned=new URL(req.url).searchParams.get('v')===selected.sha;
+  const response=new Response(result.body,{headers:{'Content-Type':mime,
+    'Cache-Control':versioned?'public,max-age=31536000,immutable':'public,max-age=60,must-revalidate',
     'ETag':'"'+selected.sha+'"','X-Content-Type-Options':'nosniff'}});
-  if(ctx?.waitUntil)ctx.waitUntil(caches.default.put(key,response.clone()));
+  // Keep the Cloudflare cache immutable at the content-addressed key, even
+  // when the client used an older unversioned URL. Do not cache error bodies.
+  const immutable=new Response(result.body,{headers:{'Content-Type':mime,
+    'Cache-Control':'public,max-age=31536000,immutable',
+    'ETag':'"'+selected.sha+'"','X-Content-Type-Options':'nosniff'}});
+  if(ctx?.waitUntil)ctx.waitUntil(caches.default.put(key,immutable));
   return response;
 }
 async function addOverride(env,slug,chapter,index,bytes,mime){
