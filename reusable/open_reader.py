@@ -21,6 +21,7 @@ from urllib.parse import quote, urlsplit
 import requests
 
 from . import github_streaming
+from . import open_reader_verify_auth
 
 WORKER_NAME = 'open-reader'
 REGISTRY_DESCRIPTION = 'Universal Comic Archiver shared open-reader registry (metadata only)'
@@ -246,7 +247,7 @@ def _public_json(url, *, timeout=25):
     if (p.scheme != 'https' or not p.hostname or
             not (p.hostname.endswith('.pages.dev') or p.hostname.endswith('.workers.dev'))):
         raise ValueError('Only trusted Cloudflare project URLs can be queried')
-    resp = requests.get(url, timeout=timeout, headers={'Cache-Control': 'no-cache'})
+    resp = open_reader_verify_auth.get(url, timeout=timeout, headers={'Cache-Control': 'no-cache'})
     if resp.status_code != 200:
         raise RuntimeError(f'Cloudflare manifest HTTP {resp.status_code} for {url}')
     return resp.json()
@@ -1076,11 +1077,10 @@ def _worker_config(stage, config_dir, root=None):
            'main': str(worker.resolve()),
            'assets': {'directory': str(Path(stage).resolve()),
                       'not_found_handling': '404-page', 'binding': 'ASSETS',
-                      # Assets, including chapter images and scripts, stay on the
-                      # static fast path. Only authenticated API and dynamic
-                      # issue/manifest routes invoke the Worker first.
-                      'run_worker_first': ['/api/*', '/source-issues.json',
-                                           '/comics/*/manifest.json']}}
+                      # Site-wide login requires Worker-first routing for EVERY
+                      # static asset, HTML page, and image stream. The previous
+                      # static-first bypass would make protected pages public.
+                      'run_worker_first': True}}
     streaming = github_streaming.load_mode(root)
     if streaming:
         cfg['vars'] = {'GITHUB_OWNER':streaming['owner'],
@@ -1164,11 +1164,19 @@ def _verify_published(worker_url, staged, registry, *, verify_slugs=None):
     """
     stage = Path(staged)
     # Verify the dynamic Worker script, not just assets-only Cloudflare hosting.
-    check = requests.get(worker_url.rstrip('/') + '/api/reader-health',
+    check = open_reader_verify_auth.get(worker_url.rstrip('/') + '/api/reader-health',
                          headers={'Cache-Control':'no-cache'}, timeout=40)
-    if check.status_code != 200 or check.json().get('script') != 'open-reader-panel-replacement-v1':
-        raise RuntimeError('Open Reader Worker backend is absent or outdated; refusing success')
-    if (stage / 'upload-catalog.json').is_file() and not check.json().get('github_streaming_configured'):
+    if check.status_code != 200:
+        raise RuntimeError('Open Reader Worker health endpoint returned HTTP '
+                           + str(check.status_code) + ' after authenticated verification; '
+                           'refusing deployment success')
+    try:
+        health = check.json()
+    except ValueError as exc:
+        raise RuntimeError('Open Reader Worker health endpoint returned invalid JSON') from exc
+    if health.get('script') != 'open-reader-panel-replacement-v1':
+        raise RuntimeError('Open Reader Worker health endpoint returned an outdated script marker')
+    if (stage / 'upload-catalog.json').is_file() and not health.get('github_streaming_configured'):
         raise RuntimeError('GitHub App credentials missing on Worker; preserving previous Cloudflare image volumes')
     expected_feed = json.loads((stage / 'source-issues.json').read_text(encoding='utf-8'))
     source_ids = {c['id'] for c in expected_feed['cases']}
@@ -1196,7 +1204,7 @@ def _verify_published(worker_url, staged, registry, *, verify_slugs=None):
             parts=Path(relative).parts
             if len(parts)==3 and parts[0]=='comics' and parts[2]=='manifest.json':
                 if github_replacements is None:
-                    response=requests.get(worker_url.rstrip('/')+'/api/github-replacements.json',timeout=30)
+                    response=open_reader_verify_auth.get(worker_url.rstrip('/')+'/api/github-replacements.json',timeout=30)
                     if response.ok and response.json().get('schema')=='reader-github-replacements-v1':
                         github_replacements=response.json().get('panels') or {}
                     else:
@@ -1291,7 +1299,7 @@ def _verify_published(worker_url, staged, registry, *, verify_slugs=None):
         problem = 'no response'
         for attempt in range(5):
             try:
-                response = requests.get(url, headers={'Cache-Control': 'no-cache'}, timeout=40)
+                response = open_reader_verify_auth.get(url, headers={'Cache-Control': 'no-cache'}, timeout=40)
                 if response.status_code == 200:
                     if sha(response.content) == expected_hash:
                         break
@@ -1302,7 +1310,7 @@ def _verify_published(worker_url, staged, registry, *, verify_slugs=None):
                             break
                     elif relative.startswith('comics/') and relative.endswith('/manifest.json'):
                         if live_feed is None:
-                            feed_response = requests.get(worker_url.rstrip('/') + '/source-issues.json',
+                            feed_response = open_reader_verify_auth.get(worker_url.rstrip('/') + '/source-issues.json',
                                                          headers={'Cache-Control':'no-cache'}, timeout=40)
                             if feed_response.ok and validate_feed(feed_response.json()):
                                 live_feed = feed_response.json()
@@ -1336,7 +1344,7 @@ def _verify_published(worker_url, staged, registry, *, verify_slugs=None):
         for repo, images in sorted(found.items()):
             for im in (images[:1]+images[-1:] if len(images)>1 else images):
                 target=worker_url.rstrip('/')+im['url']
-                response=requests.get(target,timeout=60,headers={'Cache-Control':'no-cache'})
+                response=open_reader_verify_auth.get(target,timeout=60,headers={'Cache-Control':'no-cache'})
                 if response.status_code!=200 or sha(response.content)!=im['sha256']:
                     raise RuntimeError('Worker GitHub image verification failed: '+repo+': '+target+
                                        ' (HTTP '+str(response.status_code)+')')

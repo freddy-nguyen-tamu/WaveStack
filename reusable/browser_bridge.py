@@ -70,6 +70,12 @@ class LocalBridge:
         # Rotated for every run; the extension obtains it itself from /bootstrap.
         # Only a locally installed browser extension may request bootstrap.
         self.secret = secrets.token_urlsafe(32)
+        # Unprivileged per-run identifier: a changed source or extension manifest
+        # must take effect during THIS run, not only after restarting Python.
+        self.startup_nonce = secrets.token_hex(16)
+        self.require_startup_refresh = False
+        self.startup_reader_verified = False
+        self.startup_navigation_consumed = False
         self.pending = queue.Queue()
         self.responses = {}
         self.responses_lock = threading.Lock()
@@ -198,6 +204,7 @@ class LocalBridge:
                     self._send(200, {'token': bridge.secret, 'port': bridge.port,
                                      'site': bridge.allowed_site,
                                      'startup_url': bridge.initial_chapter_url,
+                                     'startup_nonce': bridge.startup_nonce,
                                      'protocol': BRIDGE_PROTOCOL})
                     return
                 if not self._auth():
@@ -236,6 +243,15 @@ class LocalBridge:
                                 'the image-transfer proof. Remove any previous Comic Bridge extension, load the '
                                 'unpacked browser_bridge/chrome folder from this project, then restart run.py. '
                                 'Do not refresh or close your comic webpage tab.'})
+                            return
+                        if (bridge.require_startup_refresh and
+                                obj.get('startup_refresh_revision') != 1):
+                            bridge.outdated_client.set()
+                            self._send(409, {'error':
+                                'OUTDATED COMIC BRIDGE STARTUP: extension runtime has not loaded the '
+                                'automatic first-run refresh. Reload the unpacked Comic Bridge once '
+                                'at chrome://extensions, then restart run.py. Future site/code '
+                                'changes will refresh automatically.'})
                             return
                         if bridge.require_managed_tab and (
                                 obj.get('tab_ownership') != 'extension-managed' or
@@ -421,7 +437,25 @@ class BridgePage:
 
     def goto(self, url, wait_until=None, timeout=50000):
         self.context.bridge.validate_chapter(url)
-        data = self.context.bridge.rpc('navigate', {'url': url}, timeout=max(90, timeout / 1000 + 50))
+        # The extension already opened, paired with, and transferred verified
+        # image bytes from the first unfinished chapter. Do not force a second
+        # navigation to the SAME document on first acquisition: that redundant
+        # reload can hang on a cold Chrome tab, despite a valid reader.
+        bridge = self.context.bridge
+        from urllib.parse import urlsplit
+        def same_document(a, b):
+            x, y = urlsplit(str(a or '')), urlsplit(str(b or ''))
+            return ((x.scheme, x.netloc, x.path.rstrip('/'), x.query) ==
+                    (y.scheme, y.netloc, y.path.rstrip('/'), y.query))
+        if not bridge.startup_navigation_consumed:
+            bridge.startup_navigation_consumed = True
+            if (bridge.startup_reader_verified and
+                    same_document(url, bridge.initial_chapter_url) and
+                    same_document(url, bridge.tab_url) and
+                    same_document(url, self.url)):
+                print('BROWSER_STARTUP_DOCUMENT_REUSED: verified initial reader; no redundant reload', flush=True)
+                return BrowserResponse(url, 200, {})
+        data = bridge.rpc('navigate', {'url': url}, timeout=max(90, timeout / 1000 + 50))
         self.url = data.get('url', url)
         self.context.bridge.validate_chapter(self.url)
         return BrowserResponse(self.url, int(data.get('status', 200)), {})
@@ -723,6 +757,7 @@ def source_extension_context(data_dir: Path, source_url: str, *,
                          image_attributes=adapter.IMAGE_ATTRIBUTES,
                          image_hosts=getattr(adapter, 'BRIDGE_IMAGE_HOSTS', ()), port=port,
                          initial_chapter_url=initial_chapter_url, require_managed_tab=True)
+    bridge.require_startup_refresh = True
     bridge.start()
     # The loopback listener MUST be ready before opening Chrome: a cold-started
     # service worker can immediately request /bootstrap. Chrome uses the user's
@@ -779,6 +814,7 @@ def source_extension_context(data_dir: Path, source_url: str, *,
         # ADDITIVE: also exercise the *exact action* used by chapter downloads.
         # A stale MV3 background worker can pass 'probe' yet fail every blob.
         verify_live_blob_transfer(bridge, result, reader_selectors)
+        bridge.startup_reader_verified = True
         # A successful byte proof confirms that future chapter snapshots
         # should contain image slots. Standalone/unproven pages are untouched.
         ctx.pages[0]._expect_reader_images = True

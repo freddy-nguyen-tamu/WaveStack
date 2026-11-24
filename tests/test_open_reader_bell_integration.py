@@ -85,7 +85,7 @@ class ReaderHomepageTests(unittest.TestCase):
         obj=json.loads(config.read_text(encoding='utf-8'))
         self.assertEqual(obj['name'],'open-reader')
         self.assertEqual(obj['assets']['binding'],'ASSETS')
-        self.assertIn('/source-issues.json',obj['assets']['run_worker_first'])
+        self.assertIs(obj['assets']['run_worker_first'],True, 'all routes must pass through site-wide authentication')
         self.assertNotIn('r2_buckets',obj)
         p=self.project/'.archiver_state/open_reader_uploads.json'
         p.write_text(json.dumps({'r2_bucket':'open-reader-panel-replacements'}), encoding='utf-8')

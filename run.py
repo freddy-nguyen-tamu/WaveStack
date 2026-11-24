@@ -275,6 +275,7 @@ _PREFLIGHT_PYTHON = (
     ('test_open_reader_bell_integration.py', 4),
     ('test_partial_chapter_streaming.py', 4),
     ('test_open_reader_journey.py', 3),
+    ('test_open_reader_site_auth.py', 3),
     ('test_skip_open_reader_sync.py', 7),
     ('test_open_reader_scoped_updates.py', 8),
 )
@@ -300,6 +301,7 @@ _PREFLIGHT_JAVASCRIPT = (
     'extension_managed_tab_recycle.js',
     'open_reader_worker.test.mjs',
     'open_reader_journey.test.mjs',
+    'open_reader_site_auth.test.mjs',
 )
 
 

@@ -13,7 +13,8 @@
     "storage",
     "webRequest",
     "http://127.0.0.1:18765/*",
-    "https://manhwaread.com/*"
+    "https://truyenqq.com.vn/*",
+    "https://s40.cc3t.net/*"
   ],
   "background": {
     "scripts": [
@@ -27,7 +28,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://manhwaread.com/manhwa/childhood-friends/*"
+        "https://truyenqq.com.vn/relife/chapter-*"
       ],
       "js": [
         "content.js"

@@ -7,14 +7,14 @@ const src=fs.readFileSync(path.resolve(__dirname,'../reusable/browser_bridge_ext
 const site='www.reader.example.test';
 const page=n=>`https://${site}/webtoon/sample/chapter-${n}/`;
 const grant=`https://${site}/*`;
-function setup(tabsInitial, startupUrl=page(62), managed={}) {
+function setup(tabsInitial, startupUrl=page(62), managed={}, startupNonce='') {
   let tabs=tabsInitial.map(x=>({...x}));
   let storageState={...managed};
-  let created=0, bootstrap=0, hello=0;
+  let created=0, bootstrap=0, hello=0, reloaded=0;
   const waiters={};
   const manifest={version:'1.5.14',permissions:['tabs','storage','alarms'],host_permissions:[grant,'http://127.0.0.1:18765/*'],content_scripts:[{matches:[grant]}]};
   const chrome={
-    runtime:{id:'local-test-extension-id',lastError:null,getManifest:()=>manifest,
+    runtime:{id:'local-test-extension-id',lastError:null,getManifest:()=>manifest,reload(){reloaded++;},
       onStartup:{addListener(){}},onInstalled:{addListener(){}},onMessage:{addListener(){}}},
     storage:{local:{get(_keys,cb){cb({...storageState});},set(_x,cb){Object.assign(storageState,_x);cb();}}},
     alarms:{create(){},onAlarm:{addListener(){}}},
@@ -29,7 +29,7 @@ function setup(tabsInitial, startupUrl=page(62), managed={}) {
   const fetch=async (target,options={})=>{
     if(target.endsWith('/bootstrap')){
       bootstrap++;
-      return {ok:true,json:async()=>({site,port:18765,protocol:'visual-transfer-2',token:'a_1234567890123456789012345678',startup_url:startupUrl})};
+      return {ok:true,json:async()=>({site,port:18765,protocol:'visual-transfer-2',token:'a_1234567890123456789012345678',startup_url:startupUrl,startup_nonce:startupNonce})};
     }
     if(target.endsWith('/hello')){hello++;return {ok:true,json:async()=>({ok:true})};}
     if(target.endsWith('/next'))return new Promise(()=>{});
@@ -41,7 +41,7 @@ function setup(tabsInitial, startupUrl=page(62), managed={}) {
     clearTimeout,Uint8Array,Blob,OffscreenCanvas:function(){}};
   vm.createContext(sandbox);
   vm.runInContext(src+'\nglobalThis.__test={autoConnect,pickComicTab,trustedStartupUrl,getState(){return state;}};',sandbox);
-  return {test:sandbox.__test, get:()=>({created,bootstrap,hello,tabs,storageState})};
+  return {test:sandbox.__test, get:()=>({created,bootstrap,hello,reloaded,tabs,storageState})};
 }
 async function main(){
   const exact=setup([{id:1,url:page(62),status:'complete',active:true,windowId:1}]);
@@ -92,6 +92,22 @@ async function main(){
   assert.equal(forbiddenWithOld.get().created,0);
   assert.equal(forbiddenWithOld.get().hello,0,'invalid startup URL must NOT fall back to old tab');
 
+  // A new Python process must force unpacked extension code + changed
+  // provider permissions to load once, BEFORE it creates or selects any tab.
+  const nonce='a'.repeat(32);
+  const cold=setup([],page(62),{},nonce);
+  await cold.test.autoConnect();
+  assert.equal(cold.get().reloaded,1,'refresh extension on first run');
+  assert.equal(cold.get().created,0,'never start a chapter using a stale manifest');
+  assert.equal(cold.get().hello,0,'never pair the stale background worker');
+  assert.equal(cold.get().storageState.comicBridgeRefreshedStartupNonce,nonce);
+  await cold.test.autoConnect();
+  assert.equal(cold.get().reloaded,1,'same run never reloads twice');
+  assert.equal(cold.get().created,1);
+  assert.equal(cold.get().hello,1);
+  const invalid=setup([],page(62),{},'not-a-valid-nonce');
+  await invalid.test.autoConnect();
+  assert.equal(invalid.get().created,0,'bad session nonce must not open a chapter');
   console.log('PASS extension-owned tab creation ignores older matching tabs + exact resume URL + silent pairing + cross-site rejection');
 }
 main().then(()=>process.exit(0)).catch(e=>{console.error(e);process.exit(1);});

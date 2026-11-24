@@ -70,7 +70,10 @@
     const imgs=[...document.querySelectorAll('img')].filter(im=>
       [im.currentSrc,im.src,im.getAttribute('data-src'),im.getAttribute('data-original'),
        im.getAttribute('data-lazy-src')].some(candidate=>candidate && key(candidate.trim())===requested));
-    return {found:imgs.length>0,loaded:imgs.some(im=>im.complete && im.naturalWidth>0 && im.naturalHeight>0),
+    // A decoded placeholder is not a decoded requested image. The data-src
+    // may match the request while currentSrc still points at a site spinner.
+    return {found:imgs.length>0,loaded:imgs.some(im=>im.complete && im.naturalWidth>0 && im.naturalHeight>0 &&
+      key(im.currentSrc || im.src)===requested),
       count:imgs.length,visible:imgs.some(im=>{const r=im.getBoundingClientRect();return r.width>0 && r.height>0;}),
       dimensions:imgs.map(im=>[im.naturalWidth||0,im.naturalHeight||0]).slice(0,3)};
   }
@@ -102,7 +105,11 @@
     // image before touching it, so a virtualized reader can't mix pages.
     if(desired && !urls.includes(desired))
       return {loaded:false,key,reason:'Image source changed during revisit'};
-    const isReady=()=>im.isConnected && im.complete && im.naturalWidth>0 && im.naturalHeight>0;
+    // Compare decoded bytes with the ACTUAL requested panel source. A decoded
+    // spinner or thumbnail does not mean the data-src image is ready. This
+    // remains generic: no website names, placeholder filenames, or CDN rules.
+    const isReady=()=>im.isConnected && im.complete && im.naturalWidth>0 &&
+      im.naturalHeight>0 && (!desired || absolute(im.currentSrc || im.src)===desired);
     if(isReady() && !p.force_position) return {loaded:true,key,width:im.naturalWidth,height:im.naturalHeight,alreadyReady:true};
     // Keep the viewport on the missing image. Restoring the previous offset
     // (often the bottom) after EVERY attempt caused an endless up/down
@@ -125,7 +132,11 @@
       await new Promise(resolve=>setTimeout(resolve,250));
     }
     return {loaded:isReady(),key,width:im.naturalWidth||0,height:im.naturalHeight||0,
-      paintReady,reason:isReady()?'loaded after targeted scroll':(!im.isConnected?'Reader replaced image node':'Image still has naturalWidth=0')};
+      paintReady,reason:isReady()?'requested image decoded after targeted scroll':
+      (!im.isConnected?'Reader replaced image node':
+      (im.complete && im.naturalWidth>0 && im.naturalHeight>0 ?
+       'Decoded placeholder or different URL; requested image still not loaded' :
+       'Requested image still has naturalWidth=0'))};
   }
 
   // Replay ONLY an image already present and decoded in this specific page.

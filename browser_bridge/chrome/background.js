@@ -1097,6 +1097,24 @@ async function autoConnect() {
 
     if(config.protocol!=='visual-transfer-2'||!Number.isInteger(config.port)||
        !/^[A-Za-z0-9_-]{20,100}$/.test(config.token)) throw Error('Unexpected local bridge protocol');
+    // Run-scoped reload once BEFORE tab matching and pairing. This reloads
+    // unpacked script changes and provider-specific manifest permissions, even
+    // when Chrome kept an old MV3 worker alive after files were edited. The
+    // nonce is not a credential; the actual bridge token is still required.
+    // Persist BEFORE reloading, otherwise Chrome could restart in a loop.
+    if(config.startup_nonce) {
+      if(!/^[a-f0-9]{32}$/i.test(config.startup_nonce))
+        throw Error('Invalid local startup refresh nonce');
+      const previous=await storageGet(['comicBridgeRefreshedStartupNonce']);
+      if(previous.comicBridgeRefreshedStartupNonce!==config.startup_nonce) {
+        if(typeof chrome.runtime.reload!=='function')
+          throw Error('This browser does not support updating the unpacked extension automatically');
+        await storageSet({comicBridgeRefreshedStartupNonce:config.startup_nonce});
+        console.info('COMIC_BRIDGE_STARTUP_REFRESH: reloading installed extension for this run');
+        chrome.runtime.reload();
+        return;
+      }
+    }
     const tab=await pickComicTab(config.site,config.startup_url);
     if(!tab) { lastError='No authorized comic tab or startup URL available';return;}
     state={tabId:tab.id,port:config.port,token:config.token};
@@ -1112,7 +1130,7 @@ async function autoConnect() {
         throw Error('BROWSER_RESUME_TARGET_NOT_READY: managed tab is not at the requested unfinished chapter');
       await api('/hello',{url:readyTab.url,
         bridge_protocol:'visual-transfer-2',capabilities:['probe','image','content-v2'],
-        tab_ownership:'extension-managed',tab_id:state.tabId,
+        startup_refresh_revision:1,tab_ownership:'extension-managed',tab_id:state.tabId,
         tab_title:String((await tabInfo()).title||'').slice(0,200)});
       await storageSet({lastPort:port,selectedTabId:tab.id}).catch(()=>{});
       lastError='';
@@ -1150,7 +1168,7 @@ async function workLoop() {
   polling=true;
   try {
     await api('/hello',{url:(await tabInfo()).url,bridge_protocol:'visual-transfer-2',capabilities:['probe','image','content-v2'],
-        tab_ownership:'extension-managed',tab_id:state.tabId,
+        startup_refresh_revision:1,tab_ownership:'extension-managed',tab_id:state.tabId,
         tab_title:String((await tabInfo()).title||'').slice(0,200)});
     while (state) {
       const command=(await checkedIO(api('/next'), 'poll local Python bridge')).command;

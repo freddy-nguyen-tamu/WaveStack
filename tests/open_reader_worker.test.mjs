@@ -25,14 +25,20 @@ const env={ASSETS:{fetch:async req=>{
   const k=new URL(req.url).pathname,resp=files.get(k);
   return resp?resp.clone():new Response('Not found',{status:404});
 }},PANEL_REPLACEMENTS:bucket,READER_ADMIN_PASSWORD:'A-secure-test-password-at-least-20-chars',READER_SESSION_HMAC_KEY:'0123456789abcdef0123456789abcdef01234567'};
-const call=(path,opts={})=>worker.fetch(new Request(ORIGIN+path,opts),env);
+let siteCookie='';
+const call=(path,opts={})=>worker.fetch(new Request(ORIGIN+path,{
+ ...opts,headers:{Cookie:siteCookie,...(opts.headers||{})}
+}),env);
 const png=Uint8Array.from([137,80,78,71,13,10,26,10,...new Array(80).fill(1)]);
 async function run(){
-  let r=await call('/api/reader-health');assert.equal((await r.json()).script,'open-reader-panel-replacement-v1');
+  let r;
+  const initial=await call('/api/admin/login',{method:'POST',headers:{Origin:ORIGIN,'Content-Type':'application/json'},body:JSON.stringify({password:env.READER_ADMIN_PASSWORD})});
+  assert.equal(initial.status,200);siteCookie=initial.headers.get('Set-Cookie').split(';')[0];
+  r=await call('/api/reader-health');assert.equal((await r.json()).script,'open-reader-panel-replacement-v1');
   r=await call('/source-issues.json');assert.equal(r.status,200);
   let feed=await r.json();assert.equal(feed.count,2);assert.equal(feed.affected_chapters,1);
   r=await call('/');assert.equal(r.status,200);let html=await r.text();assert.match(html,/<link\s+rel="icon"\s+type="image\/svg\+xml"\s+href="\/favicon\.svg">/);assert.match(html,/reader-issues.js/);
-  r=await call('/api/panel-replacements/'+id,{method:'POST',headers:{Origin:ORIGIN,'Content-Type':'image/png'},body:png});assert.equal(r.status,401);
+  r=await call('/api/panel-replacements/'+id,{method:'POST',headers:{Origin:ORIGIN,'Content-Type':'image/png',Cookie:''},body:png});assert.equal(r.status,401);
   r=await call('/api/admin/login',{method:'POST',headers:{Origin:ORIGIN,'Content-Type':'application/json'},body:JSON.stringify({password:'wrong'})});assert.equal(r.status,401);
   r=await call('/api/admin/login',{method:'POST',headers:{Origin:ORIGIN,'Content-Type':'application/json'},body:JSON.stringify({password:env.READER_ADMIN_PASSWORD})});assert.equal(r.status,200);
   const cookie=r.headers.get('Set-Cookie').split(';')[0];assert.match(r.headers.get('Set-Cookie'),/HttpOnly/);

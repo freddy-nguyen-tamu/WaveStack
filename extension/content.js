@@ -3,7 +3,7 @@
   // Site scope is generated from the attached HTML. This extension never navigates
   // to extension-origin pages while reading and never intercepts wheel events.
   const KEY='cleanSourceComicReader.v3';
-  const readerSelectors=["#imagesList"];
+  const readerSelectors=[".reading-content > .inner", ".reading-content .inner"];
   const findReader=()=>readerSelectors.map(s=>document.querySelector(s)).find(el=>el && el.querySelectorAll('img,[data-page]').length);
   let root=findReader();
   if(!root)return;
@@ -37,7 +37,7 @@
     root=findReader()||root;
     const images=[...root.querySelectorAll('img')];
     for(const im of images){
-      const src=["data-src", "data-lazy-src", "data-original", "src"].map(a=>im.getAttribute(a)).find(Boolean)||im.currentSrc;
+      const src=["data-src", "data-original", "data-lazy-src", "src"].map(a=>im.getAttribute(a)).find(Boolean)||im.currentSrc;
       if(!src||src.startsWith('data:'))continue;
       if(!loaded.has(im)){
         loaded.set(im,false);
@@ -47,7 +47,7 @@
       im.setAttribute('loading','eager');
       // The original site sometimes uses lazy placeholder URLs. Restore the
       // legitimate source URL from its own data attributes without bypassing access.
-      if(im.getAttribute('src')!==src && ![].some(marker=>src.includes(marker))) im.setAttribute('src',src);
+      if(im.getAttribute('src')!==src && !["/images/loading.svg", "/images/placeholder.jpg", "/images/image-placeholder.webp"].some(marker=>src.includes(marker))) im.setAttribute('src',src);
       if(im.complete && im.naturalWidth>0)loaded.set(im,true);
       else if(failed.has(im)&&failed.get(im)<4){
         const k=failed.get(im);failed.set(im,k+1);

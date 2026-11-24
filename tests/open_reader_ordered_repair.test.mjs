@@ -43,8 +43,11 @@ const env={GITHUB_OWNER:owner,GITHUB_APP_ID:'123456',GITHUB_APP_INSTALLATION_ID:
  if(path==='/source-issues.json')return Response.json(issues);
  return new Response('not found',{status:404});
 }}};
+env.READER_ADMIN_PASSWORD='AnotherStrongFixturePassword01234';env.READER_SESSION_HMAC_KEY='long-fixture-hmac-secret-long-fixture-hmac-secret';
+const auth=await worker.fetch(new Request(url+'/api/admin/login',{method:'POST',headers:{Origin:url,'Content-Type':'application/json'},body:JSON.stringify({password:env.READER_ADMIN_PASSWORD})}),env);
+assert.equal(auth.status,200);const siteCookie=auth.headers.get('Set-Cookie').split(';')[0];
 const getManifest=async suffix=>{
- const result=await worker.fetch(new Request(`${url}/comics/${slug}/manifest.json${suffix}`),env,{});
+ const result=await worker.fetch(new Request(`${url}/comics/${slug}/manifest.json${suffix}`,{headers:{Cookie:siteCookie}}),env,{});
  assert.equal(result.status,200,await result.clone().text());
  return result.json();
 };
@@ -71,7 +74,7 @@ try{
  assert.equal(image.placeholder,undefined);
  assert.equal(image.sha256,sha);
  assert.equal(image.url,`/api/github-image/${slug}/${chapterId}/${missingPanel}?v=${sha}`);
- const read=await worker.fetch(new Request(url+image.url),env,{});
+ const read=await worker.fetch(new Request(url+image.url,{headers:{Cookie:siteCookie}}),env,{});
  assert.equal(read.status,200,await read.clone().text());
  assert.equal(read.headers.get('content-type'),'image/png');
  assert.deepEqual(new Uint8Array(await read.arrayBuffer()),png);

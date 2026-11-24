@@ -30,7 +30,10 @@ const env={GITHUB_OWNER:owner,GITHUB_APP_ID:'12345',GITHUB_APP_INSTALLATION_ID:'
  GITHUB_APP_PRIVATE_KEY:String(privateKey.export({type:'pkcs8',format:'pem'})),
  ASSETS:{fetch:async req=>new URL(req.url).pathname===`/comics/${slug}/manifest.json`?
   Response.json(manifest):new Response('missing',{status:404})}};
-const req=new Request(root+manifest.chapters[0].images[0].url);
+env.READER_ADMIN_PASSWORD='AnotherStrongFixturePassword01234';env.READER_SESSION_HMAC_KEY='long-fixture-hmac-secret-long-fixture-hmac-secret';
+const auth=await worker.fetch(new Request(root+'/api/admin/login',{method:'POST',headers:{Origin:root,'Content-Type':'application/json'},body:JSON.stringify({password:env.READER_ADMIN_PASSWORD})}),env);
+assert.equal(auth.status,200);const siteCookie=auth.headers.get('Set-Cookie').split(';')[0];
+const req=new Request(root+manifest.chapters[0].images[0].url,{headers:{Cookie:siteCookie}});
 const context={waitUntil:p=>pending.push(p)};
 try{
  const first=await worker.fetch(req,env,context);

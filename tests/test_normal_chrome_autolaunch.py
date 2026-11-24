@@ -55,6 +55,57 @@ class AutoNormalChromeTests(unittest.TestCase):
         finally:
             bridge.close()
 
+    def test_first_verified_navigation_reuses_managed_document_only_once(self):
+        from reusable.browser_bridge import BridgeContext
+        b = LocalBridge('https://reader.example.test/comic/a/',
+                        initial_chapter_url=SITE)
+        b.tab_url = SITE
+        b.startup_reader_verified = True
+        ctx = BridgeContext(b, [], [])
+        with patch.object(b, 'rpc', return_value={'url': SITE, 'status': 200}) as rpc:
+            self.assertEqual(ctx.pages[0].goto(SITE).status, 200)
+            rpc.assert_not_called()
+            ctx.pages[0].goto(SITE)
+            rpc.assert_called_once_with('navigate', {'url': SITE}, timeout=100)
+
+    def test_unverified_or_different_startup_still_navigates(self):
+        from reusable.browser_bridge import BridgeContext
+        for verified, requested in ((False,SITE),(True,SITE+'other')):
+            with self.subTest(verified=verified, requested=requested):
+                b = LocalBridge('https://reader.example.test/comic/a/',
+                                initial_chapter_url=SITE)
+                b.tab_url = SITE
+                b.startup_reader_verified = verified
+                ctx = BridgeContext(b, [], [])
+                with patch.object(b, 'rpc', return_value={'url':requested, 'status':200}) as rpc:
+                    ctx.pages[0].goto(requested)
+                    rpc.assert_called_once()
+
+    def test_hello_requires_refreshed_extension_when_enabled(self):
+        from urllib.error import HTTPError
+        b = LocalBridge('https://reader.example.test/comic/a/',
+                        initial_chapter_url=SITE, port=0, require_managed_tab=True)
+        b.require_startup_refresh = True
+        b.start()
+        self.addCleanup(b.close)
+        headers={'X-Comic-Bridge-Token':b.secret,
+                 'X-Comic-Bridge-Client':'local-managed-tab-test',
+                 'Content-Type':'application/json'}
+        payload={'url':SITE,'bridge_protocol':'visual-transfer-2',
+                 'capabilities':['probe','image','content-v2'],
+                 'tab_ownership':'extension-managed','tab_id':32}
+        def status():
+            req=Request(f'http://127.0.0.1:{b.port}/hello',
+                        data=json.dumps(payload).encode(),headers=headers,method='POST')
+            try:
+                with urlopen(req,timeout=3) as res:return res.status
+            except HTTPError as exc:return exc.code
+        self.assertEqual(status(),409)
+        self.assertFalse(b.ready.is_set())
+        payload['startup_refresh_revision']=1
+        self.assertEqual(status(),200)
+        self.assertTrue(b.ready.is_set())
+
     def test_refuses_cross_origin_or_http_startup(self):
         for bad in ('https://evil.example.test/x','http://reader.example.test/comic/a/chapter-62/'):
             with self.subTest(bad=bad), self.assertRaises(Exception):

@@ -9,7 +9,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://manhwaread.com/manhwa/childhood-friends/*"
+        "https://truyenqq.com.vn/relife/chapter-*"
       ],
       "js": [
         "content.js"

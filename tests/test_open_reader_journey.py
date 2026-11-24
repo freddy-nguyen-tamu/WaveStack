@@ -56,7 +56,7 @@ class JourneyTests(unittest.TestCase):
             (state/'open_reader_journey.json').write_text(json.dumps({'database_id':dbid}))
             cfg=json.loads(open_reader._worker_config(stage,Path(tmp),project).read_text(encoding='utf-8'))
             self.assertEqual(cfg['d1_databases'],[{'binding':'JOURNEY_DB','database_name':'open-reader-journey','database_id':dbid}])
-            self.assertIn('/api/*',cfg['assets']['run_worker_first'])
+            self.assertIs(cfg['assets']['run_worker_first'],True)
             self.assertNotIn('site_specific',json.dumps(cfg))
             (state/'open_reader_journey.json').write_text(json.dumps({'database_id':'bad'}))
             with self.assertRaisesRegex(RuntimeError,'Invalid Journey D1'):

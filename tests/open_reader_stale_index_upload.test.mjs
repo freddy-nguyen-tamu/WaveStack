@@ -31,17 +31,20 @@ const env={GITHUB_OWNER:owner,GITHUB_APP_ID:'123456',GITHUB_APP_INSTALLATION_ID:
   if(p==='/source-issues.json')return Response.json(issues);
   return new Response('missing',{status:404});
  }}};
+env.READER_ADMIN_PASSWORD='AnotherStrongFixturePassword01234';env.READER_SESSION_HMAC_KEY='long-fixture-hmac-secret-long-fixture-hmac-secret';
+const auth=await worker.fetch(new Request(origin+'/api/admin/login',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({password:env.READER_ADMIN_PASSWORD})}),env);
+assert.equal(auth.status,200);const siteCookie=auth.headers.get('Set-Cookie').split(';')[0];
 try{
  // Prewarm the isolate with an EMPTY override index. A different upload
  // isolate later inserts the replacement; this worker is still stale.
- const before=await worker.fetch(new Request(`${origin}/comics/${slug}/manifest.json`),env,{});
+ const before=await worker.fetch(new Request(`${origin}/comics/${slug}/manifest.json`,{headers:{Cookie:siteCookie}}),env,{});
  assert.equal((await before.json()).chapters[0].images[1].placeholder,true);
  const index={schema:'reader-github-overrides-v1',panels:{
   [`${slug}:${chapter}:${panel}`]:{repo:'open-reader',path,sha256:sha,content_type:'image/png'}
  }};
  repo.set('overrides.json',new TextEncoder().encode(JSON.stringify(index)));
  repo.set(path,png);
- const req=new Request(`${origin}/api/github-image/${slug}/${chapter}/${panel}?v=${sha}`);
+ const req=new Request(`${origin}/api/github-image/${slug}/${chapter}/${panel}?v=${sha}`,{headers:{Cookie:siteCookie}});
  const response=await worker.fetch(req,env,{waitUntil(){}});
  assert.equal(response.status,200,await response.clone().text());
  assert.deepEqual(new Uint8Array(await response.arrayBuffer()),png);

@@ -47,10 +47,11 @@ const env={GITHUB_OWNER:owner,GITHUB_APP_ID:'123456',GITHUB_APP_INSTALLATION_ID:
  return new Response('not found',{status:404});
  }}
 };
-const request=(path,opts={})=>worker.fetch(new Request(origin+path,opts),env);
+let siteCookie='';
+const request=(path,opts={})=>worker.fetch(new Request(origin+path,{...opts,headers:{Cookie:siteCookie,...(opts.headers||{})}}),env);
 try{
  let resp=await request('/api/admin/login',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({password:env.READER_ADMIN_PASSWORD})});
- assert.equal(resp.status,200);const cookie=resp.headers.get('Set-Cookie').split(';')[0];
+ assert.equal(resp.status,200);const cookie=resp.headers.get('Set-Cookie').split(';')[0];siteCookie=cookie;
  const png=Uint8Array.from([137,80,78,71,13,10,26,10,...Array(50).fill(1)]);
  resp=await request(`/api/admin/github-image/${slug}/${ch}/${panel}`,{method:'POST',headers:{Origin:origin,'Content-Type':'image/png',Cookie:cookie},body:png});
  assert.equal(resp.status,200,await resp.clone().text());

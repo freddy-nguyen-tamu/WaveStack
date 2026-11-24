@@ -6,7 +6,9 @@ import { journeyRoute, journeyConfigured, purgeJourneyEvents } from './journey_w
  * arbitrary chapter or archive modification. No client-side credentials.
  */
 const MAX_BYTES = 12 * 1024 * 1024;
-const SESSION_SECONDS = 7200;
+// Long-lived signed site-wide session, renewed only near expiration.
+const SESSION_SECONDS = 90 * 24 * 3600;
+const RENEW_WITHIN_SECONDS = 30 * 24 * 3600;
 const esc = encodeURIComponent;
 const te = new TextEncoder();
 const json = (data, status=200, headers={}) => new Response(JSON.stringify(data), {status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...headers}});
@@ -27,11 +29,67 @@ const hmac = async (key,str) => {
 const cookies = req => Object.fromEntries((req.headers.get('Cookie')||'').split(';').map(x=>x.trim()).filter(Boolean).map(x=>{let i=x.indexOf('=');return [x.slice(0,i),x.slice(i+1)]}));
 async function validSession(req,env) {
   if (!env.READER_SESSION_HMAC_KEY) return false;
-  const cookie=cookies(req).reader_admin || '';
-  const [expiry,sig,extra]=cookie.split('.');
-  if(extra || !/^\d{10,13}$/.test(expiry) || !sig || Number(expiry) < Math.floor(Date.now()/1000)) return false;
-  const expected=await hmac(env.READER_SESSION_HMAC_KEY, expiry+':reader-panel-admin:v1');
-  return timingEqual(te.encode(sig),te.encode(expected));
+  const jar=cookies(req);
+  for(const [value,purpose] of [[jar.reader_site,'reader-site:v2'],[jar.reader_admin,'reader-panel-admin:v1']]){
+    if(!value)continue;
+    const [expiry,sig,extra]=value.split('.');
+    if(extra || !/^\d{10,13}$/.test(expiry) || !sig || Number(expiry)<Math.floor(Date.now()/1000))continue;
+    const expected=await hmac(env.READER_SESSION_HMAC_KEY,expiry+':'+purpose);
+    if(timingEqual(te.encode(sig),te.encode(expected)))return true;
+  }
+  return false;
+}
+// Existing reader_admin cookies are accepted to migrate an already signed-in
+// user, but the site-wide cookie uses a distinct name and a new HMAC purpose.
+async function issueSiteCookie(env){
+  const expiry=String(Math.floor(Date.now()/1000)+SESSION_SECONDS);
+  const signature=await hmac(env.READER_SESSION_HMAC_KEY,expiry+':reader-site:v2');
+  return `reader_site=${expiry}.${signature}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_SECONDS}`;
+}
+async function sessionResponse(req,env){
+  if(!await validSession(req,env))return error('Sign-in required',401);
+  return json({ok:true,authenticated:true},200,{'Set-Cookie':await issueSiteCookie(env)});
+}
+const logoutCookie='reader_site=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0';
+const SITE_LOGIN_HTML=`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · Open Reader</title><style>
+:root{color-scheme:light;font:16px Arial,Helvetica,system-ui,sans-serif;--or-ink:#0f1111;--or-muted:#565959;--or-header:#131921;--or-navigation:#232f3e;--or-accent:#ff9900;--or-accent-soft:#febd69;--or-border:#d5d9d9;--or-canvas:#eaeded}
+*{box-sizing:border-box}body{min-height:100dvh;margin:0;background:linear-gradient(to bottom,var(--or-header) 0,var(--or-header) 76px,var(--or-navigation) 76px,var(--or-navigation) 113px,var(--or-canvas) 113px,var(--or-canvas) 100%);color:var(--or-ink);display:grid;place-items:center;padding:24px}
+main{width:min(100%,440px);padding:28px 29px 32px;background:#fff;border:1px solid var(--or-border);border-radius:7px;box-shadow:0 6px 25px #0f111122;position:relative;overflow:hidden}
+main::before{content:"";height:5px;position:absolute;inset:0 0 auto;background:linear-gradient(90deg,var(--or-accent),var(--or-accent-soft),#d9e4e8)}
+h1{font-size:clamp(25px,3.2vw,33px);font-weight:800;letter-spacing:-.035em;margin:2px 0 12px}h1::before{content:"";display:inline-block;width:16px;height:22px;margin-right:11px;border:2px solid var(--or-accent);border-left-width:6px;border-radius:2px 4px 4px 2px;transform:skewY(-4deg)}
+p{font-size:14px;color:var(--or-muted);line-height:1.55;margin:0 0 22px}
+label{display:block;font-size:13px;font-weight:700;margin:0 0 7px}
+input,button{font:inherit;width:100%;min-height:44px}
+input{background:#fff;color:var(--or-ink);border:2px solid #aeb4b4;border-radius:5px;padding:10px 13px}
+input:focus-visible{border-color:var(--or-accent);outline:3px solid #ff990055}
+button{background:#ffd814;color:var(--or-ink);border:1px solid #c89411;border-radius:22px;font-weight:700;cursor:pointer;margin-top:16px}
+button:hover{filter:brightness(.96)}button:focus-visible{outline:3px solid var(--or-accent);outline-offset:3px}button:disabled{opacity:.7;cursor:wait}
+#error{min-height:1.4em;color:#a42517;margin:10px 0 0}
+@media(max-width:480px){body{padding:12px}main{padding:24px 20px 26px}}
+</style></head><body><main><h1>Open Reader</h1><p>Sign in once to access the library, chapters, and Your Journey. Your session stays signed in across browser restarts.</p><form id="login"><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" autofocus required><button>Sign in</button></form><p id="error" role="status"></p></main><script>
+const dest=(()=>{const x=new URLSearchParams(location.search).get('next')||'/';try{const u=new URL(x,location.origin);return u.origin===location.origin&&u.pathname!=='/login/'&&u.pathname!=='/login'?u.pathname+u.search+u.hash:'/'}catch{return '/'}})();
+fetch('/api/admin/session',{credentials:'same-origin',cache:'no-store'}).then(r=>{if(r.ok)location.replace(dest)}).catch(()=>{});
+document.getElementById('login').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget;f.querySelector('button').disabled=true;document.getElementById('error').textContent='';try{const response=await fetch('/api/admin/login',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:document.getElementById('password').value})});if(!response.ok)throw Error(response.status===401?'Incorrect password':'Sign-in unavailable');document.getElementById('password').value='';location.replace(dest)}catch(err){document.getElementById('error').textContent=err.message;f.querySelector('button').disabled=false}};
+</script></body></html>`;
+function loginPage(){return new Response(SITE_LOGIN_HTML,{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'}});}
+function unauthenticated(req){
+  const u=new URL(req.url);
+  if(req.method==='GET' || req.method==='HEAD'){
+    const isPage=u.pathname==='/' || u.pathname.endsWith('/') || u.pathname.endsWith('.html');
+    if(isPage){const next=u.pathname+u.search;const location='/login/?next='+encodeURIComponent(next);
+      return new Response(null,{status:302,headers:{Location:location,'Cache-Control':'no-store'}});}
+  }
+  return error('Sign-in required',401);
+}
+async function renewIfNeeded(req,env,response){
+  const jar=cookies(req);let shouldRenew=!jar.reader_site;
+  if(jar.reader_site){const expiry=Number(jar.reader_site.split('.')[0]);shouldRenew=Number.isFinite(expiry)&&expiry-Math.floor(Date.now()/1000)<RENEW_WITHIN_SECONDS;}
+  if(!shouldRenew)return response;
+  const headers=new Headers(response.headers);
+  headers.set('Set-Cookie',await issueSiteCookie(env));
+  // Authenticated resources must not leak from intermediary caches before gate.
+  if(/text\/html/i.test(headers.get('Content-Type')||''))headers.set('Cache-Control','private, no-store');
+  return new Response(response.body,{status:response.status,headers});
 }
 const sameOriginPost = req => {
   const o=req.headers.get('Origin');
@@ -110,9 +168,7 @@ async function login(req,env) {
   try{body=await req.json()}catch{return error('Invalid JSON',400)}
   const given=typeof body?.password==='string'?body.password.slice(0,4096):'';
   if(!given || !timingEqual(await sha(given),await sha(env.READER_ADMIN_PASSWORD)))return error('Invalid credentials',401);
-  const expiry=String(Math.floor(Date.now()/1000)+SESSION_SECONDS);
-  const signature=await hmac(env.READER_SESSION_HMAC_KEY, expiry+':reader-panel-admin:v1');
-  return json({ok:true,expires_in:SESSION_SECONDS},200,{'Set-Cookie':`reader_admin=${expiry}.${signature}; Path=/api/; HttpOnly; Secure; SameSite=Strict; Max-Age=${SESSION_SECONDS}`});
+  return json({ok:true,expires_in:SESSION_SECONDS,scope:'site'},200,{'Set-Cookie':await issueSiteCookie(env)});
 }
 async function upload(req,env,id) {
   if(!sameOriginPost(req))return error('Same-origin request required',403);
@@ -471,9 +527,24 @@ async function overlayGithubManifest(req,env){
 export default {
   async fetch(req,env,ctx) {
     if(!env.ASSETS)return error('Static assets binding missing',503);
-    const journey = await journeyRoute(req,env,(r,e)=>validSession(r,e));
-    if(journey)return journey;
     const u=new URL(req.url), path=u.pathname;
+    if((path==='/login/' || path==='/login') && req.method==='GET'){
+      if(await validSession(req,env))return Response.redirect(u.origin+'/',302);
+      return loginPage();
+    }
+    if(path==='/api/admin/login' && req.method==='POST')return login(req,env);
+    if(path==='/api/admin/session' && req.method==='GET')return sessionResponse(req,env);
+    if(path==='/api/admin/logout' && req.method==='POST'){
+      if(!sameOriginPost(req))return error('Same-origin required',403);
+      const response=json({ok:true},200,{'Set-Cookie':logoutCookie});
+      response.headers.append('Set-Cookie','reader_admin=; Path=/api/; HttpOnly; Secure; SameSite=Strict; Max-Age=0');
+      return response;
+    }
+    // All public routes, including static assets and image streams, require the
+    // same site session. Credentials never enter any public file or JS bundle.
+    if(!await validSession(req,env))return unauthenticated(req);
+    const journey = await journeyRoute(req,env,(r,e)=>validSession(r,e));
+    if(journey)return renewIfNeeded(req,env,journey);
     if(path==='/api/reader-health' && req.method==='GET')return json({ok:true,script:'open-reader-panel-replacement-v1',
       storage_configured:!!env.PANEL_REPLACEMENTS,github_streaming_configured:githubConfigured(env),journey_storage_configured:journeyConfigured(env)});
     const streaming=path.match(STREAM_RE);
@@ -486,7 +557,6 @@ export default {
       catch(e){return error('GitHub replacements unavailable: '+e.message,503)}
     }
     if(path==='/source-issues.json' && req.method==='GET')return issuesResponse(req,env);
-    if(path==='/api/admin/login' && req.method==='POST')return login(req,env);
     const imagePath=path.match(/^\/api\/panel-replacements\/([a-f0-9]{20})$/);
     if(imagePath) {
       if(req.method==='POST')return upload(req,env,imagePath[1]);
@@ -496,7 +566,7 @@ export default {
     if(/^\/comics\/[^/]+\/manifest\.json$/.test(path) && req.method==='GET' && githubConfigured(env))
       return overlayGithubManifest(req,env);
     if(/^\/comics\/[^/]+\/manifest\.json$/.test(path) && req.method==='GET')return decorateManifest(req,env);
-    if(req.method==='GET' && (path==='/' || path.endsWith('/') || path.endsWith('.html')))return htmlResponse(req,env);
+    if(req.method==='GET' && (path==='/' || path.endsWith('/') || path.endsWith('.html')))return renewIfNeeded(req,env,await htmlResponse(req,env));
     return env.ASSETS.fetch(req);
   },
   async scheduled(_event,env,_ctx){await purgeJourneyEvents(env);}

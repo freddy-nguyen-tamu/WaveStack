@@ -47,6 +47,7 @@ function makeReader({index=0,ready=true,reduced=false}={}) {
     setTimeout(fn,time){queued.push({fn,time});return queued.length},clearTimeout(){},
     MutationObserver:class{observe(){}},
     manifest:{title:'Comic A',chapters:[{id:'c1'},{id:'c2'}]},
+    chapter:{id:'c2',images:[]},known:[],
     chapterIndex:index,transitioning:false,panelOpen:false,settings:{auto:true},
     write(){calls.push('write')},
     allLoaded(){return ready},
