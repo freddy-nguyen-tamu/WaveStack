@@ -849,6 +849,139 @@ def stage_worker_assets(root, registry, stage, *, partial_records=None):
         if native_app.count('function needPreload(im){')!=1:
             raise RuntimeError('Native reader preload function changed; refusing partial-pixel patch')
         native_app=native_app.replace('function needPreload(im){',helper+'\nfunction needPreload(im){',1)
+        # The source reader still owns navigation, keyboard, automatic scrolling,
+        # image error handling, and retry logic. Only the STAGED reader replaces
+        # its initial scroll-near preload with a strictly ordered queue.
+        # This runs for every comic/chapter but never fetches neighboring chapters.
+        frame_old = 'if(document.hidden||!chapter||transitioning||panelOpen)return;'
+        if native_app.count(frame_old) != 1:
+            raise RuntimeError('Reader frame guard changed; refusing sequential loading patch')
+        native_app = native_app.replace(frame_old,
+           'if(document.hidden||!chapter||transitioning||panelOpen)return;', 1)
+        # No scroll event or auto-scroll handler is allowed to load later panels
+        # out of order. Preserve the native triggerNearby() for compatibility,
+        # but disable it only in this staged chapter's sequential mode.
+        native_app=native_app.replace('function triggerNearby(){',
+          'const chapterSequentialLoading=true;\nfunction triggerNearby(){',1)
+        native_app=native_app.replace('  if(!known.length)return;\n  const y=scrollY, margin=',
+          '  if(chapterSequentialLoading||!known.length)return;\n  const y=scrollY, margin=',1)
+        if 'if(chapterSequentialLoading||!known.length)return;' not in native_app:
+            raise RuntimeError('Could not disable scroll-driven preloads in staged reader')
+        # Never auto-advance to the next chapter just because the final image
+        # fired onload while it is still decoding or has not been inserted.
+        old_all_loaded = "function allLoaded(){return known.length>0 && known.every(x=>x.status==='loaded');}"
+        if native_app.count(old_all_loaded) != 1:
+            raise RuntimeError('Native chapter completion guard changed')
+        native_app=native_app.replace(old_all_loaded,
+            "let chapterSequentialQueueComplete=false;\nfunction allLoaded(){return chapterSequentialQueueComplete && known.length>0 && known.every(x=>x.status==='loaded');}",1)
+        # firstMissing() may refer to a yet-unmounted figure; never treat its
+        # detached geometry as the user's current viewport position.
+        old_missing = 'if(direction>0&&missing){'
+        if native_app.count(old_missing)!=1:
+            raise RuntimeError('Native auto-scroll missing guard changed')
+        native_app=native_app.replace(old_missing,
+            'if(direction>0&&missing&&missing.el.parentElement?.isConnected){',1)
+        old_loader = ("  $('#pages').append(frag);\n"
+                      "  // Load first few pages immediately. Subsequent images are loaded ahead by scrolling.\n"
+                      "  known.slice(0,Math.min(5,known.length)).forEach(needPreload);\n"
+                      "  triggerNearby();")
+        new_loader = r"""  // Sequential, chapter-only image queue. Initial state contains only the
+  // loading spinner; append each decoded image in its original manifest order.
+  // Subsequent downloads start even if the user never scrolls.
+  const pages=$('#pages');
+  const loading=document.createElement('section');
+  loading.className='or-chapter-load-screen';
+  loading.setAttribute('role','status');
+  loading.setAttribute('aria-live','polite');
+  const spinner=document.createElement('span');
+  spinner.className='or-chapter-loading-spinner';
+  spinner.setAttribute('aria-hidden','true');
+  const message=document.createElement('span');
+  message.className='or-chapter-loading-message';
+  loading.append(spinner,message);
+  pages.replaceChildren(loading);
+  // OPEN_READER_ORDERED_REPAIR_MANIFEST_V2: resolve previously uploaded
+  // missing panels IN PARALLEL with the early image queue. This costs just one
+  // extra manifest request for a partial chapter and does not delay panel 1.
+  // Completed chapters make zero extra requests. The Worker reads the GitHub
+  // override index afresh only for a selected chapter with source-missing slots.
+  const repairProbe=known.some(x=>x.placeholder) ? (()=>{
+    const url=new URL('./manifest.json',location.href);
+    url.searchParams.set('refresh-repairs-for',String(chapter.id));
+    return fetch(url.href,{cache:'no-store'}).then(response=>
+      response.ok?response.json():null).then(data=>{
+        const selected=data?.chapters?.find(ch=>String(ch.id)===String(chapter.id));
+        return selected?.images?.length===known.length?selected:null;
+      }).catch(error=>{
+        console.warn('OPEN_READER_EARLY_REPAIR_LOOKUP_FAILED',String(error));
+        return null;
+      });
+  })():null;
+  let resolvedRepairRows=null;
+  let settled=0;
+  for(const entry of known){
+    const figure=entry.placeholder?entry.el:entry.el.parentElement;
+    if(!figure)throw Error('Image lost its original panel container');
+    message.textContent=`Loading panel ${entry.order+1} / ${known.length}`;
+    let activeEntry=entry;
+    if(entry.placeholder && repairProbe){
+      // Do not hold the first 55 panels for an update to panel 56.
+      if(resolvedRepairRows===null)resolvedRepairRows=(await repairProbe)||{images:[]};
+      const imageData=resolvedRepairRows.images?.[entry.order];
+      if(imageData && imageData.placeholder!==true && typeof imageData.url==='string' &&
+         /^[a-f0-9]{64}$/.test(String(imageData.sha256||''))){
+        let url=null;
+        try{url=new URL(imageData.url,location.href)}catch{}
+        if(url && url.origin===location.origin &&
+           /^\/api\/(?:github-image\/[a-z0-9-]+\/[A-Za-z0-9_.-]+\/[1-9][0-9]*|panel-replacements\/[a-f0-9]{20})$/.test(url.pathname)){
+          const width=Math.max(1,Number(imageData.width)||1100);
+          const height=Math.max(1,Number(imageData.height)||1500);
+          const img=document.createElement('img');
+          img.alt='';img.decoding='async';img.loading='eager';img.width=width;img.height=height;
+          figure.className='';figure.style.aspectRatio=`${width}/${height}`;
+          figure.removeAttribute('role');figure.removeAttribute('aria-label');figure.removeAttribute('title');
+          figure.replaceChildren(img);
+          activeEntry={status:'waiting',el:img,url:url.href,order:entry.order};
+          known[entry.order]=activeEntry;
+          chapter.images[entry.order]=imageData;
+        }
+      }
+    }
+    if(!activeEntry.placeholder){
+      needPreload(activeEntry);
+      // Retry callbacks belong to the original reader. A per-panel watchdog
+      // is used only if the browser never sends a load/error event at all.
+      const started=performance.now();
+      while(activeEntry.status!=='loaded'){
+        if(performance.now()-started>180000){
+          activeEntry.el.onload=null;activeEntry.el.onerror=null;
+          activeEntry.el.removeAttribute('src');
+          activeEntry.status='loaded';
+          missingGlyph(figure,entry.order+1,'Image request timed out');
+          break;
+        }
+        await new Promise(resolve=>setTimeout(resolve,100));
+      }
+      // An onload event means transfer completed; wait for the browser to
+      // decode the pixels before making the page visible when supported.
+      if(activeEntry.el.parentElement===figure && typeof activeEntry.el.decode==='function' &&
+         activeEntry.el.getAttribute('src')){
+        await Promise.race([activeEntry.el.decode().catch(()=>{}),
+          new Promise(resolve=>setTimeout(resolve,20000))]);
+      }
+      // A replacement may have a different aspect ratio from other pages.
+      if(activeEntry!==entry && activeEntry.el.naturalWidth>0 && activeEntry.el.naturalHeight>0)
+        figure.style.aspectRatio=`${activeEntry.el.naturalWidth}/${activeEntry.el.naturalHeight}`;
+    }
+    pages.insertBefore(figure,loading);
+    settled++;
+  }
+  loading.remove();
+  chapterSequentialQueueComplete=true;"""
+        if native_app.count(old_loader) != 1:
+            raise RuntimeError('Native initial loader changed; refusing sequential loading patch')
+        native_app=native_app.replace(old_loader,new_loader,1)
+        # The old completed-chapter progress restore and all navigation stay.
         # Missing chapters use the regular rendering path. The staging hook
         # fills their real checkpoint panels and unavailable ordinal placeholders.
         # Never substitute the next or previous chapter for a requested ID.
@@ -1106,6 +1239,12 @@ def _verify_published(worker_url, staged, registry, *, verify_slugs=None):
                     return False
                 image['url'] = previous['url']
                 image['sha256'] = previous['sha256']
+                # A repaired source-confirmed placeholder becomes an image in
+                # the live manifest. Restore its original flags solely for the
+                # immutable static-asset equivalence check.
+                for missing_flag in ('placeholder','confirmed_missing'):
+                    if missing_flag in previous:
+                        image[missing_flag] = previous[missing_flag]
         return canonical(normalized) == canonical(expected)
 
     for source in sorted(p for p in stage.rglob('*') if p.is_file()):

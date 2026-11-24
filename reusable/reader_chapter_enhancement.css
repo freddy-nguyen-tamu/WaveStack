@@ -86,3 +86,33 @@ html.or-flip-exit .or-page-flip::before{animation:or-close 420ms cubic-bezier(.3
   flex:none;
 }
 #pages > figure.or-missing-panel svg { display:block; width:16px; height:16px; }
+
+/* Sequential current-chapter loader: full-height spinner for the first panel,
+   then a small inline spinner below the last decoded panel. */
+#pages > .or-chapter-load-screen {
+  box-sizing:border-box;min-height:100vh;min-height:100dvh;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:18px;padding:30px;color:#d7dce1;background:#0b0b0b;
+  font:600 14px/1.5 Arial,Helvetica,system-ui,sans-serif;text-align:center;
+}
+#pages > .or-chapter-load-screen .or-chapter-loading-spinner {
+  box-sizing:border-box;display:block;width:43px;height:43px;border-radius:50%;
+  border:4px solid #ffffff36;border-top-color:#febd69;
+  animation:or-chapter-spinner 850ms linear infinite;
+}
+@keyframes or-chapter-spinner { to {transform:rotate(360deg)} }
+@media(prefers-reduced-motion:reduce) {
+  #pages > .or-chapter-load-screen .or-chapter-loading-spinner {
+    animation-duration:2000ms;
+  }
+}
+
+/* Do not leave a viewport-sized blank space between progressively shown panels. */
+#pages > .or-chapter-load-screen:not(:first-child) {
+  min-height:clamp(96px,18vh,180px);
+  padding:16px;
+  gap:10px;
+}
+#pages > .or-chapter-load-screen:not(:first-child) .or-chapter-loading-spinner {
+  width:29px;height:29px;border-width:3px;
+}

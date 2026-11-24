@@ -40,6 +40,24 @@ class GitHub:
             return Response(201)
         raise AssertionError(method)
 
+class RestorableGitHub(GitHub):
+    """Simulate GitHub Contents listing + raw fetch after local checkpoint loss."""
+    def github_http(self,method,url,token,**kwargs):
+        if method=='GET' and '/contents/partial/' in url:
+            path=url.split('/contents/',1)[1].split('?ref=',1)[0]
+            if path == 'partial/comic-a/chapter-82':
+                prefix=path+'/'
+                files=sorted((name,data) for name,data in self.remote.items() if name.startswith(prefix))
+                if not files:return Response(404)
+                return Response(200,[{'type':'file','path':name, 'name':name[len(prefix):],
+                    'size':len(data),'sha':partial_chapter_publish._git_blob_sha(data)} for name,data in files])
+            if kwargs.get('headers',{}).get('Accept')=='application/vnd.github.raw+json':
+                if path not in self.remote:return Response(404)
+                result=Response(200)
+                result.content=self.remote[path]
+                return result
+        return super().github_http(method,url,token,**kwargs)
+
 class PartialChapterTests(unittest.TestCase):
     def setUp(self):
         tmp=TemporaryDirectory();self.addCleanup(tmp.cleanup)
@@ -169,6 +187,97 @@ console.log('PASS compact native-style glyph on missing and failed panels');
                            capture_output=True,text=True,timeout=15)
         self.assertEqual(run.returncode,0,run.stderr)
         self.assertIn('PASS compact native-style glyph',run.stdout)
+
+    def test_redeploy_restores_remote_partial_pixels_after_local_checkpoint_loss(self):
+        github=RestorableGitHub()
+        first=partial_chapter_publish.publish_partial_checkpoints(self.root,github,'owner','secret')
+        self.assertEqual(len(first[('comic-a','chapter-82')]['images']),1)
+        self.assertEqual(len(github.writes),1)
+        # Ordinary cleanup/rotation can remove local temporary bytes and index.
+        (self.folder/'0001.png').unlink()
+        # Preserve catalog count while verified image bytes are absent.
+        second=partial_chapter_publish.publish_partial_checkpoints(self.root,github,'owner','secret')
+        self.assertEqual(len(github.writes),1,'remote reconciliation must not upload duplicates')
+        recovered=second[('comic-a','chapter-82')]
+        self.assertEqual(recovered['total'],4)
+        self.assertEqual(list(recovered['images']),[1])
+        self.assertEqual(recovered['images'][1]['sha256'],hashlib.sha256(self.raw).hexdigest())
+        stage=self.root/'recovered-stage'
+        open_reader.stage_worker_assets(self.root,self.registry,stage,partial_records=second)
+        manifest=json.loads((stage/'comics/comic-a/manifest.json').read_text())
+        partial=manifest['chapters'][1]
+        self.assertEqual(partial['id'],'chapter-82')
+        self.assertFalse(partial['images'][0].get('placeholder',False))
+        self.assertEqual(partial['images'][0]['github']['repo'],'open-reader')
+        self.assertEqual([(r['panel'],r['placeholder']) for r in partial['images'][1:]],
+                         [(2,True),(3,True),(4,True)])
+        self.assertEqual(manifest['chapters'][0]['images'][0]['sha256'],'a'*64)
+        self.assertEqual(manifest['chapters'][2]['images'][0]['sha256'],'b'*64)
+
+    def test_interleaved_saved_and_missing_panels_survive_redeployment(self):
+        github=RestorableGitHub()
+        partial_chapter_publish.publish_partial_checkpoints(self.root,github,'owner','secret')
+        # Two more verified remote panels, two explicit missing positions.
+        (self.folder/'confirmed_server_failures.json').write_text(json.dumps({
+            'chapter_id':'chapter-82','failures':{
+                '2':{'status':404,'debugger_confirmed':True,'reason':'confirmed_image_http_404'},
+                '4':{'status':404,'debugger_confirmed':True,'reason':'confirmed_image_http_404'}}}))
+        for ordinal in (3,5):
+            data=io.BytesIO()
+            Image.new('RGB',(30,45),(ordinal*20,40,100)).save(data,format='PNG')
+            raw=data.getvalue()
+            github.remote[f'partial/comic-a/chapter-82/{ordinal:04d}-{hashlib.sha256(raw).hexdigest()}.png']=raw
+        (self.folder/'0001.png').unlink()
+        (self.folder/'.image-checkpoint.json').unlink()
+        result=partial_chapter_publish.publish_partial_checkpoints(self.root,github,'owner','secret')
+        self.assertEqual(list(result[('comic-a','chapter-82')]['images']),[1,3,5])
+        stage=self.root/'interleaved-stage'
+        open_reader.stage_worker_assets(self.root,self.registry,stage,partial_records=result)
+        data=json.loads((stage/'comics/comic-a/manifest.json').read_text())
+        chapter=data['chapters'][1]
+        self.assertEqual([bool(x.get('placeholder')) for x in chapter['images']],
+                         [False,True,False,True,False])
+        self.assertEqual(chapter['available_panels'],[1,3,5])
+        self.assertEqual(chapter['unavailable_panels'],[2,4])
+
+    def test_remote_partial_corruption_fails_closed_not_all_placeholders(self):
+        github=RestorableGitHub()
+        partial_chapter_publish.publish_partial_checkpoints(self.root,github,'owner','secret')
+        (self.folder/'0001.png').unlink()
+        (self.folder/'.image-checkpoint.json').unlink()
+        path=next(iter(github.remote))
+        github.remote[path]=bytes([self.raw[0] ^ 1]) + self.raw[1:]  # Same size, wrong bytes.
+        with self.assertRaisesRegex(RuntimeError,'length mismatch|hash mismatch'):
+            partial_chapter_publish.publish_partial_checkpoints(self.root,github,'owner','secret')
+
+    def test_multiple_immutable_remote_versions_refuse_guessing(self):
+        github=RestorableGitHub()
+        partial_chapter_publish.publish_partial_checkpoints(self.root,github,'owner','secret')
+        (self.folder/'0001.png').unlink()
+        (self.folder/'.image-checkpoint.json').unlink()
+        blob=io.BytesIO();Image.new('RGB',(30,45),(50,100,150)).save(blob,format='PNG')
+        raw=blob.getvalue();hash_value=hashlib.sha256(raw).hexdigest()
+        github.remote[f'partial/comic-a/chapter-82/0001-{hash_value}.png']=raw
+        with self.assertRaisesRegex(RuntimeError,'Ambiguous immutable versions'):
+            partial_chapter_publish.publish_partial_checkpoints(self.root,github,'owner','secret')
+
+    def test_remote_partial_image_cannot_override_confirmed_missing_slot(self):
+        github=RestorableGitHub()
+        raw=self.raw;hash_value=hashlib.sha256(raw).hexdigest()
+        github.remote[f'partial/comic-a/chapter-82/0002-{hash_value}.png']=raw
+        with self.assertRaisesRegex(RuntimeError,'conflicts with confirmed missing panel'):
+            partial_chapter_publish.publish_partial_checkpoints(self.root,github,'owner','secret')
+
+    def test_unavailable_private_remote_aborts_instead_of_erasing_images(self):
+        class ForbiddenGitHub(RestorableGitHub):
+            def github_http(self,method,url,token,**kwargs):
+                if '/contents/partial/comic-a/chapter-82' in url:
+                    return Response(403)
+                return super().github_http(method,url,token,**kwargs)
+        (self.folder/'0001.png').unlink()
+        (self.folder/'.image-checkpoint.json').unlink()
+        with self.assertRaisesRegex(RuntimeError,'HTTP 403'):
+            partial_chapter_publish.publish_partial_checkpoints(self.root,ForbiddenGitHub(),'owner','secret')
 
     def test_modified_checkpoint_bytes_cannot_be_published(self):
         (self.folder/'0001.png').write_bytes(b'corrupt bytes')

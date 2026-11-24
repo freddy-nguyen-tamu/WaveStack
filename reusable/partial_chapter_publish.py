@@ -141,6 +141,94 @@ def _github_put_verified(engine, owner, token, path, raw):
         raise RuntimeError('GitHub partial panel upload did not become visible: '+path)
 
 
+
+# Keep this remote recovery generic: a verified incomplete panel must survive
+# deletion/rotation of its LOCAL checkpoint. The private GitHub copy is immutable.
+_REMOTE_PARTIAL_NAME = re.compile(r'^([0-9]{4,})-([a-f0-9]{64})\.(jpg|png|webp|gif)$')
+
+
+def _recover_remote_partial(engine, owner, token, slug, chapter, missing, local_saved):
+    """Recover already-verified private-GitHub partial pixels without source visits.
+
+    A directory listing is only a locator. Every recovered entry is downloaded
+    from the exact private repo and independently checked against Git blob SHA,
+    the SHA-256 embedded in its immutable filename, and decoded image format.
+    Local validated checkpoint bytes take precedence when they still exist.
+    Ambiguity or unreadable remote bytes aborts publication; we never replace
+    verified partial panels with placeholders on an uncertain remote read.
+    """
+    base = f'{engine.GITHUB_API}/repos/{owner}/open-reader/contents/'
+    prefix = f'partial/{slug}/{chapter}/'
+    directory = base + '/'.join(quote(p, safe='') for p in prefix.rstrip('/').split('/'))
+    response = engine.github_http('GET', directory + '?ref=main', token)
+    if response.status_code == 404:
+        return {}
+    if response.status_code != 200:
+        raise RuntimeError(f'Cannot reconcile private GitHub partial panels for {slug}/{chapter} '
+                           f'(HTTP {response.status_code}); refusing to publish placeholders')
+    entries = response.json()
+    if not isinstance(entries, list) or len(entries) >= 1000:
+        raise RuntimeError(f'Invalid/oversized GitHub partial directory for {slug}/{chapter}; '
+                           'refusing to replace previously verified partial panels')
+    candidates = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise RuntimeError('Malformed GitHub partial-directory record')
+        name = str(entry.get('name', ''))
+        m = _REMOTE_PARTIAL_NAME.fullmatch(name)
+        if not m:
+            continue   # unrelated files in a GitHub directory are not panels
+        ordinal = int(m[1])
+        if ordinal < 1 or ordinal > 2000 or name != f'{ordinal:04d}-{m[2]}.{m[3]}':
+            raise RuntimeError('Unsafe GitHub partial-panel ordinal: ' + name)
+        path = prefix + name
+        if (entry.get('type') != 'file' or entry.get('path') != path or
+                not re.fullmatch(r'[a-f0-9]{40}', str(entry.get('sha', ''))) or
+                not isinstance(entry.get('size'), int) or
+                not 32 <= entry['size'] <= MAX_PANEL_BYTES):
+            raise RuntimeError('Unverifiable GitHub partial-panel metadata: ' + path)
+        if ordinal in missing:
+            raise RuntimeError('Remote partial image conflicts with confirmed missing panel: ' + path)
+        if ordinal in local_saved:
+            # This file is already validated locally; the original write path
+            # below still checks its exact remote SHA or uploads if absent.
+            continue
+        candidates.setdefault(ordinal, []).append((path, m[2], m[3], entry))
+    recovered = {}
+    for ordinal, files in sorted(candidates.items()):
+        if len(files) != 1:
+            raise RuntimeError(f'Ambiguous immutable versions of partial panel {slug}/{chapter}/{ordinal}; '
+                               'refusing to choose incorrect pixels')
+        path, expected_hash, expected_ext, meta = files[0]
+        url = base + '/'.join(quote(p, safe='') for p in path.split('/'))
+        result = engine.github_http('GET', url + '?ref=main', token,
+                                    headers={'Accept': 'application/vnd.github.raw+json'})
+        if result.status_code != 200:
+            raise RuntimeError(f'GitHub partial image unavailable (HTTP {result.status_code}): {path}')
+        raw = result.content
+        if not isinstance(raw, bytes) or len(raw) != meta['size'] or not 32 <= len(raw) <= MAX_PANEL_BYTES:
+            raise RuntimeError('GitHub partial image length mismatch: ' + path)
+        if hashlib.sha256(raw).hexdigest() != expected_hash or _git_blob_sha(raw) != meta['sha']:
+            raise RuntimeError('GitHub partial image hash mismatch: ' + path)
+        try:
+            with Image.open(io.BytesIO(raw)) as image:
+                width, height = image.size
+                fmt = (image.format or '').upper()
+                if fmt not in EXTENSIONS or EXTENSIONS[fmt][0] != expected_ext:
+                    raise ValueError('unexpected image encoding')
+                if width < 1 or height < 1 or width * height > 100_000_000:
+                    raise ValueError('unsafe decoded image dimensions')
+                image.verify()
+        except (OSError, SyntaxError, TypeError, ValueError) as exc:
+            raise RuntimeError('Undecodable GitHub partial panel: ' + path) from exc
+        recovered[ordinal] = {
+            'url': github_streaming.route(slug, chapter, ordinal, expected_hash),
+            'width': width, 'height': height, 'sha256': expected_hash,
+            'github': {'repo': 'open-reader', 'path': path},
+        }
+    return recovered
+
+
 def publish_partial_checkpoints(root, engine, owner, token):
     """Return only panels independently verified on private GitHub.
 
@@ -159,12 +247,11 @@ def publish_partial_checkpoints(root, engine, owner, token):
         pair=(case['work_slug'],case['episode_id'])
         groups.setdefault(pair,set()).add(int(case['panel']))
     records={}
-    has_images=False
     for (slug,chapter),missing in sorted(groups.items()):
         scope=_scope_for(root,slug)
-        if scope is None:
-            continue
-        total,confirmed, saved = _checked_checkpoint(scope,slug,chapter)
+        # The locally archived comic may have been moved or its temporary
+        # checkpoint cleaned up. Private GitHub partial pixels still count.
+        total,confirmed,saved = _checked_checkpoint(scope,slug,chapter) if scope else (0,False,{})
         total=max([total,*missing])
         if total>2000:
             raise RuntimeError('Incomplete chapter has too many panel positions')
@@ -172,15 +259,20 @@ def publish_partial_checkpoints(root, engine, owner, token):
         if missing.intersection(saved):
             raise RuntimeError('Missing-source case conflicts with validated checkpoint')
         records[(slug,chapter)]={'total':total,'count_confirmed':confirmed,'images':{}}
-        has_images=has_images or bool(saved)
         records[(slug,chapter)]['_saved']=saved
-    if not has_images:
+    if not records:
         return records
     repo=engine.github_http('GET',f'{engine.GITHUB_API}/repos/{owner}/open-reader',token)
     if repo.status_code!=200 or repo.json().get('private') is not True or repo.json().get('owner',{}).get('login','').lower()!=owner.lower():
         raise RuntimeError('GitHub streaming partial panels require your existing PRIVATE open-reader repository and Contents write access')
     for (slug,chapter),row in sorted(records.items()):
         saved=row.pop('_saved')
+        missing=groups[(slug,chapter)]
+        remote=_recover_remote_partial(engine,owner,token,slug,chapter,missing,saved)
+        row['images'].update(remote)
+        if row['count_confirmed'] and any(n > row['total'] for n in remote):
+            raise RuntimeError('Remote partial panel exceeds confirmed source catalog: ' + chapter)
+        row['total']=max([row['total'],*remote.keys()])
         for ordinal,item in sorted(saved.items()):
             name=f'{ordinal:04d}-{item["sha256"]}.{item["ext"]}'
             path=f'partial/{slug}/{chapter}/{name}'
@@ -190,6 +282,7 @@ def publish_partial_checkpoints(root, engine, owner, token):
                 'width':item['width'],'height':item['height'],'sha256':item['sha256'],
                 'github':{'repo':'open-reader','path':path}}
         print(f'open-reader: partial chapter {slug}/{chapter}: '
-              f'{len(row["images"])} checkpoint images verified on GitHub; '
-              f'{row["total"]} known positions; missing slots kept as placeholders',flush=True)
+              f'{len(row["images"])} checkpoint images verified on GitHub '
+              f'({len(remote)} recovered remotely); {row["total"]} known positions; '
+              'missing slots kept as placeholders',flush=True)
     return records

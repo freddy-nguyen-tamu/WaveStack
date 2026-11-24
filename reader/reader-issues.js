@@ -14,7 +14,7 @@
   document.body.append(root);
   const q=s=>root.querySelector(s), button=q('#ri-button'), badge=q('#ri-badge'), box=q('#ri-popover');
   const list=q('#ri-list'), summary=q('#ri-summary'), login=q('#ri-login'), password=q('#ri-password'), feedback=q('#ri-feedback');
-  let lastRefresh=0, pending=null, cases=[], uploadEnabled=false;
+  let lastRefresh=0, pending=null, cases=[], uploadEnabled=false, githubUploads=false, r2Uploads=false;
   const close=()=>{box.hidden=true;button.setAttribute('aria-expanded','false');login.hidden=true;password.value='';pending=null};
   button.onclick=()=>{box.hidden=!box.hidden;button.setAttribute('aria-expanded',String(!box.hidden));if(!box.hidden)refresh(true)};
   q('#ri-close').onclick=close;
@@ -24,27 +24,63 @@
   const text=(tag,str,cl)=>{const x=document.createElement(tag);x.textContent=str;if(cl)x.className=cl;return x};
   const groupKey=c=>`${c.work_slug}\u0000${c.episode_id}`;
   const setStatus=str=>{feedback.textContent=str};
+  // Mixed formats are valid in one chapter. Keep JPEG/PNG/WebP in their
+  // original format; convert any OTHER browser-decodable raster to PNG.
+  async function normalizedPanelFile(file){
+    const mime=String(file?.type||'').toLowerCase();
+    if(['image/jpeg','image/png','image/webp'].includes(mime)){
+      // Validate actual browser decoding, not just filename or magic bytes.
+      // A truncated PNG can pass a signature check but fail every reader.
+      if(typeof createImageBitmap==='function'){
+        let decoded;
+        try{decoded=await createImageBitmap(file)}
+        catch{throw Error('This image cannot be decoded by the browser. Export a valid PNG/JPEG/WebP and retry.');}
+        try{if(!decoded.width||!decoded.height)throw Error('Decoded image has no pixels');}
+        finally{decoded.close()}
+      }
+      return file;
+    }
+    if(mime==='image/svg+xml')throw Error('SVG is not accepted as a panel image');
+    if(!file || (mime && !mime.startsWith('image/')) || typeof createImageBitmap!=='function')
+      throw Error('This file cannot be decoded as an image by this browser');
+    let bitmap;
+    try{bitmap=await createImageBitmap(file)}
+    catch{throw Error('Browser cannot decode this image format. Convert it to PNG/JPEG/WebP before upload.');}
+    try{
+      if(!bitmap.width||!bitmap.height||bitmap.width*bitmap.height>50000000)
+        throw Error('Image dimensions exceed the safe 50-megapixel conversion limit');
+      const canvas=document.createElement('canvas');
+      canvas.width=bitmap.width;canvas.height=bitmap.height;
+      const ctx=canvas.getContext('2d');
+      if(!ctx)throw Error('Canvas decoder unavailable');
+      ctx.drawImage(bitmap,0,0);
+      const converted=await new Promise((resolve,reject)=>
+        canvas.toBlob(blob=>blob?resolve(blob):reject(Error('PNG conversion failed')),'image/png'));
+      if(converted.size>12*1024*1024)throw Error('PNG conversion exceeds 12 MiB. Resize or export a JPEG before uploading.');
+      return new File([converted],String(file.name||'replacement')+'.png',{type:'image/png'});
+    }finally{bitmap.close()}
+  }
   async function upload(c,file,secondTry=false) {
     if(!file)return;
-    // The GitHub-only homepage uploader is additive. It writes to the verified
-    // panel slot instead of the legacy R2 replacement endpoint.
-    if(window.OpenReaderGithubUpload){
-      await window.OpenReaderGithubUpload.uploadIssue(c,file);
-      return;
+    if(file.size>25*1024*1024 || file.size<32){
+      setStatus('Choose a valid image no larger than 25 MiB for conversion.');return;
     }
-    if(!['image/jpeg','image/png','image/webp'].includes(file.type) || file.size>12*1024*1024 || file.size<32) {
-      setStatus('Choose a JPEG, PNG or WebP image up to 12 MiB.');return;
-    }
-    if(!uploadEnabled){setStatus('Uploads are not configured. An administrator must enable R2 and Worker secrets.');return;}
+    if(!uploadEnabled){setStatus('Replacement uploads are not configured on the Worker.');return;}
     setStatus(`Uploading ${c.work}, ${c.episode}, panel ${c.panel}…`);
     try {
-      const r=await fetch('/api/panel-replacements/'+encodeURIComponent(c.id),{
-        method:'POST',body:file,headers:{'Content-Type':file.type,'X-Reader-Upload':'1'},credentials:'same-origin',cache:'no-store'
+      // Select precisely one backend; GitHub is preferred where available.
+      // Do not mask GitHub errors by falling back to R2.
+      const route=githubUploads ? '/api/admin/github-image/'+[
+        c.work_slug,String(c.episode_id),String(c.panel)].map(encodeURIComponent).join('/')
+        : '/api/panel-replacements/'+encodeURIComponent(c.id);
+      const body=await normalizedPanelFile(file);
+      const r=await fetch(route,{
+        method:'POST',body,headers:{'Content-Type':body.type,'X-Reader-Upload':'1'},credentials:'same-origin',cache:'no-store'
       });
       if(r.status===401 && !secondTry){pending={c,file};login.hidden=false;password.focus();setStatus('Admin sign-in required to upload replacements.');return;}
       const data=await r.json().catch(()=>({}));
       if(!r.ok)throw new Error(data.error || `Upload failed: HTTP ${r.status}`);
-      pending=null;login.hidden=true;password.value='';setStatus('Replacement saved. You may select the same panel again to overwrite it.');
+      pending=null;login.hidden=true;password.value='';setStatus(data.readback_verified?'Replacement saved and independently verified; open chapter updates automatically.':'Replacement saved. Open chapter will check for the new image.');
       await refresh(true);
     } catch(err){setStatus(String(err?.message||err));}
   }
@@ -110,12 +146,12 @@
            ' · confirmed original placeholder');
         const display=text('span','Panel '+ordinal+reason,'ri-panel-label');
         line.append(display);
-        const chooser=document.createElement('input');chooser.type='file';chooser.accept='image/jpeg,image/png,image/webp';chooser.hidden=true;
+        const chooser=document.createElement('input');chooser.type='file';chooser.accept='image/*';chooser.hidden=true;
         chooser.setAttribute('aria-label',`Replacement image for ${c.work} ${c.episode} panel ${c.panel}`);
         chooser.onchange=()=>{const file=chooser.files?.[0];if(file)upload(c,file);chooser.value=''};
         const action=text('button',c.replacement_present?'Replace again':'Upload replacement','ri-upload');action.type='button';
         action.disabled=!uploadEnabled;
-        action.title=uploadEnabled?'Upload a verified replacement':'Administrator must enable R2 and Worker secrets';
+        action.title=uploadEnabled ? (githubUploads?'Upload a verified replacement to private GitHub':'Upload a verified replacement to R2') : 'Administrator must configure storage and sign-in';
         action.onclick=()=>chooser.click();
         line.append(action,chooser);group.append(line);
       }
@@ -131,7 +167,16 @@
       if(!response.ok)throw new Error('Issue feed unavailable (HTTP '+response.status+')');
       const feed=await response.json();
       if(feed.schema!=='comicarchiver.source_issue_feed.v1'||!Array.isArray(feed.cases))throw new Error('Invalid source issue feed');
-      uploadEnabled=Boolean(feed.upload_enabled);
+      // The feed's upload_enabled flag is not an R2 capability check.
+      // Keep issues visible if health temporarily cannot be queried.
+      let health=null;
+      try {
+        const healthResponse=await fetch('/api/reader-health',{cache:'no-store',credentials:'same-origin'});
+        if(healthResponse.ok) health=await healthResponse.json();
+      } catch (_) { /* health diagnostics are best effort */ }
+      githubUploads=health?.github_streaming_configured===true;
+      r2Uploads=health?.storage_configured===true;
+      uploadEnabled=Boolean(feed.upload_enabled)&&(githubUploads||r2Uploads);
       draw(feed.cases.filter(c=>c && c.status==='source_server_unavailable' && typeof c.work==='string' && typeof c.work_slug==='string' && typeof c.episode_id==='string' && Number.isInteger(c.panel) && c.panel>0 && /^[a-f0-9]{20}$/.test(c.id)));
     }catch(err){summary.textContent=String(err?.message||err)}
   }

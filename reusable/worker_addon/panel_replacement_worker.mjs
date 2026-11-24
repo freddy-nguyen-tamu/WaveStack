@@ -156,8 +156,13 @@ async function decorateManifest(req,env) {
     const object=await env.PANEL_REPLACEMENTS.head('panels/'+c.id);
     if(!object)continue;
     // Only override the missing panel's exact original slot, never a neighboring image.
-    chapter.images[i]={...chapter.images[i],url:'/api/panel-replacements/'+c.id+'?v='+esc(object.customMetadata?.sha256||'new'),
+    const repaired={...chapter.images[i],url:'/api/panel-replacements/'+c.id+'?v='+esc(object.customMetadata?.sha256||'new'),
       sha256:object.customMetadata?.sha256||chapter.images[i].sha256};
+    // A replacement is an image, not a placeholder. Preserve every other
+    // slot and its metadata, but clear the original missing-only flags.
+    delete repaired.placeholder;
+    delete repaired.confirmed_missing;
+    chapter.images[i]=repaired;
     changed++;
   }
   return changed ? json(m,200,{'Cache-Control':'no-store'}) : original;
@@ -233,7 +238,21 @@ async function gh(env, method, repo, path, {accept='application/vnd.github+json'
 async function githubFile(env, repo, path) {
   const response=await gh(env,'GET',repo,path,{accept:'application/vnd.github.raw+json'});
   if(!response.ok)return {status:response.status};
-  const body=new Uint8Array(await response.arrayBuffer());
+  let body=new Uint8Array(await response.arrayBuffer());
+  // GitHub Contents can return JSON metadata even when a raw-image media
+  // type was requested. Decode only a bounded, validated file response.
+  if(!guessMime(body) && /application\/json/i.test(response.headers.get('Content-Type')||'')) {
+    let meta;
+    try {meta=JSON.parse(new TextDecoder().decode(body));} catch {meta=null}
+    if(meta?.type==='file' && meta.encoding==='base64' &&
+       typeof meta.content==='string' && meta.content.length<36*1024*1024 &&
+       Number(meta.size)<=25*1024*1024 && Number(meta.size)>=0) {
+      try {
+        const binary=atob(meta.content.replace(/\s+/g,''));
+        body=Uint8Array.from(binary,x=>x.charCodeAt(0));
+      }catch{return {status:502}}
+    }
+  }
   return {status:200,body};
 }
 async function shaHex(bytes) {return toHex(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)));}
@@ -369,7 +388,18 @@ async function uploadGithubImage(req,env,slug,chapter,index){
   if(!bytes || bytes.length<32 || !images[mime](bytes))return error('Invalid or oversized image',415);
   try{
     const record=await addOverride(env,slug,chapter,index,bytes,mime);
-    return json({ok:true,slug,chapter,index,sha256:record.sha,stored_in:'private GitHub open-reader repository'});
+    // Upload success requires independent READ-BACK through the same storage
+    // layer as a reader request. An index commit alone is not proof that the
+    // browser can retrieve the image. Never report false success.
+    const checked=await githubFile(env,'open-reader',record.path);
+    if(checked.status!==200 || guessMime(checked.body)!==mime ||
+       await shaHex(checked.body)!==record.sha)
+      return error('Replacement stored but read-back verification failed; do not treat this panel as repaired',502);
+    const effective=await readCurrent(req,env,slug,chapter,index,loc);
+    if(effective.sha!==record.sha || effective.src?.path!==record.path)
+      return error('Replacement stored but active reader index does not expose the verified image yet',503);
+    return json({ok:true,slug,chapter,index,sha256:record.sha,
+      readback_verified:true,stored_in:'private GitHub open-reader repository'});
   }catch(e){return error('GitHub upload failed; original images were not altered: '+e.message,502)}
 }
 async function overlayGithubManifest(req,env){
@@ -379,8 +409,18 @@ async function overlayGithubManifest(req,env){
   try{manifest=await original.clone().json()}catch{return original}
   if(!Array.isArray(manifest?.chapters))return original;
   const slug=new URL(req.url).pathname.split('/')[2];
+  // OPEN_READER_ORDERED_REPAIR_MANIFEST_V2
+  // On an explicit chapter entry, a placeholder's uploaded replacement must
+  // be resolved BEFORE its ordered image queue starts. A single fresh index
+  // read is allowed ONLY if this chapter's static manifest contains missing
+  // slots. Finished chapters continue using the ordinary memoized index.
+  const repairHint=new URL(req.url).searchParams.get('refresh-repairs-for');
+  const checkRepair=typeof repairHint==='string' &&
+    /^[A-Za-z0-9_.-]{1,160}$/.test(repairHint) &&
+    manifest.chapters.some(ch=>String(ch.id)===repairHint &&
+      ch.images?.some(image=>image?.placeholder===true));
   let overrides;
-  try{overrides=await getOverrides(env)}catch{return error('Image override index unavailable',503)}
+  try{overrides=await getOverrides(env,checkRepair)}catch{return error('Image override index unavailable',503)}
   let changed=false;
   for(const ch of manifest.chapters){
     for(let i=0;i<(ch.images||[]).length;i++){

@@ -171,4 +171,69 @@
     },440)}
   },{passive:true});
   document.addEventListener('touchcancel',()=>{touch=null;resetTaps()},{passive:true});
+
+  // A chapter is rendered from one manifest snapshot. If a missing panel is
+  // repaired in another tab later, the old snapshot MUST NOT be permanent.
+  // Only the ACTIVE chapter is checked, and only its unavailable slots are
+  // fetched. Do not cause an adjacent chapter request or scroll jump.
+  const repairedInFlight=new Set();
+  let repairCheckBusy=false;
+  async function refreshCurrentChapterRepairs(){
+    if(document.hidden || repairCheckBusy || !chapter || !known.length ||
+       (typeof chapterSequentialQueueComplete!=='undefined' && !chapterSequentialQueueComplete))return;
+    const figures=[...pages.children].filter(el=>el.tagName==='FIGURE');
+    if(figures.length!==known.length)return;
+    const broken=known.some((entry,i)=>entry.placeholder || figures[i].classList.contains('or-missing-panel'));
+    if(!broken)return;
+    repairCheckBusy=true;
+    try{
+      const response=await fetch('./manifest.json?repair-check='+Date.now(),{cache:'no-store'});
+      if(!response.ok)return;
+      const fresh=await response.json();
+      const row=fresh?.chapters?.find(c=>String(c.id)===String(chapter.id));
+      if(!row || row.images?.length!==known.length)return;
+      for(let i=0;i<known.length;i++){
+        const entry=known[i], target=figures[i], item=row.images[i];
+        if(!item || item.placeholder===true || typeof item.url!=='string' ||
+           !(entry.placeholder || target.classList.contains('or-missing-panel')) ||
+           repairedInFlight.has(i))continue;
+        let link;
+        try{link=new URL(item.url,location.href)}catch{continue}
+        if(link.origin!==location.origin ||
+           !/^\/api\/(?:github-image\/[a-z0-9-]+\/[A-Za-z0-9_.-]+\/[1-9][0-9]*|panel-replacements\/[a-f0-9]{20})$/.test(link.pathname))continue;
+        repairedInFlight.add(i);
+        const im=new Image();im.alt='';im.decoding='async';im.loading='eager';
+        im.onload=async()=>{
+          try {
+            if(im.decode)await im.decode().catch(()=>{});
+            if(!target.isConnected || !chapter || String(chapter.id)!==String(row.id))return;
+            const width=im.naturalWidth||Number(item.width)||1;
+            const height=im.naturalHeight||Number(item.height)||1;
+            im.width=width;im.height=height;
+            target.style.aspectRatio=`${width}/${height}`;
+            target.classList.remove('or-missing-panel');
+            target.removeAttribute('role');target.removeAttribute('aria-label');
+            target.removeAttribute('title');
+            target.replaceChildren(im);
+            known[i]={status:'loaded',el:im,url:link.href,order:i};
+            chapter.images[i]=item;
+            console.info('OPEN_READER_REPAIR_DISPLAYED',chapter.id,i+1,link.pathname);
+          }finally{repairedInFlight.delete(i)}
+        };
+        im.onerror=()=>{
+          console.warn('OPEN_READER_REPAIR_IMAGE_UNAVAILABLE',chapter.id,i+1,link.pathname);
+          repairedInFlight.delete(i);
+        };
+        im.src=link.href;
+      }
+    }catch(error){console.warn('OPEN_READER_REPAIR_CHECK_FAILED',String(error))}
+    finally {repairCheckBusy=false}
+  }
+  if(typeof setInterval==='function')setInterval(refreshCurrentChapterRepairs,20000);
+  document.addEventListener('visibilitychange',()=>{
+    if(!document.hidden)refreshCurrentChapterRepairs();
+  });
+  window.addEventListener('focus',refreshCurrentChapterRepairs);
+  // The first check also handles a chapter tab opened before an upload.
+  setTimeout(refreshCurrentChapterRepairs,1000);
 }
