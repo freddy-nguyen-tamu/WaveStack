@@ -44,5 +44,32 @@ vm.runInContext('state={tabId:12}',ctx);
   const notDecoded=await vm.runInContext('execute',ctx)({action:'read_loaded_blob',payload:{url:one,reader_selectors:['.reader']}});
   assert.equal(notDecoded.status,424);
   assert.equal(requested.length,2);
-  console.log('PASS: two distinct browser-held blob images, exact allowlist, undecoded remains blocked');
+  // A decoded image can survive URL.revokeObjectURL in the visible
+  // document. Only a matched, decoded image may use rendered-PNG fallback.
+  ims[0].complete=true;
+  const screenshotCalls=[];
+  vm.runInContext(`captureVisibleImage=async function(url) {
+    globalThis.screenshotCalls.push(url);
+    return {base64:'UE5H',via:'rendered-png'};
+  };`,ctx);
+  ctx.screenshotCalls=screenshotCalls;
+  ctx.fetch=async()=>{throw TypeError('Failed to fetch');};
+  const revived=await vm.runInContext('execute',ctx)({action:'read_loaded_blob',payload:{url:one,reader_selectors:['.reader']}});
+  assert.equal(revived.status,200);
+  assert.equal(revived.via,'rendered-png');
+  assert.equal(revived.headers['content-type'],'image/png');
+  assert.deepEqual(screenshotCalls,[one],'only exact decoded image captured');
+  // Missing and changed images still fail safely, without screenshot attempts.
+  ims[0].complete=false;
+  const absent=await vm.runInContext('execute',ctx)({action:'read_loaded_blob',payload:{url:one,reader_selectors:['.reader']}});
+  assert.equal(absent.status,424);
+  assert.equal(screenshotCalls.length,1);
+  ims[0].complete=true;
+  vm.runInContext(`captureVisibleImage=async function(url) { throw Error('screenshot unavailable'); };`,ctx);
+  const failed=await vm.runInContext('execute',ctx)({action:'read_loaded_blob',payload:{url:one,reader_selectors:['.reader']}});
+  assert.equal(failed.status,424,'screenshot failure must not mark image valid');
+  assert.match(failed.diagnostics.pixelFallbackError,/screenshot unavailable/);
+  assert.equal(revived.bridge_revision,'decoded-blob-fallback-diagnostics-v1');
+  assert.equal(failed.bridge_revision,'decoded-blob-fallback-diagnostics-v1');
+  console.log('PASS: original decoded blobs, revoked-blob PNG fallback, missing and failed-capture safety');
 })().catch(e=>{console.error(e);process.exitCode=1;});

@@ -9,7 +9,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://mangadex.org/chapter/*"
+        "https://manhwaread.com/manhwa/childhood-friends/*"
       ],
       "js": [
         "content.js"

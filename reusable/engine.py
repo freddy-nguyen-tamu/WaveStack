@@ -1915,10 +1915,18 @@ def _archive_run_once(db, source_html: Path | None, source_url: str | None, max_
     if stored is not None:
         event("CHAPTER_CATALOG_REUSED", total=len(stored), missing=len(remaining),
               traversal_skipped=True, lazy_scrolling_only_for_missing=True)
+        if remaining:
+            event('BROWSER_RESUME_TARGET', chapter=remaining[0].chapter_id,
+                  url=remaining[0].url, verified_skipped=len(stored)-len(remaining),
+                  old_seed_not_a_resume_target=True)
+    # Normally no pairing deadline: first-run browser login may require a
+    # human. Only a bounded recovery attempt after a *lost heartbeat* uses one.
     with source_browser_context(DATA, seed, headless=source_headless,
                                 browser=source_browser,
                                 reader_selectors=ADAPTER.READER_SELECTORS,
-                                initial_chapter_url=(remaining[0].url if remaining else seed)) as ctx:
+                                initial_chapter_url=(remaining[0].url if remaining else seed),
+                                **({'reconnect_timeout': _BRIDGE_RECOVERY_PAIR_TIMEOUT.get()}
+                                   if _BRIDGE_RECOVERY_PAIR_TIMEOUT.get() is not None else {})) as ctx:
         guard = SourceRequestGuard(
             DATA, min_interval_seconds=CONFIG.get("source_min_host_interval_seconds", 1.5),
             max_inline_wait_seconds=CONFIG.get("source_max_inline_wait_seconds", 25), emit=event)
@@ -2071,6 +2079,50 @@ def archive_run(db, source_html: Path | None, source_url: str | None, max_chapte
                                  force_rediscover=force_rediscover,
                                  skip_remote_reconcile=True,
                                  retry_server_failures=retry_server_failures)
+
+
+from contextvars import ContextVar
+
+_BRIDGE_RECOVERY_PAIR_TIMEOUT = ContextVar('comic_bridge_recovery_pair_timeout', default=None)
+_ORIGINAL_ARCHIVE_RUN = archive_run
+
+
+def archive_run(db, source_html: Path | None, source_url: str | None, max_chapters, authorized,
+                *, source_headless=None, source_browser="firefox", force_rediscover=False,
+                skip_initial_github_check=False, retry_server_failures=False):
+    """Add bounded extension transport recovery; the old archive_run is unchanged."""
+    from .browser_bridge import BrowserBridgeError
+    for reconnect_number in range(3):
+        token = _BRIDGE_RECOVERY_PAIR_TIMEOUT.set(90 if reconnect_number else None)
+        try:
+            return _ORIGINAL_ARCHIVE_RUN(
+                db, source_html, source_url, max_chapters, authorized,
+                source_headless=source_headless, source_browser=source_browser,
+                force_rediscover=force_rediscover,
+                skip_initial_github_check=skip_initial_github_check or reconnect_number > 0,
+                retry_server_failures=retry_server_failures)
+        except BrowserBridgeError as exc:
+            message = str(exc)
+            if (source_browser != 'extension' or
+                    'stopped responding during ' not in message or
+                    '(no heartbeat)' not in message):
+                raise
+            if reconnect_number >= 2:
+                raise BrowserBridgeError(
+                    'BROWSER_BRIDGE_RECONNECT_EXHAUSTED: Chrome extension lost '
+                    'heartbeats in three consecutive sessions. Stop safely; '
+                    'verified GitHub chapters and local image checkpoints '
+                    'are retained. Reload the extension and rerun run.py.') from exc
+            event('BROWSER_BRIDGE_AUTO_RECONNECT', attempt=reconnect_number + 1,
+                  reason='lost_extension_heartbeat', checkpoint_retained=True,
+                  old_verified_chapters_reused=True,
+                  old_chapter_navigation_not_replayed=True)
+            print('BROWSER_BRIDGE_AUTO_RECONNECT: lost extension heartbeat; '
+                  'reopening the first unfinished chapter from verified checkpoints '
+                  '(not the source prologue).', flush=True)
+            time.sleep(2)
+        finally:
+            _BRIDGE_RECOVERY_PAIR_TIMEOUT.reset(token)
 
 
 def source_login(db, source_html: Path | None, source_url: str | None, source_browser="firefox"):

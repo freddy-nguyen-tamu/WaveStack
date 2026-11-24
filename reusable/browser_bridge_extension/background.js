@@ -164,6 +164,9 @@ function requiresTabCapture() {
 // Do not spoof headers, alter site protections, inspect other tabs or copy cookies.
 let inspectedTabId = null;
 let inspectedReady = false;
+// Generic JavaScript-dialog policy for the extension-owned navigation.
+let dialogNavigationInFlight = false;
+let handledNavigationDialogs = 0;
 const imageRequests = new Map(); // URL -> requestId, only this tab
 const imageByRequest = new Map(); // requestId -> URL, cleared per chapter
 const imageNetworkStatus = new Map(); // Sanitized CDP Network status (DevTools equivalent), this tab only
@@ -270,6 +273,21 @@ if (chrome.debugger?.onEvent?.addListener) {
   chrome.debugger.onEvent.addListener((source, method, params={}) => {
     if (!state || source.tabId !== state.tabId || source.tabId !== inspectedTabId ||
         !inspectedReady) return;
+    // Chrome JavaScript dialogs are NOT the native form-repost warning.
+    // Never auto-accept arbitrary confirm/prompt/security dialogs.
+    if (method === 'Page.javascriptDialogOpening') {
+      const kind=String(params.type||'');
+      if ((kind==='alert' || (kind==='beforeunload' && dialogNavigationInFlight)) &&
+          handledNavigationDialogs<3) {
+        handledNavigationDialogs++;
+        cdp('Page.handleJavaScriptDialog',{accept:true}).then(()=>{
+          console.info('BROWSER_DIALOG_AUTO_ACCEPTED kind=js-'+kind);
+        }).catch(e=>console.warn('Comic Bridge dialog handler:',String(e)));
+      } else {
+        console.warn('BROWSER_DIALOG_MANUAL_ACTION_REQUIRED kind='+kind);
+      }
+      return;
+    }
     if (method === 'Network.responseReceived' && params.type === 'Image' &&
         imagePermission(params.response?.url)) {
       const url = normalizeResourceUrl(params.response.url);
@@ -809,9 +827,37 @@ async function execute(job) {
       throw Error('Decoded browser image returned no structured result');
     if (value.status===200 && (!value.base64 || value.base64.length>MAX_IMAGE_BYTES*4/3+8))
       throw Error('Decoded image result exceeds transport limit');
+    // ADDITIVE: a decoded <img> may keep displaying a browser-created blob
+    // after the source page revokes its blob URL.  MAIN-world fetch then
+    // raises TypeError despite real pixels being visible.  Keep original
+    // byte transfer as the first choice.  Only for this exact failed local
+    // blob read, reuse the existing selected-tab rendered-PNG capture, which
+    // rechecks the exact image URL and decoded state before capturing tiles.
+    // Never replace this with a cross-origin request or guessed CDN address.
+    if (value.status===424 &&
+        /^(Source document cannot read its decoded blob:|The local blob is no longer accessible)/.test(value.reason||'')) {
+      try {
+        const rendered=await captureVisibleImage(wanted);
+        if (!rendered?.base64 || rendered.base64.length>MAX_IMAGE_BYTES*4/3+8)
+          throw Error('Selected-tab rendered image returned no bounded PNG');
+        console.info('BROWSER_DECODED_BLOB_PIXEL_FALLBACK exact_image=true fidelity=rendered-png');
+        return {url:wanted,status:200,base64:rendered.base64,
+          headers:{'content-type':'image/png'},via:'rendered-png',
+          diagnostics:{blobReadFailed:true,visualProof:true},
+          bridge_revision:'decoded-blob-fallback-diagnostics-v1'};
+      } catch (error) {
+        // The existing 424 remains authoritative when screenshot recovery
+        // cannot prove the exact image. Preserve image-order/checkpoint gates.
+        return {url:wanted,status:value.status,base64:'',
+          headers:value.headers||{},via:value.via||'decoded-source-tab-blob',
+          reason:value.reason||'',
+          diagnostics:{pixelFallbackError:String(error).slice(0,320)},
+          bridge_revision:'decoded-blob-fallback-diagnostics-v1'};
+      }
+    }
     return {url:wanted,status:value.status,base64:value.base64||'',
       headers:value.headers||{},via:value.via||'decoded-source-tab-blob',
-      reason:value.reason||''};
+      reason:value.reason||'',bridge_revision:'decoded-blob-fallback-diagnostics-v1'};
   }
   if (action === 'probe') {
     // Open tabs predating extension installation need content-script injection.
@@ -1016,10 +1062,18 @@ async function autoConnect() {
     state={tabId:tab.id,port:config.port,token:config.token};
     try {
       // No debugger requirement: pixel capture is available in normal Chrome.
-      await waitContent(20000,tab.url);
-      await api('/hello',{url:(await tabInfo()).url,
+      // tabs.update may return the OLD document before the resume URL commits.
+      // Use the trusted bootstrap URL for document readiness and first /hello;
+      // otherwise a previous prologue can incorrectly claim this Python run.
+      const expectedResumeUrl=trustedStartupUrl(config.site,config.startup_url);
+      await waitContent(20000,expectedResumeUrl || tab.url);
+      const readyTab=await tabInfo();
+      if(expectedResumeUrl && canonicalPage(readyTab.url)!==canonicalPage(expectedResumeUrl))
+        throw Error('BROWSER_RESUME_TARGET_NOT_READY: managed tab is not at the requested unfinished chapter');
+      await api('/hello',{url:readyTab.url,
         bridge_protocol:'visual-transfer-2',capabilities:['probe','image','content-v2'],
-        tab_ownership:'extension-managed',tab_id:state.tabId});
+        tab_ownership:'extension-managed',tab_id:state.tabId,
+        tab_title:String((await tabInfo()).title||'').slice(0,200)});
       await storageSet({lastPort:port,selectedTabId:tab.id}).catch(()=>{});
       lastError='';
       workLoop();
@@ -1056,7 +1110,8 @@ async function workLoop() {
   polling=true;
   try {
     await api('/hello',{url:(await tabInfo()).url,bridge_protocol:'visual-transfer-2',capabilities:['probe','image','content-v2'],
-        tab_ownership:'extension-managed',tab_id:state.tabId});
+        tab_ownership:'extension-managed',tab_id:state.tabId,
+        tab_title:String((await tabInfo()).title||'').slice(0,200)});
     while (state) {
       const command=(await checkedIO(api('/next'), 'poll local Python bridge')).command;
       if (!command) {
@@ -1068,8 +1123,17 @@ async function workLoop() {
         await sleep(700);continue;
       }
       let response;
-      try {response={id:command.id,ok:true,data:await execute(command)};}
-      catch(e) {response={id:command.id,ok:false,error:String(e)};}
+      try {
+        if(command.action==='navigate') {
+          dialogNavigationInFlight=true;
+          handledNavigationDialogs=0;
+          // Best-effort: the existing debugger also observes JS dialogs.
+          try {await attachSelectedTab();}
+          catch(e) {console.debug('Managed tab JS dialog monitor unavailable:',String(e));}
+        }
+        response={id:command.id,ok:true,data:await execute(command)};
+      } catch(e) {response={id:command.id,ok:false,error:String(e)};}
+      finally {if(command.action==='navigate')dialogNavigationInFlight=false;}
       await checkedIO(api('/result',response), 'deliver local Python result');
     }
   } catch(e) {

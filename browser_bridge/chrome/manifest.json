@@ -14,9 +14,7 @@
   ],
   "host_permissions": [
     "http://127.0.0.1:18765/*",
-    "https://mangadex.org/*",
-    "https://api.mangadex.org/*",
-    "https://uploads.mangadex.org/*"
+    "https://manhwaread.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -27,7 +25,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://mangadex.org/chapter/*"
+        "https://manhwaread.com/manhwa/childhood-friends/*"
       ],
       "js": [
         "content.js"

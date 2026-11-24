@@ -239,4 +239,58 @@ class MangaDexVirtualImageRegressions(unittest.TestCase):
                 adapter.custom_page_snapshot(Bad())
 
 
+class AdapterStableImageIdentity(unittest.TestCase):
+    # When a site adapter uses stable local checkpoint IDs for browser-created
+    # blobs, the current DOM URL—not a cached, revoked UUID—must be transferred.
+    @unittest.skipUnless(__import__('site_specific.site_adapter',fromlist=['SOURCE_NAME']).SOURCE_NAME
+                         == 'manhwaread-childhood-friends',
+                         'Local-blob checkpoint fixture only applies to this adapter')
+    def test_blob_recreation_rebinds_exact_ordinal_and_preserves_png_fidelity(self):
+        import base64
+        from types import SimpleNamespace
+        from site_specific import site_adapter as a
+        first='blob:https://manhwaread.com/old-uuid'
+        current='blob:https://manhwaread.com/new-uuid'
+        called=[]
+        payload=b'valid-png-transport-test-fixture'
+        class Page:
+            url=a.DEFAULT_START_URL
+            current_src=first
+            def __init__(self):
+                self.context=SimpleNamespace(
+                    bridge=SimpleNamespace(rpc=self.rpc), request=SimpleNamespace())
+            def evaluate(self,_script):
+                return {'imgs':[{'key':'1','url':self.current_src,'loaded':True,
+                    'width':720,'height':5000,'pageY':0}],
+                    'scrollY':0,'bottom':4500,'height':5000,'viewportHeight':500}
+            def rpc(self,action,args,timeout=0):
+                called.append((action,dict(args)))
+                return {'status':200,'base64':base64.b64encode(payload).decode(),
+                  'via':'rendered-png','headers':{'content-type':'image/png'}}
+            def recover_unloaded_image(self,key,url,**kw):
+                called.append(('recover',{'key':key,'url':url,**kw}))
+                return {'loaded':True,'key':key}
+        page=Page()
+        a.after_chapter_visit(page,page.url)
+        snapshot=a.custom_page_snapshot(page)
+        url=snapshot['imgs'][0]['url']
+        self.assertEqual(snapshot['imgs'][0]['key'],'1')
+        page.current_src=current
+        result=page.context.request.get(url)
+        self.assertEqual(result.body(),payload)
+        self.assertEqual(result.capture_method,'rendered-png')
+        self.assertEqual(called[-1][1]['url'],current)
+        self.assertEqual(page.recover_unloaded_image('1',url)['loaded'],True)
+        self.assertEqual(called[-1][1]['url'],current,
+                         'recovery must use actual DOM source, not virtual checkpoint URL')
+        page.current_src='blob:https://other.invalid/forged'
+        with self.assertRaisesRegex(RuntimeError,'same-origin'):
+            page.context.request.get(url)
+        # Subsequent chapter entry must not stack recursive recovery wrappers.
+        page.current_src=current
+        a.after_chapter_visit(page,page.url)
+        a.custom_page_snapshot(page)
+        self.assertEqual(page.recover_unloaded_image('1',url)['loaded'],True)
+
+
 if __name__=='__main__':unittest.main()

@@ -255,6 +255,7 @@ _PREFLIGHT_PYTHON = (
     ('test_regression_release_v154.py', 3),
     ('test_streaming_order.py', 7),
     ('test_optimized_bridge.py', 4),
+    ('test_native_dialog_recovery.py', 3),
     ('test_image_checkpoint_resume.py', 8),
     ('test_site_separation.py', 3),
     ('test_github_fast_verification.py', 5),
@@ -269,6 +270,7 @@ _PREFLIGHT_PYTHON = (
     ('test_reader_issue_feed.py', 4),
     ('test_confirmed_source_placeholders.py', 3),
     ('test_managed_tab_recycle_resume.py', 2),
+    ('test_bridge_resume_target_and_reconnect.py', 7),
     ('test_resume_deferred_and_reader_host.py', 8),
     ('test_open_reader_bell_integration.py', 4),
     ('test_partial_chapter_streaming.py', 4),
@@ -284,12 +286,14 @@ _PREFLIGHT_JAVASCRIPT = (
     'extension_next_chapter_recovery.js',
     'extension_passive_recaptcha.js',
     'extension_auto_tab_launch.js',
+    'extension_resume_commit_race.js',
     'extension_managed_tab_isolation.js',
     'extension_recovery_transport_fallback.js',
     'extension_scroll_stability.js',
     'extension_exact_image_recovery.js',
     'extension_probe_additive_compat.js',
     'extension_blob_reader.js',
+    'extension_loaded_blob_exact.js',
     'reader_final_chapter_overview.js',
     'extension_fetch_exception_screenshot_fallback.js',
     'extension_same_url_reload.js',
@@ -427,6 +431,76 @@ def _run_preflight(*, run_tests=True) -> None:
         print('  PASS release contracts and generated extension parity', flush=True)
     except (OSError, ValueError, KeyError, SyntaxError) as exc:
         fail('missing, broken, or incompatible source file: ' + str(exc))
+
+    # Always run the short, provider-neutral regression for the live blob
+    # handler revision and exact-image fail-closed behavior. Skipping the long
+    # historical suites must not disable this required release contract.
+    required = 'test_blob_transfer_runtime_gate.py'
+    if not (ROOT / 'tests' / required).is_file():
+        fail('mandatory live-blob runtime regression missing: tests/' + required)
+    # Missing Pillow is handled by the project's existing first-run dependency
+    # bootstrap. Never block that bootstrap solely because this test needs PIL.
+    try:
+        import PIL  # noqa: F401
+    except ImportError:
+        print('  NOTE: mandatory blob test deferred until Python dependencies are installed', flush=True)
+    else:
+        try:
+            result = subprocess.run([sys.executable, '-m', 'unittest', 'discover',
+                                     '-s', 'tests', '-p', required, '-v'],
+                                    cwd=ROOT, capture_output=True, text=True,
+                                    timeout=45, encoding='utf-8', errors='replace')
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            fail('mandatory live-blob regression did not run: ' + str(exc))
+        count = re.search(r'Ran (\d+) tests?', result.stdout + result.stderr)
+        if result.returncode != 0 or not count or int(count.group(1)) < 6:
+            print((result.stdout + result.stderr)[-9000:], file=sys.stderr, flush=True)
+            fail('mandatory live-blob runtime regression failed')
+        print('  PASS mandatory live-blob runtime regression (' + count.group(1) + ' tests)', flush=True)
+
+    # Always verify the resume target and bounded reconnect policy, even when
+    # the optional historical suites were skipped for an archive-only run.
+    resume_test = 'test_bridge_resume_target_and_reconnect.py'
+    if not (ROOT / 'tests' / resume_test).is_file():
+        fail('mandatory resume/reconnect regression missing: tests/' + resume_test)
+    try:
+        resume_result = subprocess.run(
+            [sys.executable, '-m', 'unittest', 'discover', '-s', 'tests',
+             '-p', resume_test, '-v'], cwd=ROOT, capture_output=True, text=True,
+            timeout=45, encoding='utf-8', errors='replace')
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        fail('mandatory resume/reconnect tests did not complete: ' + str(exc))
+    resume_count = re.search(r'Ran (\d+) tests?',resume_result.stdout+resume_result.stderr)
+    if resume_result.returncode != 0 or not resume_count or int(resume_count.group(1)) < 7:
+        print((resume_result.stdout+resume_result.stderr)[-9000:],file=sys.stderr,flush=True)
+        fail('mandatory resume/reconnect regression failed')
+    print('  PASS mandatory resume/reconnect regressions (' + resume_count.group(1) + ' tests)',flush=True)
+
+    # Always run the short, provider-neutral regression for the live blob
+    # handler revision and exact-image fail-closed behavior. Skipping the long
+    # historical suites must not disable this required release contract.
+    required = 'test_blob_transfer_runtime_gate.py'
+    if not (ROOT / 'tests' / required).is_file():
+        fail('mandatory live-blob runtime regression missing: tests/' + required)
+    # Missing Pillow is handled by the project's existing first-run dependency
+    # bootstrap. Never block that bootstrap solely because this test needs PIL.
+    try:
+        import PIL  # noqa: F401
+    except ImportError:
+        print('  NOTE: mandatory blob test deferred until Python dependencies are installed', flush=True)
+    else:
+        try:
+            result = subprocess.run([sys.executable, '-m', 'unittest', 'discover',
+                                     '-s', 'tests', '-p', required, '-v'],
+                                    cwd=ROOT, capture_output=True, text=True,
+                                    timeout=45, encoding='utf-8', errors='replace')
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            fail('mandatory live-blob regression did not run: ' + str(exc))
+        count = re.search(r'Ran (\d+) tests?', result.stdout + result.stderr)
+        if result.returncode != 0 or not count or int(count.group(1)) < 6:
+            print((result.stdout + result.stderr)[-9000:], file=sys.stderr, flush=True)
+            fail('mandatory live-blob runtime regression failed')
+        print('  PASS mandatory live-blob runtime regression (' + count.group(1) + ' tests)', flush=True)
 
     if not run_tests:
         print('PREFLIGHT COMPATIBILITY PASSED: optional regression suites skipped by user.\n', flush=True)

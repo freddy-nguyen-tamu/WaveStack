@@ -3,7 +3,7 @@
   // Site scope is generated from the attached HTML. This extension never navigates
   // to extension-origin pages while reading and never intercepts wheel events.
   const KEY='cleanSourceComicReader.v3';
-  const readerSelectors=[".md--reader-pages"];
+  const readerSelectors=["#imagesList"];
   const findReader=()=>readerSelectors.map(s=>document.querySelector(s)).find(el=>el && el.querySelectorAll('img,[data-page]').length);
   let root=findReader();
   if(!root)return;
@@ -37,7 +37,7 @@
     root=findReader()||root;
     const images=[...root.querySelectorAll('img')];
     for(const im of images){
-      const src=["src", "data-src", "data-original"].map(a=>im.getAttribute(a)).find(Boolean)||im.currentSrc;
+      const src=["data-src", "data-lazy-src", "data-original", "src"].map(a=>im.getAttribute(a)).find(Boolean)||im.currentSrc;
       if(!src||src.startsWith('data:'))continue;
       if(!loaded.has(im)){
         loaded.set(im,false);

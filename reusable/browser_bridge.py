@@ -77,6 +77,7 @@ class LocalBridge:
         self.outdated_client = threading.Event()
         self.last_heartbeat = time.monotonic()
         self.tab_url = None
+        self.tab_title = ''  # Extension-owned Chrome tab title for native dialog isolation.
         self.server = None
         self.thread = None
         # Bound only after a protocol-valid /hello, never on an unauthenticated
@@ -248,6 +249,22 @@ class LocalBridge:
                                 'before restarting run.py.'})
                             return
                         url = bridge.validate_chapter(str(obj.get('url', '')))
+                        # A resumed run may have 18 verified chapters but its saved
+                        # source seed still names Chapter 00. Bind ONLY after the
+                        # extension reaches the first unfinished chapter. Do not
+                        # constrain later /hello calls used by tab recycling.
+                        if bridge.require_managed_tab and not bridge.ready.is_set():
+                            expected = urlsplit(bridge.initial_chapter_url)
+                            original = bridge.source
+                            if ((expected.path.rstrip('/'), expected.query) !=
+                                    (original.path.rstrip('/'), original.query)):
+                                actual = urlsplit(url)
+                                if ((actual.path.rstrip('/'), actual.query) !=
+                                        (expected.path.rstrip('/'), expected.query)):
+                                    self._send(409, {'error':
+                                        'BROWSER_RESUME_TARGET_NOT_READY: managed tab must first load the '
+                                        'requested unfinished chapter before pairing; original seed is not a resume target'})
+                                    return
                         with bridge.extension_origin_lock:
                             # Ownership begins only after validation succeeds.
                             # Locking the client also works if Chrome omits Origin.
@@ -264,6 +281,7 @@ class LocalBridge:
                                 bridge.extension_origin = origin
                         bridge.tab_id = obj.get('tab_id') if bridge.require_managed_tab else None
                         bridge.tab_url = url
+                        bridge.tab_title = str(obj.get('tab_title') or '')[:200]
                         bridge.last_heartbeat = time.monotonic()
                         bridge.ready.set()
                         self._send(200, {'ok': True, 'source': bridge.allowed_site,
@@ -296,7 +314,10 @@ class LocalBridge:
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
-    def wait_paired(self):
+    def wait_paired(self, timeout_seconds=None):
+        # Only automatic transport recovery has a pairing deadline. Ordinary
+        # first-run pairing keeps its existing unlimited human setup window.
+        started_pairing = time.monotonic()
         print('\nBROWSER EXTENSION BRIDGE — USE YOUR CURRENT NORMAL BROWSER', flush=True)
         print(f'  Local port: {self.port}', flush=True)
         print('  AUTO CONNECT: no pairing code and no chapter-by-chapter reconnect.', flush=True)
@@ -314,6 +335,13 @@ class LocalBridge:
         print('  The local listener accepts extension traffic only on 127.0.0.1.', flush=True)
         last = 0
         while not self.ready.wait(0.5):
+            if (timeout_seconds is not None and
+                    time.monotonic() - started_pairing >= timeout_seconds):
+                raise BrowserBridgeError(
+                    'BROWSER_BRIDGE_RECONNECT_TIMEOUT: extension did not pair with the '
+                    'requested unfinished chapter within the bounded recovery window. '
+                    'Verified GitHub chapters and image checkpoints remain untouched. '
+                    'Reload Comic Bridge in chrome://extensions then restart run.py.')
             if self.outdated_client.is_set():
                 raise BrowserBridgeError(
                     'OUTDATED COMIC BRIDGE EXTENSION. Python rejected its old protocol before '
@@ -342,7 +370,14 @@ class LocalBridge:
         with self.responses_lock:
             self.responses[ident] = q
         started = time.monotonic()
+        native_dialog_watcher = None
         try:
+            if action == 'navigate' and self.require_managed_tab:
+                from .native_dialogs import ManagedNativeDialogWatcher
+                # Monitor only a navigation Python requested on the extension's
+                # managed tab. The watcher is stopped when this RPC finishes.
+                native_dialog_watcher = ManagedNativeDialogWatcher(
+                    self.tab_title, timeout=min(120, (timeout or 105) + 5)).start()
             self.pending.put({'id': ident, 'action': action, 'payload': payload or {}})
             while True:
                 try:
@@ -364,6 +399,8 @@ class LocalBridge:
                 raise BrowserBridgeError(f'Browser {action} failed: {str(result.get("error", "unknown"))[:500]}')
             return result.get('data') or {}
         finally:
+            if native_dialog_watcher is not None:
+                native_dialog_watcher.close()
             with self.responses_lock:
                 self.responses.pop(ident, None)
 
@@ -568,6 +605,80 @@ class BridgeContext:
         self.bridge.close()
 
 
+# The probe validates the screenshot transport, not the separate exact-image
+# action used by checkpointed chapter downloads. A Chrome unpacked extension
+# can still be running its *old* background service worker after files change.
+# Verify the actual loaded handler for blob-backed pages BEFORE any crawling.
+BLOB_TRANSFER_HANDLER_REVISION = 'decoded-blob-fallback-diagnostics-v1'
+
+
+def verify_live_blob_transfer(bridge, proof, reader_selectors):
+    """Verify the real extension's exact-blob action, never a simulated file check.
+
+    All source-specific selectors are provided by site_adapter.py. Ordinary
+    HTTPS image readers keep their previous fast proof path unchanged.
+    """
+    image_url = str(proof.get('url') or '')
+    if not image_url.startswith('blob:'):
+        return None
+    # Recheck the blob belongs to the *same active managed tab*, not merely
+    # the same host as a past chapter or another browser tab.
+    active = urlsplit(str(bridge.tab_url or ''))
+    if active.scheme != 'https' or not active.netloc or not image_url.startswith(
+            'blob:' + active.scheme + '://' + active.netloc + '/'):
+        raise BrowserBridgeError('BROWSER_BLOB_PREFLIGHT_FAILED: blob image origin does not match the managed tab')
+    if not reader_selectors:
+        raise BrowserBridgeError('BROWSER_BLOB_PREFLIGHT_FAILED: missing adapter reader selectors')
+    try:
+        reply = bridge.rpc('read_loaded_blob', {
+            'url': image_url, 'reader_selectors': list(reader_selectors)}, timeout=80)
+    except BrowserBridgeError as exc:
+        raise BrowserBridgeError(
+            'BROWSER_BLOB_PREFLIGHT_FAILED: exact-image transfer command failed BEFORE archiving: '
+            + str(exc)[:280] + '. Verify the installed extension path and reload Comic Bridge '
+            'in chrome://extensions; restart python run.py.') from exc
+    revision = str(reply.get('bridge_revision') or '')
+    if revision != BLOB_TRANSFER_HANDLER_REVISION:
+        raise BrowserBridgeError(
+            'BROWSER_EXTENSION_STALE_RUNTIME: screenshot proof succeeded but the running '
+            'read_loaded_blob handler does NOT have the installed decoded-image fallback '
+            '(revision=' + (revision or 'ABSENT')[:90] + '). Files-on-disk parity cannot '
+            'verify an executing Chrome service worker. Reload the correct unpacked Comic Bridge '
+            'at chrome://extensions (check its installed path), then restart python run.py. '
+            'No chapter download or publication has started.')
+    if reply.get('status') != 200 or not reply.get('base64'):
+        extra = reply.get('diagnostics') or {}
+        if not isinstance(extra, dict):
+            extra = {}
+        raise BrowserBridgeError(
+            'BROWSER_BLOB_PREFLIGHT_FAILED: updated extension is running, but the original '
+            'blob read AND its rendered-image fallback could not transfer this exact decoded '
+            'panel. original_reason=' + str(reply.get('reason') or 'unknown')[:240]
+            + '; pixel_fallback_error=' + str(extra.get('pixelFallbackError') or 'not supplied')[:300]
+            + '. No chapter download or publication started.')
+    try:
+        raw = base64.b64decode(reply['base64'], validate=True)
+        from PIL import Image
+        import io
+        with Image.open(io.BytesIO(raw)) as im:
+            fmt, dimensions = im.format, im.size
+            im.verify()
+    except (ValueError, TypeError, OSError, KeyError) as exc:
+        raise BrowserBridgeError('BROWSER_BLOB_PREFLIGHT_FAILED: exact-image action returned invalid image bytes') from exc
+    if not raw or len(raw) > 20 * 1024 * 1024 or fmt not in ('PNG', 'JPEG', 'WEBP') or min(dimensions) <= 0:
+        raise BrowserBridgeError('BROWSER_BLOB_PREFLIGHT_FAILED: exact-image image size/format invalid')
+    via = str(reply.get('via') or '')
+    if via == 'rendered-png' and (fmt != 'PNG' or
+                                   str((reply.get('headers') or {}).get('content-type', '')).split(';')[0] != 'image/png'):
+        raise BrowserBridgeError('BROWSER_BLOB_PREFLIGHT_FAILED: rendered-PNG fallback is not truthful PNG bytes')
+    if reply.get('url') != image_url:
+        raise BrowserBridgeError('BROWSER_BLOB_PREFLIGHT_FAILED: exact-image action returned a different source URL')
+    print('BROWSER_BLOB_CHAPTER_TRANSFER_PROOF: PASS | '
+          + str(len(raw)) + ' bytes | ' + str(dimensions[0]) + 'x' + str(dimensions[1])
+          + ' | via=' + via + ' | live_revision=' + revision, flush=True)
+    return {'via': via, 'dimensions': dimensions, 'bytes': len(raw)}
+
+
 # Provider-independent grace for a reader that currently has no decoded image.
 # During this entire delay Python does not issue browser/extension commands.
 QUIET_READER_IMAGE_GRACE_SECONDS = 10
@@ -604,7 +715,8 @@ def _probe_with_one_quiet_image_grace(bridge, reader_selectors):
 
 @contextmanager
 def source_extension_context(data_dir: Path, source_url: str, *,
-                             adapter, reader_selectors=(), initial_chapter_url=None):
+                             adapter, reader_selectors=(), initial_chapter_url=None,
+                             reconnect_timeout=None):
     port = int(os.environ.get('COMIC_ARCHIVER_BRIDGE_PORT') or BRIDGE_PORT)
     ensure_generated_extensions(Path(__file__).resolve().parents[1], adapter, port)
     bridge = LocalBridge(source_url, reader_selectors=reader_selectors,
@@ -627,7 +739,10 @@ def source_extension_context(data_dir: Path, source_url: str, *,
         raise
     ctx = BridgeContext(bridge, reader_selectors, adapter.IMAGE_ATTRIBUTES)
     try:
-        bridge.wait_paired()
+        if reconnect_timeout is None:
+            bridge.wait_paired()
+        else:
+            bridge.wait_paired(timeout_seconds=reconnect_timeout)
         # Real transfer proof BEFORE the crawler scrolls a single chapter.
         # This transfers a decoded image across extension -> localhost -> Python,
         # validates bytes, and gives the user an on-disk artifact to inspect.
@@ -661,6 +776,9 @@ def source_extension_context(data_dir: Path, source_url: str, *,
               f'{via} | {proof}', flush=True)
         if via == 'rendered-png':
             print('IMAGE FIDELITY NOTICE: browser-rendered PNG, NOT original CDN JPEG bytes.', flush=True)
+        # ADDITIVE: also exercise the *exact action* used by chapter downloads.
+        # A stale MV3 background worker can pass 'probe' yet fail every blob.
+        verify_live_blob_transfer(bridge, result, reader_selectors)
         # A successful byte proof confirms that future chapter snapshots
         # should contain image slots. Standalone/unproven pages are untouched.
         ctx.pages[0]._expect_reader_images = True

@@ -1,380 +1,320 @@
-"""MangaDex: sole site-specific adapter; series verified from seed chapter.
+"""One-file source adapter for ManhwaRead / Childhood Friends.
 
-Chapter traversal and rendered panel filenames are verified against MangaDex's
-public API. The normal Chrome/Comic Bridge profile, state, checksums, and
-publishing infrastructure are reused unchanged. No chapter URLs are guessed.
+Evidence: site_runtime_capture_manhwaread.com_2026-11-23T14-03-35-202Z.txt.
+The site provides a complete native chapter menu and a numbered #imagesList
+reader. Its six observed prologue images are decoded, same-origin ``blob:``
+resources. The adapter does not derive image URLs from guesses, follow an
+unobserved CDN, or make second-origin image fetches.
+
+All existing reusable/browser_bridge/run.py code remains unchanged. The
+existing generic extension action ``read_loaded_blob`` supplies exact bytes
+from the already-decoded image in the selected normal Chrome tab.
 """
 from __future__ import annotations
 
-from datetime import datetime
-from decimal import Decimal, InvalidOperation
-from pathlib import Path
-from urllib.parse import urlsplit, urljoin
+import base64
 import re
-import threading
-import time
-import requests
+from urllib.parse import urljoin, urlsplit
+
 from bs4 import BeautifulSoup
 
 SOURCE_BROWSER_TRANSPORT = 'extension'
-SOURCE_NAME = 'mangadex-3f1f5eee-290d-4c66-acff-293b28ecedd4'
+SOURCE_NAME = 'manhwaread-childhood-friends'
 STATE_STORAGE_MODE = 'scoped'
-TITLE_ADAPTER_VERSION = 'mangadex-api-feed-v1-seed-3f1f5eee'
-SERIES_SLUG_HINT = ''
-DEFAULT_START_URL = 'https://mangadex.org/chapter/3f1f5eee-290d-4c66-acff-293b28ecedd4'
-ALLOWED_HOSTS = ('mangadex.org',)
-BRIDGE_IMAGE_HOSTS = ('api.mangadex.org', 'uploads.mangadex.org')
-EXTENSION_MATCHES = ('https://mangadex.org/chapter/*',)
-TITLE_SELECTORS = ('meta[property="og:title"]',)
+TITLE_ADAPTER_VERSION = 'manhwaread-childhood-friends-dom-blob-v1'
+SERIES_SLUG_HINT = 'childhood-friends'
+DEFAULT_START_URL = 'https://manhwaread.com/manhwa/childhood-friends/chapter-00-prologue/'
+ALLOWED_HOSTS = ('manhwaread.com',)
+# The captured image bytes were browser-created blobs, not direct CDN images.
+# Do not add API/advertising hosts as image extension permissions.
+BRIDGE_IMAGE_HOSTS = ()
+EXTENSION_MATCHES = ('https://manhwaread.com/manhwa/childhood-friends/*',)
+TITLE_SELECTORS = ('meta[property="og:title"]', 'title')
+# This source exposes a COMPLETE chapter menu in the initial chapter DOM.
+# The generic discovery engine's validated-catalog shortcut runs when no
+# ordinary list/navigation selectors are configured. Route the native menu
+# through custom_chapters(), which validates it before returning all links.
+# No reusable traversal, browser bridge, or publication behavior is modified.
 CHAPTER_LIST_SELECTORS = ()
-NEXT_NAV_SELECTORS = ()
+NEXT_NAV_SELECTORS = ()  # Native complete chapter menu is authoritative.
 PREV_NAV_SELECTORS = ()
 CHAPTER_MENU_SELECTORS = ()
-READER_SELECTORS = ('.md--reader-pages',)
-PAGE_TOTAL_SELECTORS = ('.md--reader-pages img',)
-IMAGE_ATTRIBUTES = ('src', 'data-src', 'data-original')
+READER_SELECTORS = ('#imagesList',)
+PAGE_TOTAL_SELECTORS = ('#imagesList .image-page[data-page]',)
+IMAGE_ATTRIBUTES = ('data-src', 'data-lazy-src', 'data-original', 'src')
 IMAGE_PLACEHOLDER_URL_MARKERS = ()
 SOURCE_CONFIRMED_MISSING_PANELS = {}
 
-_API = 'https://api.mangadex.org'
-_UUID = re.compile(r'^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$', re.I)
-_PANEL_FILE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{0,240}\.(?:png|jpe?g|webp|avif|gif)$', re.I)
-_SESSION = requests.Session()
-_SESSION.headers.update({'Accept':'application/json', 'User-Agent':'ComicArchiver/1.5.17 (+MangaDex public API; image integrity verification)'})
-_LOCK = threading.RLock()
-_LAST_API_REQUEST = 0.0
-_SEED = None
-_FEED = None
-_AT_HOME = {}
-_DOM = {}
-_IMAGE_URLS = set()
-_ALT_NAMES = {}  # chapter UUID -> dataSaver filename mapping onto canonical data order
-# COMICARCHIVER_AUTH_BLOB_TRANSFER_20261122 provider-specific exact decoded image references.
-# This is cache metadata only, never a substitute for actual image bytes.
-_DECODED_BLOBS = {}  # chapter UUID -> {verified canonical image filename: blob URL}
+_SERIES_PATH = '/manhwa/childhood-friends/'
+_CHAPTER_SLUG = re.compile(r'chapter-[a-z0-9][a-z0-9-]{0,120}\Z')
+_PAGE_INDEX = re.compile(r'(?:0|[1-9][0-9]{0,5})\Z')
+_BLOB_PREFIX = 'blob:https://manhwaread.com/'
+# This is a LOCAL identity token, never a URL to request from ManhwaRead.
+# Its chapter+ordinal identity is stable across new browser blob UUIDs and
+# preserves verified checkpoint references across interrupted runs.
+_LOCAL_PREFIX = 'https://manhwaread.com/__comicarchiver_local_blob_v1__/'
+
+# Current page's observed, decoded blob URL for each verified DOM ordinal.
+# This cache never stores pixels, site credentials, or a source CDN address.
+_ACTIVE = {'chapter': None, 'blobs': {}}
 
 
-
-def _uuid_from_url(url):
-    parsed = urlsplit(url)
-    if parsed.scheme != 'https' or parsed.hostname != 'mangadex.org':
-        raise ValueError('MangaDex chapter must use https://mangadex.org')
-    pieces = parsed.path.strip('/').split('/')
-    if len(pieces) not in (2,3) or pieces[0] != 'chapter' or not _UUID.fullmatch(pieces[1]):
-        raise ValueError('MangaDex chapter URL must contain a verified UUID: '+url)
-    if len(pieces) == 3 and (not pieces[2].isdigit() or int(pieces[2]) < 1):
-        raise ValueError('Invalid MangaDex page number')
-    return pieces[1].lower()
-
-
-def _api_json(path, *, params=None):
-    """Bounded public API access. Fail closed on 403, 429 or incomplete feeds."""
-    global _LAST_API_REQUEST
-    if not (path.startswith('/') and '://' not in path and '..' not in path):
-        raise ValueError('Unsafe MangaDex API path')
-    with _LOCK:
-        delay = max(0, .37 - (time.monotonic()-_LAST_API_REQUEST))
-        if delay: time.sleep(delay)
-        _LAST_API_REQUEST = time.monotonic()
-        response = _SESSION.get(_API+path,params=params,timeout=(10,35),allow_redirects=False)
-    if response.status_code == 429:
-        raise RuntimeError('MangaDex API rate-limited (429). Stop and retry after its Retry-After interval; no chapters skipped.')
-    if response.status_code in (401,403):
-        raise RuntimeError(f'MangaDex API access denied ({response.status_code}); not bypassing site protection')
-    if response.status_code != 200:
-        raise RuntimeError(f'MangaDex API {path} returned {response.status_code}; chapter discovery not complete')
-    data = response.json()
-    if not isinstance(data,dict) or data.get('result') != 'ok':
-        raise RuntimeError('MangaDex API returned an incomplete/invalid result')
-    return data
-
-
-def _seed_info():
-    global _SEED
-    with _LOCK:
-        if _SEED is None:
-            uid = _uuid_from_url(DEFAULT_START_URL)
-            data = _api_json('/chapter/'+uid)['data']
-            attr=data.get('attributes') or {}
-            lang=str(attr.get('translatedLanguage') or '')
-            manga=[r.get('id') for r in data.get('relationships',[]) if r.get('type') == 'manga']
-            if not manga or not _UUID.fullmatch(manga[0]) or not re.fullmatch(r'[a-z]{2}(?:-[a-z]{2})?',lang):
-                raise RuntimeError('Seed chapter has no verifiable manga and language')
-            groups={r.get('id') for r in data.get('relationships',[]) if r.get('type')=='scanlation_group'}
-            _SEED={'manga':manga[0], 'lang':lang, 'groups':frozenset(groups), 'seed':uid}
-        return _SEED
-
-
-def _numeric(label):
-    try: return Decimal(str(label))
-    except (InvalidOperation, TypeError): return None
-
-
-def _feed_chapters():
-    global _FEED
-    with _LOCK:
-        if _FEED is not None: return _FEED
-        seed = _seed_info()
-        entries=[]; offset=0; total=None; limit=100
-        while total is None or offset < total:
-            result=_api_json('/manga/'+seed['manga']+'/feed',params=[
-                ('translatedLanguage[]',seed['lang']),('order[chapter]','asc'),
-                ('limit',str(limit)),('offset',str(offset))])
-            portion=result.get('data')
-            value=result.get('total')
-            if not isinstance(portion,list) or not isinstance(value,int) or value < 1 or value > 100000:
-                raise RuntimeError('Incomplete MangaDex chapter feed metadata')
-            if total is not None and total != value:
-                raise RuntimeError('MangaDex chapter feed changed during pagination; retry next run')
-            total=value
-            if offset >= total: break
-            if not portion:
-                raise RuntimeError(f'MangaDex chapter feed ended prematurely at {offset}/{total}')
-            for ch in portion:
-                aid=ch.get('id',''); attrs=ch.get('attributes') or {}
-                relations=ch.get('relationships') or []
-                manga=[r.get('id') for r in relations if r.get('type')=='manga']
-                if not _UUID.fullmatch(str(aid)) or attrs.get('translatedLanguage') != seed['lang']:
-                    raise RuntimeError('MangaDex chapter feed contained invalid UUID or unexpected language')
-                if manga and seed['manga'] not in manga:
-                    raise RuntimeError('MangaDex feed mixed different manga IDs')
-                if attrs.get('externalUrl'): continue  # No actual MangaDex image reader.
-                grp={r.get('id') for r in relations if r.get('type')=='scanlation_group'}
-                entries.append((ch, bool(grp & seed['groups'])))
-            offset+=len(portion)
-            if offset > total: raise RuntimeError('MangaDex feed page exceeded declared total')
-        if not entries: raise RuntimeError('No MangaDex chapters in the seed language')
-        # Duplicate translations of the same logical volume/chapter: prefer the
-        # seed's scanlation group, then stable publication time/UUID. Preserve
-        # extra/unnumbered chapters by their unique actual UUIDs.
-        chosen={}
-        for chapter, preferred in entries:
-            attrs=chapter['attributes']; number=attrs.get('chapter'); volume=attrs.get('volume')
-            n=_numeric(number)
-            key=('number',str(volume or ''),str(n)) if n is not None else ('uuid',chapter['id'])
-            publish=str(attrs.get('publishAt') or attrs.get('createdAt') or '')
-            score=(0 if preferred else 1,publish,chapter['id'])
-            if key not in chosen or score < chosen[key][0]: chosen[key]=(score,chapter)
-        normalized=[entry[1] for entry in chosen.values()]
-        def sort_key(ch):
-            attr=ch['attributes']; n=_numeric(attr.get('chapter')); v=_numeric(attr.get('volume'))
-            return (0 if n is not None else 1,n if n is not None else Decimal(0),
-                    v if v is not None else Decimal(-1),str(attr.get('publishAt') or ''),ch['id'])
-        normalized.sort(key=sort_key)
-        if seed['seed'] not in [ch['id'] for ch in normalized]:
-            # Seed can be a duplicate translation for the same chapter; retain
-            # its exact selected chapter instead of silently skipping the seed.
-            matching=next((ch for ch,_ in entries if ch['id']==seed['seed']),None)
-            if matching is None: raise RuntimeError('Seed chapter is absent from the complete language-filtered feed')
-            for i,ch in enumerate(normalized):
-                a,b=matching['attributes'],ch['attributes']
-                if a.get('chapter')==b.get('chapter') and a.get('volume')==b.get('volume'):
-                    normalized[i]=matching; break
-            else: normalized.append(matching);normalized.sort(key=sort_key)
-        _FEED=tuple(normalized)
-        return _FEED
+def _chapter_slug(url: str) -> str:
+    p = urlsplit(str(url))
+    if p.scheme != 'https' or p.hostname != 'manhwaread.com' or p.port is not None or p.username or p.password:
+        raise ValueError('Chapter URL must be the observed HTTPS ManhwaRead host')
+    if p.query or p.fragment or not p.path.startswith(_SERIES_PATH):
+        raise ValueError('Unexpected chapter URL or query parameters: ' + str(url))
+    tail = p.path[len(_SERIES_PATH):].strip('/')
+    if '/' in tail or not _CHAPTER_SLUG.fullmatch(tail):
+        raise ValueError('Not a verified Childhood Friends chapter path: ' + str(url))
+    return tail
 
 
 def chapter_identity(anchor, url, label):
-    return 'mdx-' + _uuid_from_url(url)
+    # URL-derived identity does not depend on a dynamic DOM index or a guessed
+    # next-chapter number. The exact URL must occur in the source chapter list.
+    return 'mhr-childhood-friends-' + _chapter_slug(url)
 
 
 def title_from_html(soup):
-    title=soup.title.get_text(' ',strip=True) if soup.title else ''
-    match=re.search(r'\bChapter\s+[^|]+\s+-\s+(.+?)\s+-\s+MangaDex\s*$',title,re.I)
-    if match:return match.group(1).strip()
-    og=soup.select_one('meta[property="og:title"]')
-    if og and og.get('content'):return og['content'].strip()
-    if title:
-        raise RuntimeError('MangaDex page did not provide a verifiable series title; refusing an ambiguous archive')
-    return None  # Empty initial metadata is legitimate before the browser opens.
+    tag = soup.select_one('meta[property="og:title"]')
+    heading = str(tag.get('content') or '') if tag else ''
+    heading = heading or (soup.title.get_text(' ', strip=True) if soup.title else '')
+    if not heading:
+        return None  # Initial HTML is allowed to be empty before tab navigation.
+    match = re.search(r'^Reading\s+(.+?)\s+-\s+Chapter\s+[0-9]+', heading, re.I)
+    if not match or match.group(1).strip() != 'Childhood Friends':
+        raise RuntimeError('Source title is not the captured Childhood Friends work')
+    return match.group(1).strip()
 
 
-def chapter_title_from_anchor(anchor,fallback): return fallback
-
-def chapter_title_from_html(soup,fallback): return fallback
-
-def title_catalog_url(saved_url): return saved_url or DEFAULT_START_URL
-
-def accept_catalog_title(chapter_id,title):return bool(str(title).strip())
-
-def chapter_title_is_generic(label,chapter_id):return False
+def chapter_title_from_anchor(anchor, fallback):
+    label = anchor.get_text(' ', strip=True) if anchor is not None else ''
+    return label or fallback
 
 
-def custom_chapters(raw_html,page_url,chapter_class):
-    _uuid_from_url(page_url)
-    result=[]
-    for ch in _feed_chapters():
-        at=ch['attributes']; number=at.get('chapter'); volume=at.get('volume'); title=str(at.get('title') or '').strip()
-        label=('Vol. '+str(volume)+' ' if volume else '')+('Ch. '+str(number) if number else 'Special')
-        if title: label+=' - '+title
-        result.append(chapter_class('mdx-'+ch['id'], label,
-                                    'https://mangadex.org/chapter/'+ch['id']))
-    return result
+def chapter_title_from_html(soup, fallback):
+    current = soup.select_one('a.chapter-item.current')
+    label = current.get_text(' ', strip=True) if current else ''
+    return label or fallback
 
 
-class _NativeChapter:
-    def __init__(self,chapter_id,label,url):
-        self.chapter_id,self.label,self.url=chapter_id,label,url
+def _menu(raw_html, page_url, chapter_class):
+    _chapter_slug(page_url)
+    soup = BeautifulSoup(raw_html, 'html.parser')
+    entries = soup.select('a.chapter-item[href]')
+    if not entries:
+        raise RuntimeError('Native chapter catalog absent from current DOM; do not guess chapter URLs')
+    # Runtime capture on 2026-11-23 positively observed chapters 00 through 30.
+    # A shorter DOM is an incomplete snapshot, never a complete catalog.
+    if len(entries) < 31:
+        raise RuntimeError('Native chapter catalog incomplete: fewer than 31 captured links; retry after the menu finishes loading')
+    observed, urls, indexes = [], set(), set()
+    for a in entries:
+        link = urljoin(page_url, a.get('href') or '')
+        slug = _chapter_slug(link)
+        if link in urls:
+            raise RuntimeError('Duplicate chapter URL in native catalog: ' + link)
+        urls.add(link)
+        index = a.get('data-index')
+        if index is not None:
+            if not index.isdigit() or int(index) in indexes:
+                raise RuntimeError('Native chapter catalog has duplicate or invalid data-index')
+            indexes.add(int(index))
+        label = a.get_text(' ', strip=True)
+        if not label:
+            raise RuntimeError('Native chapter link has no title: ' + slug)
+        observed.append((int(index) if index is not None else None,
+                         chapter_class('mhr-childhood-friends-' + slug, label, link)))
+    # The original HTTP HTML has the complete list in reading order but no
+    # data-index; the hydrated DOM adds data-index. Preserve observed order
+    # unless *every* row has an explicit, non-duplicated native index.
+    if any(index is not None for index, _ in observed):
+        if not all(index is not None for index, _ in observed):
+            raise RuntimeError('Native chapter catalog has mixed indexed/unindexed rows; refusing partial catalog')
+        if sorted(index for index, _ in observed) != list(range(len(observed))):
+            raise RuntimeError('Native chapter catalog has missing or noncontiguous data-index values')
+        observed.sort(key=lambda row: row[0])
+    if not any(_chapter_slug(ch.url) == _chapter_slug(DEFAULT_START_URL) for _, ch in observed):
+        raise RuntimeError('Captured seed chapter is absent from the native catalog')
+    return [ch for _, ch in observed]
 
 
-def native_chapter_titles_from_catalog(raw_html,page_url):
-    return {ch.chapter_id:ch.label for ch in custom_chapters(raw_html,page_url,_NativeChapter)}
+def custom_chapters(raw_html, page_url, chapter_class):
+    # The generic engine normally uses CHAPTER_LIST_SELECTORS directly.
+    # If the list disappears from a later page, this fallback fails closed
+    # instead of assuming the currently visible chapter is the last one.
+    return _menu(raw_html, page_url, chapter_class)
 
 
-def _at_home(chapter_uuid):
-    with _LOCK:
-        if chapter_uuid in _AT_HOME: return _AT_HOME[chapter_uuid]
-        data=_api_json('/at-home/server/'+chapter_uuid)
-        node=data.get('chapter') or {}; hash_value=str(node.get('hash') or '')
-        files=node.get('data')
-        base=str(data.get('baseUrl') or '').rstrip('/')
-        parsed=urlsplit(base)
-        host=parsed.hostname or ''
-        if not (parsed.scheme=='https' and not parsed.username and not parsed.password and not parsed.query and not parsed.fragment
-                and (host=='uploads.mangadex.org' or host=='mangadex.org' or host.endswith('.mangadex.network'))):
-            raise RuntimeError('Unrecognized/untrusted MangaDex image delivery host: '+host)
-        if not re.fullmatch(r'[A-Za-z0-9]{20,128}',hash_value) or not isinstance(files,list) or not files:
-            raise RuntimeError('MangaDex chapter image manifest missing hash/page list')
-        if any(not isinstance(name,str) or not _PANEL_FILE.fullmatch(name) or '/' in name or '..' in name for name in files):
-            raise RuntimeError('MangaDex returned an unsafe image filename')
-        if len(set(files))!=len(files):raise RuntimeError('Duplicate MangaDex panel names; refusing reorder')
-        saver=node.get('dataSaver') or []
-        if saver and (not isinstance(saver,list) or len(saver)!=len(files) or
-                      len(set(saver))!=len(saver) or
-                      any(not isinstance(n,str) or not _PANEL_FILE.fullmatch(n) for n in saver)):
-            raise RuntimeError('MangaDex saver-quality panel order is invalid')
-        indices={name:i for i,name in enumerate(files)}
-        for i,name in enumerate(saver):
-            if name in indices and indices[name]!=i:
-                raise RuntimeError('Conflicting MangaDex data/saver panel identity')
-            indices[name]=i
-        _ALT_NAMES[chapter_uuid]=indices
-        urls=tuple(base+'/data/'+hash_value+'/'+name for name in files)
-        _AT_HOME[chapter_uuid]=(tuple(files),urls)
-        _IMAGE_URLS.update(urls)
-        return _AT_HOME[chapter_uuid]
+def title_catalog_url(saved_url):
+    candidate = saved_url or DEFAULT_START_URL
+    _chapter_slug(candidate)
+    return candidate
 
 
-def _http_image_get(url,headers=None,timeout=45000):
-    # Exact identity allowlist comes from this chapter's @Home manifest, never
-    # from guessed URLs or a broad CDN regex. No source browser cookies sent.
-    with _LOCK:
-        if url not in _IMAGE_URLS:
-            raise RuntimeError('Image URL not present in the verified MangaDex chapter manifest')
-    session=requests.Session()
-    response=session.get(url,headers={'Accept':'image/*','Referer':'https://mangadex.org/'},
-                         timeout=(10,max(10,float(timeout)/1000)),allow_redirects=False)
-    from reusable.browser_bridge import BrowserResponse
-    return BrowserResponse(url,response.status_code,dict(response.headers),response.content,'api-at-home')
+class _MenuChapter:
+    def __init__(self, chapter_id, label, url):
+        self.chapter_id, self.label, self.url = chapter_id, label, url
 
 
-def after_chapter_visit(page,page_url):
-    chapter=_uuid_from_url(page_url)
-    _at_home(chapter)
-    ctx=getattr(page,'context',None)
-    req=getattr(ctx,'request',None)
-    if req is None: raise RuntimeError('MangaDex adapter requires a normal browser context')
-    _DECODED_BLOBS.pop(chapter,None)
-    def get_exact_image(url,headers=None,timeout=45000):
-        # Every requested URL must be an exact member of THIS chapter's @Home
-        # manifest. The native DOM filename identifies its decoded blob.
-        names,urls=_at_home(chapter)
-        if url not in urls:
-            raise RuntimeError('Image not in current MangaDex chapter manifest')
-        native_name=names[urls.index(url)]
-        blob=_DECODED_BLOBS.get(chapter,{}).get(native_name)
-        if blob and getattr(ctx,'bridge',None):
-            try:
-                response=ctx.bridge.rpc('read_loaded_blob',{
-                    'url':blob,'reader_selectors':list(READER_SELECTORS)},timeout=45)
-                if response.get('status')==200 and response.get('base64'):
-                    import base64
-                    from reusable.browser_bridge import BrowserResponse
-                    data=base64.b64decode(response['base64'],validate=True)
-                    return BrowserResponse(url,200,response.get('headers') or {},data,
-                                           'decoded-source-tab-blob')
-            except Exception:
-                # A blob may be evicted during page hydration; fall back to the
-                # unchanged authenticated @Home URL and its ordinary integrity checks.
-                pass
-        return _http_image_get(url,headers=headers,timeout=timeout)
-    req.get=get_exact_image
-    # Generic engine still validates every returned byte using Pillow/SHA-256.
-    # HTTP fallback is a real provider request and remains request-guarded.
-    req.reuses_loaded_page_images=False
-    req._mangadex_verified_api=True
+def native_chapter_titles_from_catalog(raw_html, page_url):
+    return {c.chapter_id: c.label for c in _menu(raw_html, page_url, _MenuChapter)}
+
+
+def accept_catalog_title(chapter_id, label):
+    return (str(chapter_id).startswith('mhr-childhood-friends-chapter-')
+            and isinstance(label, str) and bool(label.strip()))
+
+
+def _local_image_url(slug: str, key: str) -> str:
+    return f'{_LOCAL_PREFIX}{slug}/page-{int(key):06d}'
+
+
+def _exact_ordinal(url: str, chapter: str) -> str:
+    if not url.startswith(_LOCAL_PREFIX):
+        raise RuntimeError('Only local image references proven by the live reader are supported')
+    suffix = url[len(_LOCAL_PREFIX):]
+    match = re.fullmatch(re.escape(chapter) + r'/page-([0-9]{6})', suffix)
+    if not match or int(match.group(1)) < 1:
+        raise RuntimeError('Unrecognized or cross-chapter image identity')
+    return str(int(match.group(1)))
+
+
+def after_chapter_visit(page, page_url):
+    slug = _chapter_slug(page_url)
+    if _chapter_slug(page.url) != slug:
+        raise RuntimeError('Selected Chrome tab is not displaying the expected chapter')
+    ctx = getattr(page, 'context', None)
+    req = getattr(ctx, 'request', None)
+    bridge = getattr(ctx, 'bridge', None)
+    if req is None or bridge is None:
+        raise RuntimeError('Childhood Friends blob images require the existing normal-Chrome Comic Bridge')
+    # Always reset on chapter entry or a reload. Never use another chapter's
+    # previous blob IDs, or bytes from an earlier browser document.
+    _ACTIVE['chapter'] = slug
+    _ACTIVE['blobs'] = {}
+
+    def read_verified_rendered_panel(url, headers=None, timeout=45000):
+        if _chapter_slug(page.url) != slug or _ACTIVE['chapter'] != slug:
+            raise RuntimeError('Reader navigated away before decoded image transfer')
+        key = _exact_ordinal(str(url), slug)
+        # Refresh the browser's *current* blob UUID immediately before
+        # transfer. Lazy readers can recreate URLs without changing the
+        # stable chapter+ordinal checkpoint identity.
+        snapshot = custom_page_snapshot(page)
+        current = next((im for im in snapshot['imgs'] if im['key'] == key), None)
+        if not current or not current['loaded'] or current['url'] != str(url):
+            raise RuntimeError('Requested panel is not decoded at its verified DOM ordinal')
+        blob_url = _ACTIVE['blobs'].get(key)
+        if not blob_url or not blob_url.startswith(_BLOB_PREFIX):
+            raise RuntimeError('Requested panel has no observed decoded blob; keep checkpoint and retry after scrolling')
+        answer = bridge.rpc('read_loaded_blob', {
+            'url': blob_url, 'reader_selectors': list(READER_SELECTORS)},
+            timeout=max(35, min(60, float(timeout)/1000 + 5)))
+        if answer.get('status') != 200 or not answer.get('base64'):
+            # Diagnostic only: retain the exact-image and checkpoint fail-closed gate.
+            # The generic bridge reports the reason its pixel fallback failed.
+            detail = answer.get('diagnostics') or {}
+            if not isinstance(detail, dict):
+                detail = {}
+            revision = str(answer.get('bridge_revision') or 'MISSING_RELOAD_EXTENSION')[:70]
+            pixel_error = str(detail.get('pixelFallbackError') or 'not reported')[:260]
+            original_error = str(answer.get('reason') or 'unavailable')[:160]
+            raise RuntimeError('Selected Chrome document could not return already-decoded panel '
+                               + key + ': ' + original_error
+                               + '; bridge_revision=' + revision
+                               + '; pixelFallbackError=' + pixel_error)
+        data = base64.b64decode(answer['base64'], validate=True)
+        if not (0 < len(data) <= 20 * 1024 * 1024):
+            raise RuntimeError('Decoded image has invalid byte length')
+        from reusable.browser_bridge import BrowserResponse
+        # Generic image_download verifies Pillow format/dimensions and SHA-256.
+        return BrowserResponse(url, 200, answer.get('headers') or {}, data,
+                               answer.get('via') or 'decoded-source-tab-blob')
+
+    req.get = read_verified_rendered_panel
+    req.reuses_loaded_page_images = True
+
+    # The generic recovery API expects the current DOM image *source* URL.
+    # Our checkpoint key is intentionally a durable local ordinal instead of
+    # an ephemeral blob UUID. Translate just at this adapter boundary, keeping
+    # the bridge's exact-current-source anti-reorder check unchanged.
+    if not hasattr(page, '_mhr_original_recover_image'):
+        page._mhr_original_recover_image = page.recover_unloaded_image
+
+    def recover_verified_ordinal(key, virtual_url, **options):
+        ordinal = _exact_ordinal(str(virtual_url), slug) if virtual_url else str(key)
+        if str(key) != ordinal:
+            raise RuntimeError('Image recovery ordinal does not match checkpoint identity')
+        snapshot = custom_page_snapshot(page)
+        current = next((im for im in snapshot['imgs'] if im['key'] == ordinal), None)
+        if current is None:
+            raise RuntimeError('Recovery ordinal is absent from the current reader')
+        actual = _ACTIVE['blobs'].get(ordinal) if current['loaded'] else ''
+        return page._mhr_original_recover_image(ordinal, actual or '', **options)
+
+    page.recover_unloaded_image = recover_verified_ordinal
 
 
 def custom_page_snapshot(page):
-    chapter=_uuid_from_url(page.url)
-    names,urls=_at_home(chapter)
-    # The fixed reusable bridge returns its real DOM snapshot for this marker.
-    # A native Playwright browser executes the full source-neutral expression.
-    info=page.evaluate('''() => { /* MutationObserver */
-      const root=document.querySelector('.md--reader-pages');
-      const imgs=[...(root?.querySelectorAll('img')||[])].map((im,i)=>({
-        key:String(i+1),url:im.currentSrc||im.src||'',
-        loaded:!!(im.complete&&im.naturalWidth&&im.naturalHeight),
-        width:im.naturalWidth||0,height:im.naturalHeight||0,
-        pageY:im.getBoundingClientRect().top+scrollY}));
+    slug = _chapter_slug(page.url)
+    if _ACTIVE['chapter'] != slug:
+        raise RuntimeError('Image snapshot requested before binding the expected chapter')
+    # The existing BridgePage.evaluate routes this source-neutral DOM scan to
+    # its already installed snapshot action, with READER_SELECTORS supplied
+    # from THIS adapter. Native Playwright uses the equivalent DOM expression.
+    result = page.evaluate('''() => { /* MutationObserver - reader DOM snapshot */
+      const root=document.querySelector('#imagesList');
+      if(!root) return {imgs:[],total:0,missingSlots:0,unloadedSlots:0,
+        readerCount:0,scrollY:scrollY||0,bottom:0,viewportHeight:innerHeight};
+      const imgs=[...root.querySelectorAll('.image-page[data-page] img.reading-image')]
+        .map(im=>{
+          const rect=im.getBoundingClientRect();
+          return {key:im.closest('[data-page]').getAttribute('data-page'),
+            url:im.currentSrc||im.getAttribute('src')||'',
+            loaded:!!(im.complete && im.naturalWidth>0 && im.naturalHeight>0),
+            width:im.naturalWidth||0,height:im.naturalHeight||0,
+            pageY:rect.top+scrollY};
+        });
       const height=Math.max(document.documentElement.scrollHeight,document.body.scrollHeight);
-      return {imgs,total:imgs.length,readerCount:imgs.length,unloadedSlots:imgs.filter(x=>!x.loaded).length,
-        scrollY:scrollY||0,bottom:Math.max(0,height-innerHeight),height,viewportHeight:innerHeight,revision:0};
+      return {imgs,total:imgs.length,readerCount:imgs.length,
+        missingSlots:imgs.filter(x=>!x.url).length,
+        unloadedSlots:imgs.filter(x=>!x.loaded).length,
+        scrollY:scrollY||0,bottom:Math.max(0,height-innerHeight),
+        viewportHeight:innerHeight,height,revision:0};
     }''')
-    if not isinstance(info,dict): raise RuntimeError('MangaDex browser returned no snapshot')
-    raw_imgs=info.get('imgs') or []
-    old=_DOM.get(chapter)
-    # Reuse native filenames while the browser DOM order/length is stable.
-    # Recheck the HTML if a lazy page has added/removed image elements.
-    if old is None or len(old)!=len(raw_imgs):
-        soup=BeautifulSoup(page.content(),'html.parser')
-        root=soup.select_one('.md--reader-pages')
-        observed=[str(im.get('alt') or '').strip() for im in root.select('img')] if root else []
-        if len(observed)!=len(raw_imgs):
-            # A script race while the reader hydrates; retry on next snapshot.
-            observed=[]
-        _DOM[chapter]=tuple(observed)
-    observed=_DOM[chapter]
-    native_seen=set(); native_order=[]
-    by_name={}
-    indices=_ALT_NAMES.get(chapter) or {n:i for i,n in enumerate(names)}
-    if observed:
-        for ix,alt in enumerate(observed):
-            if not _PANEL_FILE.fullmatch(alt):
-                raise RuntimeError('MangaDex rendered image has no exact native filename: '+alt[:100])
-            if alt in native_seen: raise RuntimeError('Duplicate rendered MangaDex image filename')
-            native_seen.add(alt);native_order.append(alt)
-            pos=indices.get(alt)
-            if pos is not None:
-                by_name[names[pos]]=raw_imgs[ix]
-                node=raw_imgs[ix]
-                source=str(node.get('url') or '')
-                if (source.startswith('blob:https://mangadex.org/') and
-                        node.get('loaded') and int(node.get('width') or 0)>0 and
-                        int(node.get('height') or 0)>0):
-                    _DECODED_BLOBS.setdefault(chapter,{})[names[pos]]=source
-        # Every native page must appear in API reading order, even if the
-        # native reader has only loaded the first subset so far.
-        positions=[indices.get(n,-1) for n in native_order]
-        if -1 in positions or positions!=sorted(positions):
-            raise RuntimeError('MangaDex DOM image order differs from verified @Home manifest')
-    if not observed:
-        # A valid API manifest alone is NOT evidence that the requested chapter
-        # rendered in the paired browser. Wait for its real reader DOM rather
-        # than archiving a login screen or an unrelated chapter.
-        return {**info,'imgs':[],'total':len(names),'readerCount':len(raw_imgs),
-                'missingSlots':len(names),'unloadedSlots':len(names)}
-    # MangaDex's API supplies the complete authoritative ORIGINAL file list and
-    # reading order. A SPA may virtualize or lazily mount only a few images in
-    # the DOM. That is not evidence those missing DOM nodes lack image bytes.
-    # Every HTTP image is verified with Pillow/SHA-256 by the generic engine.
-    entries=[]
-    for i,(name,url) in enumerate(zip(names,urls),1):
-        node=by_name.get(name)
-        entries.append({'key':str(i),'url':url,'loaded':True,
-                        'width':node.get('width',0) if node else 0,
-                        'height':node.get('height',0) if node else 0,
-                        'pageY':node.get('pageY',0) if node else 0})
-    return {**info,'imgs':entries,'total':len(entries),'readerCount':len(raw_imgs),
-            'missingSlots':0,'unloadedSlots':0}
+    if not isinstance(result, dict):
+        raise RuntimeError('Selected reader returned no structured DOM image snapshot')
+    images = result.get('imgs') or []
+    if not images:
+        raise RuntimeError('No #imagesList image slots in selected chapter; do not archive a blank/challenge page')
+    if not isinstance(images, list):
+        raise RuntimeError('Reader image slots are not a list')
+    converted = []
+    new_blobs = {}
+    for index, node in enumerate(images, 1):
+        key = str(node.get('key', '')).strip()
+        # The captured reader uses contiguous data-page ordinals starting at 1.
+        if not _PAGE_INDEX.fullmatch(key) or int(key) != index:
+            raise RuntimeError('Reader panel data-page numbering changed or was reordered')
+        loaded = node.get('loaded') is True and int(node.get('width') or 0) > 0 and int(node.get('height') or 0) > 0
+        source = str(node.get('url') or '').strip()
+        virtual_url = ''
+        if loaded:
+            if not source.startswith(_BLOB_PREFIX):
+                raise RuntimeError('Decoded panel is not a proven same-origin blob; no unverified CDN fallback')
+            new_blobs[key] = source
+            virtual_url = _local_image_url(slug, key)
+        converted.append({'key':key, 'url':virtual_url, 'loaded':loaded,
+                          'width':int(node.get('width') or 0),
+                          'height':int(node.get('height') or 0),
+                          'pageY':float(node.get('pageY') or 0)})
+    # Update only observed decoded slots. Browser-created blob UUIDs can change
+    # during lazy loading, without changing the persistent chapter+panel identity.
+    _ACTIVE['blobs'].update(new_blobs)
+    return {**result, 'imgs':converted, 'total':len(converted),
+            'readerCount':len(converted),
+            'missingSlots':sum(not im['url'] for im in converted),
+            'unloadedSlots':sum(not im['loaded'] for im in converted)}
