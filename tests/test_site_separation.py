@@ -266,7 +266,7 @@ class AdapterStableImageIdentity(unittest.TestCase):
             def rpc(self,action,args,timeout=0):
                 called.append((action,dict(args)))
                 return {'status':200,'base64':base64.b64encode(payload).decode(),
-                  'via':'rendered-png','headers':{'content-type':'image/png'}}
+                  'via':'decoded-source-img-pixels','headers':{'content-type':'image/png'}}
             def recover_unloaded_image(self,key,url,**kw):
                 called.append(('recover',{'key':key,'url':url,**kw}))
                 return {'loaded':True,'key':key}
@@ -278,7 +278,17 @@ class AdapterStableImageIdentity(unittest.TestCase):
         page.current_src=current
         result=page.context.request.get(url)
         self.assertEqual(result.body(),payload)
-        self.assertEqual(result.capture_method,'rendered-png')
+        self.assertEqual(result.capture_method,'decoded-source-img-pixels')
+        self.assertTrue(called[-1][1]['require_clean_pixels'],
+                        'adapter must disallow UI-contaminated viewport capture')
+        # Preserve the original screenshot transport for other providers, but
+        # reject it when the current adapter requires source-only pixels.
+        page.context.bridge.rpc=lambda *args,**kwargs: {
+            'status':200,'base64':base64.b64encode(payload).decode(),
+            'via':'rendered-png','headers':{'content-type':'image/png'}}
+        with self.assertRaisesRegex(RuntimeError,'Refusing screenshot-derived image'):
+            page.context.request.get(url)
+        page.context.bridge.rpc=page.rpc
         self.assertEqual(called[-1][1]['url'],current)
         self.assertEqual(page.recover_unloaded_image('1',url)['loaded'],True)
         self.assertEqual(called[-1][1]['url'],current,

@@ -71,5 +71,26 @@ vm.runInContext('state={tabId:12}',ctx);
   assert.match(failed.diagnostics.pixelFallbackError,/screenshot unavailable/);
   assert.equal(revived.bridge_revision,'decoded-blob-fallback-diagnostics-v1');
   assert.equal(failed.bridge_revision,'decoded-blob-fallback-diagnostics-v1');
+  // Direct decoded-image fallback returns source pixels, not viewport UI.
+  // A strict source never falls back to screenshots when canvas is unavailable.
+  ctx.document.createElement=tag=>{
+    assert.equal(tag,'canvas');
+    return {getContext:()=>({drawImage:im=>assert.equal(im,ims[0])}),
+      toBlob:callback=>callback({size:pixels.length,arrayBuffer:async()=>pixels.buffer})};
+  };
+  ctx.fetch=async()=>{throw TypeError('revoked blob');};
+  const clean=await vm.runInContext('execute',ctx)({action:'read_loaded_blob',
+    payload:{url:one,reader_selectors:['.reader'],require_clean_pixels:true}});
+  assert.equal(clean.status,200);
+  assert.equal(clean.via,'decoded-source-img-pixels');
+  assert.deepEqual(Buffer.from(clean.base64,'base64'),Buffer.from(pixels));
+  assert.equal(screenshotCalls.length,1,'strict image extraction never uses screenshot');
+  ctx.document.createElement=()=>({getContext:()=>({drawImage:()=>{throw Error('tainted canvas');}})});
+  const strictFailure=await vm.runInContext('execute',ctx)({action:'read_loaded_blob',
+    payload:{url:one,reader_selectors:['.reader'],require_clean_pixels:true}});
+  assert.equal(strictFailure.status,424);
+  assert.match(strictFailure.reason,/tainted canvas/);
+  assert.match(strictFailure.diagnostics.pixelFallbackError,/disallowed/);
+  assert.equal(screenshotCalls.length,1);
   console.log('PASS: original decoded blobs, revoked-blob PNG fallback, missing and failed-capture safety');
 })().catch(e=>{console.error(e);process.exitCode=1;});

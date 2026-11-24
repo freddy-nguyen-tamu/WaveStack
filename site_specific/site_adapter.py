@@ -211,7 +211,8 @@ def after_chapter_visit(page, page_url):
         if not blob_url or not blob_url.startswith(_BLOB_PREFIX):
             raise RuntimeError('Requested panel has no observed decoded blob; keep checkpoint and retry after scrolling')
         answer = bridge.rpc('read_loaded_blob', {
-            'url': blob_url, 'reader_selectors': list(READER_SELECTORS)},
+            'url': blob_url, 'reader_selectors': list(READER_SELECTORS),
+            'require_clean_pixels': True},
             timeout=max(35, min(60, float(timeout)/1000 + 5)))
         if answer.get('status') != 200 or not answer.get('base64'):
             # Diagnostic only: retain the exact-image and checkpoint fail-closed gate.
@@ -226,6 +227,15 @@ def after_chapter_visit(page, page_url):
                                + key + ': ' + original_error
                                + '; bridge_revision=' + revision
                                + '; pixelFallbackError=' + pixel_error)
+        # Only a decoded source image or its original blob bytes qualify.
+        # A full-tab screenshot permanently burns site navigation into pixels.
+        if answer.get('via') not in ('decoded-source-tab-blob', 'decoded-source-img-pixels'):
+            raise RuntimeError('Refusing screenshot-derived image with possible website UI overlay: '
+                               + str(answer.get('via') or 'unknown'))
+        if key == '1':
+            print('CLEAN_SOURCE_PANEL_PROOF: chapter=' + slug +
+                  ' ordinal=1 via=' + str(answer.get('via')) +
+                  ' viewport_screenshot=false', flush=True)
         data = base64.b64decode(answer['base64'], validate=True)
         if not (0 < len(data) <= 20 * 1024 * 1024):
             raise RuntimeError('Decoded image has invalid byte length')

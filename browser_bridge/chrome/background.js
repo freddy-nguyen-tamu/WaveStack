@@ -819,7 +819,39 @@ async function execute(job) {
             chunks.push(String.fromCharCode(...bytes.subarray(i,i+16384)));
           return {status:200,base64:btoa(chunks.join('')),via:'decoded-source-tab-blob',
             headers:{'content-type':result.headers.get('content-type')||'application/octet-stream'}};
-        }catch(e){return {status:424,reason:'Source document cannot read its decoded blob: '+String(e).slice(0,120)};}
+        }catch(e){
+          // ADDITIVE CLEAN PIXEL RECOVERY: the displayed HTMLImageElement can
+          // retain decoded pixels even after its blob URL is revoked. Unlike a
+          // viewport screenshot, drawImage(image) contains no overlay, toolbar,
+          // fixed header or other document UI. Same-origin canvas is required.
+          try {
+            const image=matches[0], w=image.naturalWidth, h=image.naturalHeight;
+            if(!w || !h || w*h>36000000)
+              throw Error('Decoded source image has invalid pixel dimensions');
+            const canvas=document.createElement('canvas');
+            canvas.width=w;canvas.height=h;
+            const ctx=canvas.getContext('2d',{alpha:false});
+            if(!ctx) throw Error('Decoded image canvas unavailable');
+            ctx.drawImage(image,0,0,w,h);
+            const blob=await new Promise((resolve,reject)=>{
+              try {canvas.toBlob(b=>b?resolve(b):reject(Error('Decoded image PNG encoder returned no blob')),'image/png');}
+              catch(error){reject(error);}
+            });
+            if(!blob || !blob.size || blob.size>20*1024*1024)
+              throw Error('Decoded image PNG exceeds transfer bounds');
+            const bytes=new Uint8Array(await blob.arrayBuffer());
+            const chunks=[];
+            for(let i=0;i<bytes.length;i+=16384)
+              chunks.push(String.fromCharCode(...bytes.subarray(i,i+16384)));
+            return {status:200,base64:btoa(chunks.join('')),
+              via:'decoded-source-img-pixels',
+              headers:{'content-type':'image/png'},
+              width:w,height:h};
+          }catch(pixelError){
+            return {status:424,reason:'Source document cannot read its decoded blob: '+String(e).slice(0,120)+
+              '; clean decoded-image canvas failed: '+String(pixelError).slice(0,180)};
+          }
+        }
       },args:[wanted,roots,origin]
     }), 'read exact decoded image from managed browser tab',35000);
     const value=raw?.[0]?.result;
@@ -836,6 +868,14 @@ async function execute(job) {
     // Never replace this with a cross-origin request or guessed CDN address.
     if (value.status===424 &&
         /^(Source document cannot read its decoded blob:|The local blob is no longer accessible)/.test(value.reason||'')) {
+      // A source adapter may require strict panel pixels. Other providers retain
+      // the original screenshot fallback unchanged. Never certify page UI as art.
+      if (payload?.require_clean_pixels === true) {
+        return {url:wanted,status:424,base64:'',reason:value.reason||'Clean panel pixels unavailable',
+          via:value.via||'decoded-source-tab-blob',headers:value.headers||{},
+          diagnostics:{pixelFallbackError:'viewport screenshot disallowed by strict adapter'},
+          bridge_revision:'decoded-blob-fallback-diagnostics-v1'};
+      }
       try {
         const rendered=await captureVisibleImage(wanted);
         if (!rendered?.base64 || rendered.base64.length>MAX_IMAGE_BYTES*4/3+8)
