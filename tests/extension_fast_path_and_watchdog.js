@@ -34,6 +34,8 @@ vm.runInContext(source+'\nstate={tabId:7};globalThis.__test={send,checkedIO,exec
   assert.equal(fallback.type,'PING');assert.equal(injection,1);
   await assert.rejects(sandbox.__test.checkedIO(new Promise(()=>{}),'unresponsive browser'),/stalled.*unresponsive browser/);
   receiverMissing=false;blockReceiver=true;
-  await assert.rejects(sandbox.__test.execute({action:'scroll',payload:{}}),/stalled.*scroll page command/);
+  // This mock returns a PING-shaped response to the new scroll command.
+  // It must fail receipt validation rather than invent successful movement.
+  await assert.rejects(sandbox.__test.execute({action:'scroll',payload:{}}),/SCROLL_UNVERIFIED/);
   console.log('PASS live-tab fast path, navigation-safe receiver fallback, hung browser API watchdog');
 })().then(()=>process.exit(0)).catch(error=>{console.error(error);process.exit(1)});

@@ -34,7 +34,7 @@ class BrowserBridgeError(RuntimeError):
 
 
 class BrowserManagedTabRecycled(BrowserBridgeError):
-    """The extension bound a fresh managed chapter tab; restart the scan."""
+    """The managed tab transport was resynchronized; restart the scan."""
     pass
 
 
@@ -81,6 +81,8 @@ class LocalBridge:
         self.responses_lock = threading.Lock()
         self.ready = threading.Event()
         self.outdated_client = threading.Event()
+        self.outdated_reason = ''
+        self.outdated_first_seen = None
         self.last_heartbeat = time.monotonic()
         self.tab_url = None
         self.tab_title = ''  # Extension-owned Chrome tab title for native dialog isolation.
@@ -237,6 +239,8 @@ class LocalBridge:
                         # previously report connected then crash before scrolling.
                         if (obj.get('bridge_protocol') != BRIDGE_PROTOCOL or
                                 not {'probe', 'image', 'content-v2'}.issubset(set(obj.get('capabilities') or []))):
+                            bridge.outdated_reason = 'Old image-transfer protocol or missing capabilities'
+                            bridge.outdated_first_seen = bridge.outdated_first_seen or time.monotonic()
                             bridge.outdated_client.set()
                             self._send(409, {'error':
                                 'OUTDATED COMIC BRIDGE EXTENSION: the running Chrome extension does not support '
@@ -246,6 +250,8 @@ class LocalBridge:
                             return
                         if (bridge.require_startup_refresh and
                                 obj.get('startup_refresh_revision') != 1):
+                            bridge.outdated_reason = 'Missing startup_refresh_revision: 1'
+                            bridge.outdated_first_seen = bridge.outdated_first_seen or time.monotonic()
                             bridge.outdated_client.set()
                             self._send(409, {'error':
                                 'OUTDATED COMIC BRIDGE STARTUP: extension runtime has not loaded the '
@@ -258,6 +264,8 @@ class LocalBridge:
                                 not isinstance(obj.get('tab_id'), int) or
                                 isinstance(obj.get('tab_id'), bool) or
                                 obj['tab_id'] < 0):
+                            bridge.outdated_reason = 'Missing or invalid extension-managed tab identity'
+                            bridge.outdated_first_seen = bridge.outdated_first_seen or time.monotonic()
                             bridge.outdated_client.set()
                             self._send(409, {'error':
                                 'Comic Bridge extension must own the automatic chapter tab. '
@@ -300,6 +308,9 @@ class LocalBridge:
                         bridge.tab_title = str(obj.get('tab_title') or '')[:200]
                         bridge.last_heartbeat = time.monotonic()
                         bridge.ready.set()
+                        bridge.outdated_client.clear()
+                        bridge.outdated_reason = ''
+                        bridge.outdated_first_seen = None
                         self._send(200, {'ok': True, 'source': bridge.allowed_site,
                                          'bridge_protocol': BRIDGE_PROTOCOL})
                     elif self.path == '/heartbeat':
@@ -334,15 +345,15 @@ class LocalBridge:
         # Only automatic transport recovery has a pairing deadline. Ordinary
         # first-run pairing keeps its existing unlimited human setup window.
         started_pairing = time.monotonic()
-        print('\nBROWSER EXTENSION BRIDGE — USE YOUR CURRENT NORMAL BROWSER', flush=True)
+        print('\nBROWSER EXTENSION BRIDGE - USE YOUR CURRENT NORMAL BROWSER', flush=True)
         print(f'  Local port: {self.port}', flush=True)
         print('  AUTO CONNECT: no pairing code and no chapter-by-chapter reconnect.', flush=True)
         print('  Python starts normal Chrome; the extension opens its own chapter tab.', flush=True)
         print('  The installed extension connects ONLY to its managed tab.', flush=True)
         root = Path(__file__).resolve().parents[1]
-        print('  CHROME / EDGE: chrome://extensions → Developer mode → Load unpacked:',
+        print('  CHROME / EDGE: chrome://extensions -> Developer mode -> Load unpacked:',
               str(root / 'browser_bridge' / 'chrome'), flush=True)
-        print('  FIREFOX: about:debugging#/runtime/this-firefox → Load Temporary Add-on →',
+        print('  FIREFOX: about:debugging#/runtime/this-firefox -> Load Temporary Add-on ->',
               str(root / 'browser_bridge' / 'firefox' / 'manifest.json'), flush=True)
         if self.allowed_cdn:
             print('  IMPORTANT: This CDN-backed source requires Chrome/Edge (NOT Firefox).', flush=True)
@@ -359,11 +370,15 @@ class LocalBridge:
                     'Verified GitHub chapters and image checkpoints remain untouched. '
                     'Reload Comic Bridge in chrome://extensions then restart run.py.')
             if self.outdated_client.is_set():
-                raise BrowserBridgeError(
-                    'OUTDATED COMIC BRIDGE EXTENSION. Python rejected its old protocol before '
-                    'scanning any images. In Chrome → chrome://extensions REMOVE any old Comic Bridge '
-                    'entry, then Load unpacked from the printed project browser_bridge/chrome path. '
-                    'Restart python run.py; the extension will connect automatically. Leave the comic webpage tab open.')
+                # A stale worker may answer first, before its self-refresh
+                # completes. Keep rejecting its /hello; allow a NEW fully valid
+                # /hello to pair within this bounded grace window.
+                elapsed = time.monotonic() - (self.outdated_first_seen or started_pairing)
+                if elapsed >= 25:
+                    raise BrowserBridgeError(
+                        'OUTDATED COMIC BRIDGE EXTENSION: no compatible re-pair within 25s. '
+                        'Last rejected handshake: ' + (self.outdated_reason or 'unknown') +
+                        '. Reload the existing unpacked extension; do not remove it.')
             if time.monotonic() - last > 30:
                 print('Browser bridge: waiting for automatic extension connection (check extension is loaded)...', flush=True)
                 last = time.monotonic()
@@ -526,7 +541,7 @@ class BridgePage:
                 # Do not continue using the former document's DOM/order/cache.
                 if result.get('url'):
                     self.url = self.context.bridge.validate_chapter(result['url'])
-                raise BrowserManagedTabRecycled('Browser tab recycled after a stalled scroll; re-scan from checkpoint')
+                raise BrowserManagedTabRecycled('Browser transport resynchronized after a stalled scroll; re-scan from checkpoint')
             return result
         if 'return {imgs' in script or 'imgs:data' in script or 'MutationObserver' in script:
             payload = {'reader_selectors': self.context.reader_selectors,

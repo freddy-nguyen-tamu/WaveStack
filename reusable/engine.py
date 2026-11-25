@@ -1787,11 +1787,10 @@ def acquire_chapter(context, chapter: Chapter, storage: Path, config=CONFIG, gua
         save_as_scroll_reveals.server_missing_keys = server_failures
         save_as_scroll_reveals.server_network_observations = {}
         save_as_scroll_reveals.reset_after_reload = attempts.clear
-        # A Chrome tab can become unresponsive after dozens of captures. The
-        # extension replaces only its owned tab and returns a reset marker.
-        # Never retry the timed-out relative scroll: that can double-advance.
-        # Start a NEW DOM scan in the new document; per-image checkpoints and
-        # the in-memory saved dict preserve all verified work exactly once.
+        # A Chrome content channel can stall after many captures. The extension
+        # verifies the SAME owned tab and returns a reset marker. Do not repeat
+        # a timed-out relative scroll: it may have moved already. Restart the
+        # scanner using verified checkpoints, without creating/reloading tabs.
         from .browser_bridge import BrowserManagedTabRecycled
         for managed_reset in range(3):
             try:
@@ -1801,22 +1800,22 @@ def acquire_chapter(context, chapter: Chapter, storage: Path, config=CONFIG, gua
                 break
             except BrowserManagedTabRecycled:
                 if managed_reset >= 2:
-                    raise RuntimeError('Managed Chrome tab stalled repeatedly even after two automatic '
-                                       'replacements. Verified checkpoints retained; restart later.')
+                    raise RuntimeError('Managed Chrome tab transport stalled repeatedly after two same-tab '
+                                       'resynchronizations. Verified checkpoints retained; restart later.')
                 event('BROWSER_MANAGED_TAB_RECOVERED', chapter=chapter.chapter_id,
                       attempt=managed_reset+1, verified_images=len(saved),
-                      recovery='new-extension-owned-tab; restart scanner from checkpoint')
+                      recovery='same-extension-owned-tab; restart scanner from checkpoint')
                 recycled_tab_rehydrating = True
                 attempts.clear()
-                # tabs.create already navigated this NEW managed document.
-                # Do not navigate/reload a second time: that can retrigger the
-                # source challenge or stall the just-recovered Chrome tab.
+                # Do not navigate, reload or create another tab. Check the
+                # current document, which may have advanced before the lost
+                # response, and then rescan from the saved image prefix.
                 page.content()
                 if guard:
                     state = classify_browser_page(page)
                     if state in ('challenge', 'login'):
                         wait_for_manual_source_access(page, chapter.url, guard,
-                            visible=visible, reason=f'{state} after managed tab replacement')
+                            visible=visible, reason=f'{state} after managed tab resynchronization')
                 if callable(after):
                     after(page, chapter.url)
         keys = [key for key, _ in found]

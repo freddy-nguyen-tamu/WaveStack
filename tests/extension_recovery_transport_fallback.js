@@ -10,6 +10,7 @@ const bg=fs.readFileSync(path.resolve(__dirname,'../reusable/browser_bridge_exte
 const source=bg.replace('const BROWSER_IO_STALL_MS = 18000;', 'const BROWSER_IO_STALL_MS = 65;')
   .replace("action==='recover_image' ? 11000", "action==='recover_image' ? 65")
   .replace("'recover_image existing-listener fallback', 8500", "'recover_image existing-listener fallback', 65")
+  .replace("'read scroll command receipt',7000", "'read scroll command receipt',65")
   .replace('setTimeout(()=>autoConnect(),200);','// no auto connect in test');
 assert.notEqual(source,bg);
 const chapter='https://reader.example.test/story/chapter-82/';
@@ -54,10 +55,10 @@ async function scenario({receiverHangs}) {
   assert.equal(injections,1,'one scripting attempt: do not queue repeated stalled injections');
   assert.equal(recoverMessages,1,'only idempotent recovery can use the listener fallback');
   // Non-idempotent forward scroll is deliberately never resent.
-  await assert.rejects(ctx.__probe.execute({action:'scroll',payload:{}}),/stalled.*scroll page command/);
-  assert.equal(scrollMessages,1);
-  assert.equal(injections,1);
-  assert.equal(messages,2);
+  await assert.rejects(ctx.__probe.execute({action:'scroll',payload:{}}),/SCROLL_OUTCOME_UNKNOWN/);
+  assert.equal(scrollMessages,0,'forward scroll must use a single document-scoped command');
+  assert.equal(injections,5,'one scroll invocation and three read-only receipts after recovery');
+  assert.equal(messages,1);
 }
 (async()=>{
   await scenario({receiverHangs:false});

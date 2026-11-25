@@ -3,9 +3,17 @@
   // Versioned guard: a previously installed extension may have injected
   // an older content script into this tab. Upgrade without refreshing it.
   if (window.__comicBridgeContentLoadedVersion === 10 &&
+      window.__comicBridgeScrollRevision === 1 &&
       typeof window.__comicBridgeDirect === 'function') return;
   window.__comicBridgeContentLoadedVersion = 10;
   window.__comicBridgeContentLoaded = true;
+  // Document-scoped result ledger survives an in-place content script upgrade.
+  // Only the current chapter may answer status for a command; navigation loses it.
+  window.__comicBridgeScrollRevision = 1;
+  const scrollLedger = window.__comicBridgeScrollLedger || Object.create(null);
+  window.__comicBridgeScrollLedger = scrollLedger;
+  const scrollHistory = window.__comicBridgeScrollOrder || [];
+  window.__comicBridgeScrollOrder = scrollHistory;
 
   const html = () => ({url: location.href, html: '<!doctype html>\n' + document.documentElement.outerHTML});
   const classify = () => {
@@ -283,13 +291,42 @@
       window.scrollTo({top:pos,behavior:'instant'});
       return {scrollY:window.scrollY};
     }
+    if (message?.type === 'SCROLL_STATUS') {
+      // Read-only. Never issue a second relative scroll after an uncertain ACK.
+      const id=String(message.payload?.command_id||'');
+      const entry=scrollLedger[id];
+      return entry ? {...entry,scrollY:window.scrollY,url:location.href} :
+        {command_id:id,status:'unknown',url:location.href,scrollY:window.scrollY};
+    }
     if (message?.type === 'SCROLL') {
-      // Restore the previously working forward distance (85% viewport),
-      // but animate it instead of jumping the scrollbar in a single frame.
       const move=Math.max(450,Math.floor(innerHeight*.85));
-      const from=window.scrollY;
-      await moveViewportTo(from+move,210);
-      return move;
+      const id=String(message.payload?.command_id||'');
+      // Legacy callers retain their existing visible animated behavior. Only
+      // generic Python archiving sends IDs and uses the non-timer transport.
+      if (!id) {
+        const from=window.scrollY;
+        await moveViewportTo(from+move,210);
+        return move;
+      }
+      if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id))
+        return {error:'Invalid scroll command ID'};
+      if (scrollLedger[id]) {
+        const entry=scrollLedger[id];
+        return {...entry,scrollY:window.scrollY,url:location.href};
+      }
+      // Record BEFORE changing the page so any lost reply is observable.
+      // Absolute instant position avoids background-tab timer throttling and
+      // ensures this ID can never advance the page more than once.
+      const from=Number(window.scrollY)||0;
+      const target=Math.max(0,from+move);
+      const entry={command_id:id,status:'issued',from,target,move,url:location.href};
+      scrollLedger[id]=entry;
+      scrollHistory.push(id);
+      if (scrollHistory.length>128) delete scrollLedger[scrollHistory.shift()];
+      window.scrollTo({top:target,behavior:'instant'});
+      entry.status='applied';
+      entry.observed=Number(window.scrollY)||0;
+      return {...entry,scrollY:entry.observed};
     }
     if (message?.type === 'PING') return {ok:true,url:location.href,bridgeContentProtocol:6};
     return {error:'Unknown page command'};

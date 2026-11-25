@@ -46,6 +46,56 @@ class ResumeHandshakeTests(unittest.TestCase):
         # navigation and tab recycling, not pinned to the first resume target.
         self.assertEqual(hello(SEED)[0],200)
 
+    def test_stale_handshake_can_repair_without_second_run(self):
+        import threading
+        import time
+        b=LocalBridge(SEED, initial_chapter_url=SEED, port=0, require_managed_tab=True)
+        b.require_startup_refresh=True
+        b.start()
+        self.addCleanup(b.close)
+        def hello(revision):
+            payload={'url':SEED,'bridge_protocol':BRIDGE_PROTOCOL,
+                     'capabilities':['probe','image','content-v2'],
+                     'tab_ownership':'extension-managed','tab_id':7,
+                     'startup_refresh_revision':revision}
+            req=Request(f'http://127.0.0.1:{b.port}/hello',
+                        data=json.dumps(payload).encode(),method='POST',headers={
+                            'Content-Type':'application/json',
+                            'Origin':'chrome-extension://abcdef12',
+                            'X-Comic-Bridge-Client':'abcdef123456abcd',
+                            'X-Comic-Bridge-Token':b.secret})
+            try:
+                with urlopen(req,timeout=5) as response:
+                    return response.status
+            except HTTPError as exc:
+                return exc.code
+        self.assertEqual(hello(None),409)
+        result=[]
+        t=threading.Thread(target=lambda:result.append(b.wait_paired(timeout_seconds=5)),daemon=True)
+        t.start()
+        time.sleep(0.08)
+        self.assertTrue(t.is_alive())
+        self.assertEqual(hello(1),200)
+        t.join(timeout=2)
+        self.assertFalse(t.is_alive())
+        self.assertEqual(result,[None])
+        self.assertFalse(b.outdated_client.is_set())
+
+    def test_scroll_acknowledgement_not_faked_by_ping(self):
+        # Required startup gate also exercises the real extension JS protocol.
+        # This fails on the old PING-only same-tab workaround.
+        import shutil
+        import subprocess
+        from pathlib import Path
+        node=shutil.which('node')
+        test=Path(__file__).resolve().parent/'extension_scroll_receipt_recovery.js'
+        self.assertTrue(test.is_file(),'mandatory scroll receipt regression missing')
+        if not node:
+            self.skipTest('Node.js not installed; Python-first dependency bootstrap')
+        check=subprocess.run([node,str(test)],cwd=test.parent.parent,
+                             capture_output=True,text=True,timeout=12)
+        self.assertEqual(check.returncode,0,check.stdout+'\n'+check.stderr)
+
     def test_generic_extension_waits_for_requested_startup_document(self):
         from pathlib import Path
         path=Path(__file__).resolve().parents[1]/'reusable/browser_bridge_extension/background.js'

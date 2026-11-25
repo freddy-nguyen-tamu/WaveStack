@@ -37,7 +37,9 @@ async function directTabCommand(id, payload) {
         const reply=await chrome.scripting.executeScript({target,
           func: command => {
             if(window.__comicBridgeContentLoadedVersion !== 10 ||
-               typeof window.__comicBridgeDirect !== 'function')
+               typeof window.__comicBridgeDirect !== 'function' ||
+               ((command.type==='SCROLL' || command.type==='SCROLL_STATUS') &&
+                window.__comicBridgeScrollRevision !== 1))
               return {__bridgeError:'Page command transport not initialized'};
             return window.__comicBridgeDirect(command);
           },args:[payload]});
@@ -454,6 +456,7 @@ const SCREENSHOT_GAP_MS = 560; // Chrome tabs capture API rate limit; NOT used f
 // A hanging Chrome API must fail this ONE image, not block later scroll jobs.
 // This is a per-I/O inactivity watchdog, never a chapter/run time limit.
 const BROWSER_IO_STALL_MS = 18000;
+let scrollCommandSequence = 0;
 async function checkedIO(task, name, timeoutMs=BROWSER_IO_STALL_MS) {
   let timeout;
   try {
@@ -690,53 +693,53 @@ async function toBase64(bytes) {
     reader.readAsDataURL(blob);
   });
 }
-// A genuinely stalled selected-tab content channel is a LOCAL failure, never
-// permission to record a server-missing image or silently advance a chapter.
-// Recycle only the tab this extension explicitly created. Python will restart
-// the scan from per-image checkpoints; it will NOT retry a non-idempotent SCROLL.
+// Never create or close a Chrome tab to recover a stalled SCROLL. That
+// behavior used to open a duplicate chapter and could provoke native repost
+// dialogs, while discarding browser-rendered image bytes. The scroll may
+// already have executed, so do NOT send it again. Probe only the original
+// extension-owned document; Python can restart its scanner from checkpoints.
+// Keep the historical function/transport marker for existing release gates.
 async function recycleManagedChapterTab() {
-  if (!state) throw Error('No paired tab to recycle');
-  const oldId=state.tabId;
-  const old=await checkedIO(tabsGet(oldId),'inspect managed tab before recycling',5000);
-  if (!old || !sourceMatches(old.url)) throw Error('Untrusted tab cannot be recycled');
+  if (!state) throw Error('No paired tab to resynchronize');
+  const tabId=state.tabId;
+  const original=await checkedIO(tabsGet(tabId),'inspect managed tab before resynchronizing',5000);
+  if (!original || !sourceMatches(original.url))
+    throw Error('Untrusted tab cannot be resynchronized');
   const saved=await checkedIO(storageGet(['comicBridgeManagedTabId','comicBridgeManagedSite']),
-      'verify managed tab ownership',5000);
-  const hostname=new URL(old.url).hostname;
-  if (saved.comicBridgeManagedTabId!==oldId || saved.comicBridgeManagedSite!==hostname)
-    throw Error('Refusing to recycle a tab not owned by Comic Bridge');
-  let replacement=null;
-  try {
-    replacement=await checkedIO(call(chrome.tabs,'create',{url:old.url,active:true}),
-      'create new managed chapter tab',12000);
-    if (!replacement || !Number.isInteger(replacement.id) || replacement.id===oldId)
-      throw Error('Chrome did not create a distinct managed tab');
-    state.tabId=replacement.id;
-    await checkedIO(waitContent(45000,old.url),'initialize new managed chapter document',48000);
-    await checkedIO(storageSet({comicBridgeManagedTabId:replacement.id,
-      comicBridgeManagedSite:hostname,selectedTabId:replacement.id}),
-      'persist replacement managed tab',6000);
-    // Rebind the Python listener before completing the pending RPC, or its
-    // next command might be attributed to the closed old tab.
-    await checkedIO(api('/hello',{url:old.url,bridge_protocol:'visual-transfer-2',
-      capabilities:['probe','image','content-v2'],
-      tab_ownership:'extension-managed',tab_id:replacement.id}),
-      'rebind Python to replacement tab',6000);
-    clearImageMemory();
-    // Only an extension-owned tab is eligible; user's other Chrome tabs remain.
-    try {await checkedIO(call(chrome.tabs,'remove',oldId),
-      'close stalled extension-owned tab',3000);} catch(error) {
-      console.warn('Comic Bridge: old managed tab could not be closed:',String(error));
-    }
-    return {transport_reset:true,tab_id:replacement.id,url:old.url,
-      reason:'stalled selected-tab scroll transport; new managed document ready'};
-  } catch(error) {
-    state.tabId=oldId;
-    if (replacement?.id) {
-      try {await checkedIO(call(chrome.tabs,'remove',replacement.id),
-        'close unsuccessful replacement tab',2500);} catch {}
-    }
-    throw error;
+    'verify managed tab ownership',5000);
+  const hostname=new URL(original.url).hostname;
+  if (saved.comicBridgeManagedTabId!==tabId || saved.comicBridgeManagedSite!==hostname)
+    throw Error('Refusing to resynchronize a tab not owned by Comic Bridge');
+
+  const failures=[];
+  let ping;
+  // The SCROLL listener may have become unresponsive while the isolated-world
+  // one-shot command still works. PING is read-only; no reload/navigation.
+  if (chrome.scripting?.executeScript) {
+    try {
+      ping=await checkedIO(directTabCommand(tabId,{type:'PING'}),
+        'read existing document via one-shot PING',10000);
+    } catch(error) {failures.push('one-shot PING: '+String(error));}
   }
+  const validPing = reply => reply?.ok===true && reply.bridgeContentProtocol===6 &&
+    canonicalPage(reply.url)===canonicalPage(original.url) && sourceMatches(reply.url);
+  if (!validPing(ping)) {
+    if (ping) failures.push('one-shot PING did not identify the same chapter document');
+    try {
+      ping=await checkedIO(sendRaw(tabId,{type:'PING'}),
+        'read existing content listener PING',4500);
+    } catch(error) {failures.push('listener PING: '+String(error));}
+  }
+  if (!validPing(ping))
+    throw Error('Same-tab scroll transport could not be verified; no new tab, '
+      +'reload, or second SCROLL attempted. '+failures.join('; ').slice(0,250));
+  const current=await checkedIO(tabsGet(tabId),'verify existing tab after PING',5000);
+  if (!current || state.tabId!==tabId || !sourceMatches(current.url) ||
+      canonicalPage(current.url)!==canonicalPage(original.url) || current.status==='loading')
+    throw Error('Managed tab navigated while recovering; refusing unverified scroll restart');
+  console.info('COMIC_BRIDGE_SAME_TAB_RESYNCHRONIZED: tab_id='+tabId);
+  return {transport_reset:true,tab_id:tabId,url:current.url,
+    reason:'existing managed chapter document responded; restart scanner from checkpoint'};
 }
 
 async function execute(job) {
@@ -998,6 +1001,56 @@ async function execute(job) {
       'read-only source image status',3500);} catch {}
     return {url:key,network:imageNetworkStatus.get(key)||imageWebRequestStatus.get(key)||null,
       capturedOriginal:capturedImages.has(key),dom,debuggerReady:!!inspectedReady};
+  }
+  if (action === 'scroll') {
+    // A fresh command ID makes the requested relative *step* idempotent. The
+    // document records its absolute target before scrolling. An ACK timeout
+    // is not proof the page stopped moving: query this same ID read-only.
+    const tabId=state.tabId;
+    const before=await checkedIO(tabsGet(tabId),'inspect scroll owner',5000);
+    if (!before || !sourceMatches(before.url) || before.status==='loading')
+      throw Error('SCROLL_NOT_READY: current chapter tab is not ready');
+    const commandId=Date.now().toString(36)+'-'+(++scrollCommandSequence).toString(36);
+    const request={type:'SCROLL',payload:{command_id:commandId}};
+    // Firefox MV2 has no scripting.executeScript: preserve its installed
+    // content-message transport, using the SAME ID/receipt contract.
+    const dispatchScroll = command => chrome.scripting?.executeScript ?
+      directTabCommand(tabId,command) : sendRaw(tabId,command);
+    const valid = value => value?.command_id===commandId && value.status==='applied' &&
+      typeof value.move==='number' && Number.isFinite(value.move) &&
+      canonicalPage(value.url)===canonicalPage(before.url);
+    try {
+      const response=await checkedIO(dispatchScroll(request),
+        'scroll page command',BROWSER_IO_STALL_MS);
+      if (!valid(response)) throw Error('SCROLL_UNVERIFIED: page returned no matching applied command receipt');
+      return response.move;
+    } catch(error) {
+      if (!String(error).includes('Selected-tab browser API stalled: scroll page command'))
+        throw error;
+      // The first operation may still be executing. Never resend it or start
+      // a replacement tab. Inspect the original document's operation ledger.
+      for (let attempt=0;attempt<3;attempt++) {
+        let receipt;
+        try {
+          receipt=await checkedIO(dispatchScroll({type:'SCROLL_STATUS',
+            payload:{command_id:commandId}}),'read scroll command receipt',7000);
+        } catch(statusError) {
+          console.warn('COMIC_BRIDGE_SCROLL_ACK_PENDING',String(statusError).slice(0,170));
+        }
+        if (valid(receipt)) {
+          const after=await checkedIO(tabsGet(tabId),'verify scroll document',5000);
+          if (state.tabId!==tabId || canonicalPage(after.url)!==canonicalPage(before.url) ||
+              after.status==='loading') throw Error('SCROLL_DOCUMENT_CHANGED: refusing stale receipt');
+          console.info('COMIC_BRIDGE_SCROLL_ACK_RECOVERED command_id='+commandId);
+          return receipt.move;
+        }
+        if (receipt && receipt.status!=='unknown' && receipt.status!=='issued')
+          throw Error('SCROLL_OUTCOME_UNVERIFIED: unexpected command state');
+        if(attempt<2) await sleep(350);
+      }
+      throw Error('SCROLL_OUTCOME_UNKNOWN: command may have executed; no second scroll, '+
+        'tab replacement, or scanner reset is safe. Keep chapter checkpoint intact.');
+    }
   }
   const type={page:'PAGE',snapshot:'SNAPSHOT',classify:'CLASSIFY',scroll:'SCROLL',recover_image:'RECOVER_IMAGE'}[action];
   if (!type) throw Error('Unsupported command');
