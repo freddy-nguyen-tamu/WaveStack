@@ -33,6 +33,46 @@ class BrowserBridgeError(RuntimeError):
     pass
 
 
+def bridge_recovery_reason(exc):
+    """Classify only transport failures, never access, image or integrity errors."""
+    if not isinstance(exc, BrowserBridgeError):
+        return None
+    message = str(exc)
+    if 'stopped responding during ' in message and '(no heartbeat)' in message:
+        return 'lost_extension_heartbeat'
+    if message == 'Browser extension not connected':
+        return 'extension_disconnected'
+    if message.startswith('Browser scroll failed:') and 'SCROLL_NOT_READY:' in message:
+        return 'managed_tab_not_ready'
+    # The scroll ledger deliberately stops on an ambiguous relative operation.
+    # Keep its fail-closed behavior, and do not retry source/security failures.
+    if 'SCROLL_OUTCOME_UNKNOWN' in message or 'SCROLL_DOCUMENT_CHANGED' in message or 'SCROLL_UNVERIFIED' in message or 'SCROLL_OUTCOME_UNVERIFIED' in message:
+        return None
+    if message.startswith(('Browser recover_image failed:', 'Browser image failed:',
+                           'Browser snapshot failed:', 'Browser classify failed:',
+                           'Browser page failed:', 'Browser scroll failed:',
+                           'Browser probe failed:', 'Browser image_diagnostics failed:')) and 'Selected-tab browser API stalled:' in message:
+        return 'selected_tab_api_stalled'
+    if message.startswith(('Browser recover_image did not respond within ',
+                           'Browser page did not respond within ',
+                           'Browser image_diagnostics did not respond within ',
+                           'Browser probe did not respond within ')):
+        return 'browser_rpc_timeout'
+    return None
+
+
+class BrowserTransportUnavailable(BrowserBridgeError):
+    """The live managed-tab transport, not the requested image, failed."""
+    requires_bridge_reconnect = True
+
+
+def _bridge_rpc_error(message):
+    error = BrowserBridgeError(message)
+    if bridge_recovery_reason(error):
+        return BrowserTransportUnavailable(message)
+    return error
+
+
 class BrowserManagedTabRecycled(BrowserBridgeError):
     """The managed tab transport was resynchronized; restart the scan."""
     pass
@@ -395,20 +435,23 @@ class LocalBridge:
         late reply to an abandoned operation is rejected by /result.
         """
         if not self.ready.is_set():
-            raise BrowserBridgeError('Browser extension not connected')
+            raise _bridge_rpc_error('Browser extension not connected')
         ident = uuid.uuid4().hex
         q = queue.Queue(maxsize=1)
         with self.responses_lock:
             self.responses[ident] = q
         started = time.monotonic()
         native_dialog_watcher = None
+        # Fast successful image/scroll RPCs do not start PowerShell. Arm an
+        # independent watcher only for navigation or genuinely slow browser I/O.
+        # Title is the latest verified managed-document title, not the seed.
+        def arm_dialog_watcher():
+            from .native_dialogs import ManagedNativeDialogWatcher
+            return ManagedNativeDialogWatcher(
+                self.tab_title, timeout=min(120, (timeout or 105) + 5)).start()
         try:
             if action == 'navigate' and self.require_managed_tab:
-                from .native_dialogs import ManagedNativeDialogWatcher
-                # Monitor only a navigation Python requested on the extension's
-                # managed tab. The watcher is stopped when this RPC finishes.
-                native_dialog_watcher = ManagedNativeDialogWatcher(
-                    self.tab_title, timeout=min(120, (timeout or 105) + 5)).start()
+                native_dialog_watcher = arm_dialog_watcher()
             self.pending.put({'id': ident, 'action': action, 'payload': payload or {}})
             while True:
                 try:
@@ -416,19 +459,35 @@ class LocalBridge:
                     break
                 except queue.Empty as exc:
                     now = time.monotonic()
+                    if (native_dialog_watcher is None and self.require_managed_tab
+                            and action in ('scroll', 'recover_image', 'image', 'snapshot', 'page', 'classify')
+                            and now - started >= 9):
+                        native_dialog_watcher = arm_dialog_watcher()
                     if now - self.last_heartbeat > 30:
-                        raise BrowserBridgeError(
+                        raise _bridge_rpc_error(
                             f'Comic Bridge stopped responding during {action} (no heartbeat); '
                             'the extension may have been suspended or its tab closed. '
                             'Restart run.py to resume this unverified chapter.') from exc
                     # Explicit caller timeouts remain available for short UI
                     # operations; image and scroll use timeout=None.
                     if timeout is not None and now - started > timeout:
-                        raise BrowserBridgeError(
+                        raise _bridge_rpc_error(
                             f'Browser {action} did not respond within {timeout}s') from exc
             if not result.get('ok'):
-                raise BrowserBridgeError(f'Browser {action} failed: {str(result.get("error", "unknown"))[:500]}')
-            return result.get('data') or {}
+                raise _bridge_rpc_error(f'Browser {action} failed: {str(result.get("error", "unknown"))[:500]}')
+            data = result.get('data') or {}
+            if (action == 'navigate' and self.require_managed_tab
+                    and self.tab_id is not None and data.get('tab_id') == self.tab_id
+                    and isinstance(data.get('tab_title'), str)):
+                # A matching tab id is not enough: the reply must identify the
+                # exact requested chapter, after the extension's destination PING.
+                requested = urlsplit(str((payload or {}).get('url') or ''))
+                actual = urlsplit(str(data.get('url') or ''))
+                if (requested.scheme, requested.netloc, requested.path, requested.query) == (
+                        actual.scheme, actual.netloc, actual.path, actual.query):
+                    self.tab_title = data['tab_title'][:200]
+                    print('BROWSER_DIALOG_TITLE_UPDATED: '+repr(self.tab_title), flush=True)
+            return data
         finally:
             if native_dialog_watcher is not None:
                 native_dialog_watcher.close()

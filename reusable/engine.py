@@ -559,6 +559,8 @@ def scan_browser_images(page, max_steps=1500, stability=5, *, guard=None, visibl
                     try:
                         recover(key, selected.get('url') or '')
                     except Exception as exc:
+                        if getattr(exc, 'requires_bridge_reconnect', False):
+                            raise
                         event('CHAPTER_RESUME_JUMP_UNAVAILABLE', chapter=checkpoint.chapter_id,
                               first_missing=key, reason=str(exc)[:180])
                     else:
@@ -678,6 +680,8 @@ def scan_browser_images(page, max_steps=1500, stability=5, *, guard=None, visibl
                         if isinstance(seen_status, int) and 500 <= seen_status <= 599:
                             network_seen[pending_key] = seen_status
                     except Exception as exc:
+                        if getattr(exc, 'requires_bridge_reconnect', False):
+                            raise
                         event('SOURCE_IMAGE_NETWORK_DIAGNOSTICS_UNAVAILABLE',
                               image_key=pending_key,error_type=type(exc).__name__,
                               reason=str(exc)[:180])
@@ -721,6 +725,10 @@ def scan_browser_images(page, max_steps=1500, stability=5, *, guard=None, visibl
                 except SourceAccessPaused:
                     raise
                 except RuntimeError as exc:
+                    # A broken transport cannot recover the next image either.
+                    # Keep the old deferred retry for genuine per-image failures.
+                    if getattr(exc, 'requires_bridge_reconnect', False):
+                        raise
                     event('SOURCE_IMAGE_RECOVERY_DEFERRED', image_key=pending_key,
                           attempt=revisit_attempts[pending_key],
                           error_type=type(exc).__name__, reason=str(exc)[:240])
@@ -867,6 +875,8 @@ def image_download(ctx, url, dest: Path, page_url, max_tries=4, guard=None, *, p
             # Never retry a known access restriction with alternate identities.
             raise
         except Exception as exc:
+            if getattr(exc, 'requires_bridge_reconnect', False):
+                raise
             last_error = exc
             if "EXCEEDS" in str(exc) or "HTTP 403" in str(exc) or "HTTP 401" in str(exc):
                 break
@@ -1675,6 +1685,7 @@ def discover_from_live(context, seed_url, seed_html, max_chapters=1000, guard=No
 
 
 def acquire_chapter(context, chapter: Chapter, storage: Path, config=CONFIG, guard=None, visible=True):
+    acquisition_started = time.monotonic()
     page = context.new_page()
     chapter_dir = storage / safe_slug(chapter.chapter_id, 45)
     chapter_dir.mkdir(parents=True, exist_ok=True)
@@ -1691,13 +1702,15 @@ def acquire_chapter(context, chapter: Chapter, storage: Path, config=CONFIG, gua
         saved = {}
         attempts = {}
         server_failures = {}
+        new_images = reused_images = 0
+        capture_seconds = 0.0
         # RECYCLED_TAB_SAVED_ORDINALS_V1: a replacement browser tab can expose
         # only a prefix of the chapter before its DOM repopulates. Preserve ALL
         # already-verified saved images, but report only slots in that one
         # transient snapshot to the scanner. Normal strict validation stays on.
         recycled_tab_rehydrating = False
         def save_as_scroll_reveals(info, slot_order, seen, at_bottom):
-            nonlocal recycled_tab_rehydrating
+            nonlocal recycled_tab_rehydrating, new_images, reused_images, capture_seconds
             if len(slot_order) > config['max_pages_per_chapter']:
                 raise RuntimeError('Chapter page count exceeds configured safety limit')
             by_key = {str(im.get('key','')): im for im in info['imgs']}
@@ -1730,6 +1743,7 @@ def acquire_chapter(context, chapter: Chapter, storage: Path, config=CONFIG, gua
                 restored = checkpoint.reuse(key, i, resolved['url'])
                 if restored:
                     saved[key] = restored
+                    reused_images += 1
                     event('IMAGE_REUSED_FROM_CHECKPOINT',chapter=chapter.chapter_id,
                           image=i,total=len(slot_order),bytes=restored[1]['bytes'])
                     continue
@@ -1744,6 +1758,7 @@ def acquire_chapter(context, chapter: Chapter, storage: Path, config=CONFIG, gua
                     save_as_scroll_reveals.failed_key = key
                     break  # scanner must recover/reload or stop, not skip this gap
                 attempts[key] = attempts.get(key,0) + 1
+                capture_started = time.monotonic()
                 try:
                     path, meta = image_download(context, resolved['url'], chapter_dir / f'{i:04d}', chapter.url,
                                                 max_tries=(1 if getattr(context.request,
@@ -1753,11 +1768,15 @@ def acquire_chapter(context, chapter: Chapter, storage: Path, config=CONFIG, gua
                 except SourceAccessPaused:
                     raise
                 except Exception as exc:
+                    if getattr(exc, 'requires_bridge_reconnect', False):
+                        raise
                     event('IMAGE_DEFERRED_FOR_TARGETED_RETRY',chapter=chapter.chapter_id,
                           image=i, error=str(exc)[:250])
                     save_as_scroll_reveals.failed_key = key
                     break  # never attempt a later image after a capture error
                 saved[key] = checkpoint.record_image(key, i, resolved['url'], path, meta)
+                new_images += 1
+                capture_seconds += time.monotonic() - capture_started
                 event('IMAGE_VALIDATED',chapter=chapter.chapter_id,image=i,
                       total=len(slot_order),bytes=meta['bytes'],during_scroll=True)
             # Only after an explicit managed-tab replacement may earlier
@@ -1836,6 +1855,12 @@ def acquire_chapter(context, chapter: Chapter, storage: Path, config=CONFIG, gua
             raise RuntimeError('Manifest image ordinals are out of order; refusing publication')
         if any(Path(item['filename']).stem != f"{i:04d}" for i,item in enumerate(manifest,1)):
             raise RuntimeError('Image filenames are not in exact reading order')
+        elapsed = time.monotonic() - acquisition_started
+        event('CHAPTER_ACQUISITION_TIMING', chapter=chapter.chapter_id,
+              images=len(files), newly_captured=new_images, reused_images=reused_images,
+              elapsed_seconds=round(elapsed, 2), successful_capture_seconds=round(capture_seconds, 2),
+              seconds_per_new_image=round(capture_seconds / new_images, 2) if new_images else None,
+              other_acquisition_seconds=round(max(0, elapsed-capture_seconds), 2))
         return files, {'chapter_id':chapter.chapter_id,'label':source_title,
                        'chapter_title':source_title,'original_url':chapter.url,
                        'images':manifest,'total_images':len(files),'created_at':utc()}
@@ -2016,6 +2041,13 @@ def _archive_run_once(db, source_html: Path | None, source_url: str | None, max_
                           next_chapter=True, checkpoint_retained=True,
                           github_upload=False)
                     continue
+                except Exception as exc:
+                    # Attribute the failure to this unfinished chapter, so a
+                    # later chapter gets its own bounded recovery budget.
+                    from .browser_bridge import BrowserBridgeError
+                    if isinstance(exc, BrowserBridgeError):
+                        exc.recovery_chapter_id = ch.chapter_id
+                    raise
                 # Store archive order in new manifests so even an entirely lost
                 # SQLite DB can recover exact order from existing remote repos.
                 manifest["ordinal"] = next((n for n, c in enumerate(chapters) if c.chapter_id == ch.chapter_id), 0)
@@ -2089,9 +2121,12 @@ _ORIGINAL_ARCHIVE_RUN = archive_run
 def archive_run(db, source_html: Path | None, source_url: str | None, max_chapters, authorized,
                 *, source_headless=None, source_browser="firefox", force_rediscover=False,
                 skip_initial_github_check=False, retry_server_failures=False):
-    """Add bounded extension transport recovery; the old archive_run is unchanged."""
-    from .browser_bridge import BrowserBridgeError
-    for reconnect_number in range(3):
+    """Recover known transport failures from durable checkpoints, per chapter."""
+    from .browser_bridge import BrowserBridgeError, bridge_recovery_reason
+    reconnect_number = 0
+    current_recovery_chapter = None
+    recovery_counts = {}
+    while True:
         token = _BRIDGE_RECOVERY_PAIR_TIMEOUT.set(90 if reconnect_number else None)
         try:
             return _ORIGINAL_ARCHIVE_RUN(
@@ -2101,24 +2136,30 @@ def archive_run(db, source_html: Path | None, source_url: str | None, max_chapte
                 skip_initial_github_check=skip_initial_github_check or reconnect_number > 0,
                 retry_server_failures=retry_server_failures)
         except BrowserBridgeError as exc:
-            message = str(exc)
-            if (source_browser != 'extension' or
-                    'stopped responding during ' not in message or
-                    '(no heartbeat)' not in message):
+            reason = bridge_recovery_reason(exc)
+            if source_browser != 'extension' or not reason:
                 raise
-            if reconnect_number >= 2:
+            current_recovery_chapter = getattr(exc, 'recovery_chapter_id', None) or current_recovery_chapter
+            attempts = recovery_counts.get(current_recovery_chapter, 0)
+            if attempts >= 2:
                 raise BrowserBridgeError(
-                    'BROWSER_BRIDGE_RECONNECT_EXHAUSTED: Chrome extension lost '
-                    'heartbeats in three consecutive sessions. Stop safely; '
-                    'verified GitHub chapters and local image checkpoints '
+                    'BROWSER_BRIDGE_RECONNECT_EXHAUSTED: browser transport failed '
+                    f'in three sessions for {current_recovery_chapter or "startup"} ({reason}). '
+                    'Stop safely; verified GitHub chapters and local image checkpoints '
                     'are retained. Reload the extension and rerun run.py.') from exc
-            event('BROWSER_BRIDGE_AUTO_RECONNECT', attempt=reconnect_number + 1,
-                  reason='lost_extension_heartbeat', checkpoint_retained=True,
-                  old_verified_chapters_reused=True,
+            recovery_counts[current_recovery_chapter] = attempts + 1
+            reconnect_number += 1
+            event('BROWSER_BRIDGE_AUTO_RECONNECT', attempt=attempts + 1,
+                  chapter=current_recovery_chapter, reason=reason, detail=str(exc)[:240],
+                  checkpoint_retained=True, old_verified_chapters_reused=True,
                   old_chapter_navigation_not_replayed=True)
-            print('BROWSER_BRIDGE_AUTO_RECONNECT: lost extension heartbeat; '
+            print(f'BROWSER_BRIDGE_AUTO_RECONNECT: {reason}; '
                   'reopening the first unfinished chapter from verified checkpoints '
                   '(not the source prologue).', flush=True)
+            # A previously completed catalog is already persisted; do not repeat
+            # an explicit initial refresh on every recovery of that catalog.
+            if current_recovery_chapter and force_rediscover and _catalog_complete(db):
+                force_rediscover = False
             time.sleep(2)
         finally:
             _BRIDGE_RECOVERY_PAIR_TIMEOUT.reset(token)

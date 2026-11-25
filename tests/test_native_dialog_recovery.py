@@ -18,7 +18,7 @@ class NativeDialogRecoveryTests(unittest.TestCase):
         self.assertEqual(native_dialogs._title_key('short'), '')
         self.assertEqual(native_dialogs._title_key('  Reading Childhood Friends - Chapter 00  '),
                          'Reading Childhood Friends - Chapter 00')
-        self.assertIn("$windowTitle.Contains($expected)", native_dialogs._UIA_SCRIPT)
+        self.assertIn("Test-ManagedTitle $windowTitle", native_dialogs._UIA_SCRIPT)
         self.assertIn("'Confirm Form Resubmission'", native_dialogs._UIA_SCRIPT)
         self.assertIn("'Continue'", native_dialogs._UIA_SCRIPT)
         self.assertIn("'Cancel'", native_dialogs._UIA_SCRIPT)
@@ -79,6 +79,64 @@ class NativeDialogRecoveryTests(unittest.TestCase):
             self.assertTrue(bridge.rpc('probe',{},timeout=1)['ok'])
             watcher.assert_not_called()
 
+    def test_verified_navigation_refreshes_title_for_next_watcher(self):
+        bridge=LocalBridge('https://source.example/chapter/1',require_managed_tab=True)
+        bridge.ready.set()
+        bridge.tab_id=7
+        bridge.tab_title='Reading Example Chapter 1'
+        original_put=bridge.pending.put
+        def respond(payload):
+            original_put(payload)
+            url=payload['payload']['url']
+            number=url.rsplit('/',1)[-1]
+            bridge.responses[payload['id']].put({'ok':True,'data':{
+                'url':url,'status':200,'tab_id':7,'tab_title':'Reading Example Chapter '+number}})
+        bridge.pending.put=respond
+        with mock.patch('reusable.native_dialogs.ManagedNativeDialogWatcher') as watcher:
+            watcher.return_value.start.return_value=watcher.return_value
+            bridge.rpc('navigate',{'url':'https://source.example/chapter/2'},timeout=1)
+            self.assertEqual(bridge.tab_title,'Reading Example Chapter 2')
+            bridge.rpc('navigate',{'url':'https://source.example/chapter/3'},timeout=1)
+            self.assertEqual(watcher.call_args_list[1].args[0],'Reading Example Chapter 2')
+            self.assertEqual(bridge.tab_title,'Reading Example Chapter 3')
+
+    def test_wrong_tab_or_chapter_cannot_replace_title(self):
+        for wrong_id, wrong_url in [(8,'https://source.example/chapter/2'),(7,'https://source.example/chapter/3')]:
+            bridge=LocalBridge('https://source.example/chapter/1',require_managed_tab=True)
+            bridge.ready.set(); bridge.tab_id=7; bridge.tab_title='Reading Example Chapter 1'
+            def respond(payload):
+                bridge.responses[payload['id']].put({'ok':True,'data':{
+                    'url':wrong_url,'status':200,'tab_id':wrong_id,'tab_title':'Wrong chapter title'}})
+            bridge.pending.put=respond
+            with mock.patch('reusable.native_dialogs.ManagedNativeDialogWatcher') as watcher:
+                watcher.return_value.start.return_value=watcher.return_value
+                bridge.rpc('navigate',{'url':'https://source.example/chapter/2'},timeout=1)
+            self.assertEqual(bridge.tab_title,'Reading Example Chapter 1')
+
+    def test_stalled_scroll_arms_watcher_once(self):
+        bridge=LocalBridge('https://source.example/chapter/1',require_managed_tab=True)
+        bridge.ready.set(); bridge.tab_title='Reading Example Chapter 1'; bridge.last_heartbeat=10
+        q=mock.Mock(); q.get.side_effect=[queue.Empty(),queue.Empty(),{'ok':True,'data':{'move':1}}]
+        with mock.patch('reusable.browser_bridge.queue.Queue',return_value=q), \
+             mock.patch('reusable.browser_bridge.time.monotonic',side_effect=[0,10,13]), \
+             mock.patch('reusable.native_dialogs.ManagedNativeDialogWatcher') as watcher:
+            watcher.return_value.start.return_value=watcher.return_value
+            self.assertEqual(bridge.rpc('scroll'),{'move':1})
+            watcher.assert_called_once()
+            watcher.return_value.close.assert_called_once()
+        self.assertEqual(bridge.responses,{})
+
+    def test_native_watch_rejects_web_document_and_verifies_dismissal(self):
+        script=native_dialogs._UIA_SCRIPT
+        self.assertIn('ControlType]::Document',script)
+        self.assertIn('TreeScope]::Subtree',script)
+        self.assertIn('RawViewWalker',script)
+        self.assertIn('BROWSER_DIALOG_UIA_READY',script)
+        self.assertIn('BROWSER_DIALOG_DISMISSAL_UNVERIFIED',script)
+        self.assertIn('$invoked=$true',script)
+        self.assertIn('if($invoked) {exit 2}',script)
+        self.assertEqual(native_dialogs._title_key('Example long chapter title '+('x'*100)), 'Example long chapter title '+('x'*100))
+
     def test_existing_reload_path_and_browser_dialog_type_guard_retained(self):
         js=(ROOT/'browser_bridge/chrome/background.js').read_text(encoding='utf-8')
         self.assertIn("call(chrome.tabs,'reload',tabId,{bypassCache:false})",js)
@@ -92,11 +150,11 @@ class NativeDialogRecoveryTests(unittest.TestCase):
 
     def test_background_chrome_window_can_be_monitored_without_stealing_focus(self):
         script=native_dialogs._UIA_SCRIPT
-        self.assertIn('GetForegroundWindow',script)
+        self.assertNotIn('GetForegroundWindow',script)
         self.assertIn('AutomationElement]::RootElement',script)
         self.assertIn('$windows=$desktop.FindAll',script)
         self.assertIn('$matches.Count -eq 1',script)
-        self.assertIn('$windowTitle.Contains($expected)',script)
+        self.assertIn('Test-ManagedTitle $windowTitle',script)
         self.assertIn("'Chrome_WidgetWin_1'",script)
         self.assertIn("@('chrome','msedge')",script)
         self.assertIn("'Confirm Form Resubmission'",script)
@@ -107,11 +165,11 @@ class NativeDialogRecoveryTests(unittest.TestCase):
 
     def test_only_browser_owned_popup_widgets_are_considered(self):
         script=native_dialogs._UIA_SCRIPT
-        self.assertIn('GetForegroundWindow()',script)
+        self.assertNotIn('GetForegroundWindow()',script)
         self.assertIn('GetWindow($popupHwnd,4)',script)
         self.assertIn('$owned.Count -eq 1',script)
-        self.assertIn('if(-not $foregroundIsManaged)',script)
-        self.assertIn('$yes.Count -ne 1 -or $no.Count -ne 1',script)
+        self.assertIn('$matches.Count -eq 1',script)
+        self.assertIn('$yes.Count -eq 1 -and $no.Count -eq 1',script)
         self.assertIn('InvokePattern',script)
         self.assertIn('BROWSER_DIALOG_AUTO_ACCEPTED',script)
 

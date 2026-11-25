@@ -634,7 +634,7 @@ function sourceMatches(url) {
   } catch {return false;}
 }
 async function tabInfo() {
-  const tab=await tabsGet(state.tabId);
+  const tab=await checkedIO(tabsGet(state.tabId),'inspect managed tab',5000);
   if (!tab || !sourceMatches(tab.url)) throw Error('Selected tab is no longer on this source website');
   return tab;
 }
@@ -664,7 +664,8 @@ async function waitContent(timeoutMs=85000, targetUrl='') {
       if (response?.ok && response.bridgeContentProtocol===6 &&
           sourceMatches(response.url) &&
           (!wanted || canonicalPage(response.url)===wanted) &&
-          canonicalPage(response.url)===canonicalPage(tab.url)) return response;
+          canonicalPage(response.url)===canonicalPage(tab.url)) return {...response,
+            tab_id:tab.id, tab_title:String(tab.title||'').slice(0,200)};
       lastProblem='Content-script PING belongs to a different document or old protocol';
     } catch(e) {lastProblem=String(e);}
     // Initial injection may race with commit; permit further attempts after
@@ -783,7 +784,7 @@ async function execute(job) {
     }
     // Never accept the old chapter's receiver while navigation commits.
     const result=await waitContent(85000, desired.href);
-    return {url:result.url,status:200};
+    return {url:result.url,status:200,tab_id:result.tab_id,tab_title:result.tab_title};
   }
   // COMICARCHIVER_AUTH_BLOB_TRANSFER_20261122 provider-neutral extension action follows
   // Generic browser-memory transfer for a decoded blob: image.  This reads
@@ -1081,7 +1082,7 @@ async function execute(job) {
     // back once to the already-installed content listener in this SAME tab.
     // This command targets one absolute ordinal, not forward scroll or nav.
     console.warn('Comic Bridge: recovery injection stalled; trying existing tab listener once');
-    const tab=await tabsGet(state.tabId);
+    const tab=await checkedIO(tabsGet(state.tabId),'inspect managed tab for image recovery',5000);
     if(!sourceMatches(tab.url) || tab.status==='loading') throw error;
     result=await checkedIO(sendRaw(state.tabId,{type,payload}),
       'recover_image existing-listener fallback', 8500);

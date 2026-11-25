@@ -1300,6 +1300,22 @@ def _verify_published(worker_url, staged, registry, *, verify_slugs=None):
         for attempt in range(5):
             try:
                 response = open_reader_verify_auth.get(url, headers={'Cache-Control': 'no-cache'}, timeout=40)
+
+                # Cloudflare canonicalizes standalone HTML assets.
+                # Follow only the exact same-origin extensionless URL.
+                # Never follow authentication or external redirects.
+                if relative.endswith('.html') and url.endswith('.html'):
+                    if response.status_code in (301, 302, 307, 308):
+                        from urllib.parse import urljoin
+                        location = response.headers.get('Location', '')
+                        target = urljoin(url, location)
+                        if target == url[:-5]:
+                            print('open-reader: verified canonical redirect '+url+' -> '+target, flush=True)
+                            response = open_reader_verify_auth.get(
+                                target,
+                                headers={'Cache-Control': 'no-cache'},
+                                timeout=40)
+
                 if response.status_code == 200:
                     if sha(response.content) == expected_hash:
                         break

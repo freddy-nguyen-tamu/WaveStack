@@ -3,8 +3,8 @@
 This is reusable browser infrastructure, not a site adapter. It never sends
 keystrokes, accesses unpaired tabs, accepts login/CAPTCHA/permissions dialogs,
 or changes the archiver's checkpoint/navigation rules. It only recognizes the
-exact English Chrome 'Confirm Form Resubmission' warning during a requested
-navigation, then invokes its explicit Continue UI Automation button once.
+exact English Chrome 'Confirm Form Resubmission' warning during managed browser
+I/O, then invokes its explicit Continue UI Automation button once.
 """
 from __future__ import annotations
 
@@ -14,10 +14,11 @@ import subprocess
 
 # This native Chrome dialog is NOT a JavaScript dialog and isn't guaranteed to
 # emit Page.javascriptDialogOpening. Windows UI Automation is a best-effort,
-# fail-closed fallback. It uses the foreground Chrome window when matching,
-# otherwise searches for exactly one background window matching the managed tab.
+# fail-closed fallback. It
+# searches for exactly one window matching the managed tab, regardless of focus.
 _UIA_SCRIPT = r'''
 $ErrorActionPreference='Stop'
+$ProgressPreference='SilentlyContinue'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -TypeDefinition @'
@@ -25,7 +26,6 @@ using System;
 using System.Runtime.InteropServices;
 using System.Text;
 public static class ComicDialogWindow {
-  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hwnd, uint command);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hwnd, StringBuilder name, int count);
@@ -43,25 +43,28 @@ $cancelCondition=[Windows.Automation.AndCondition]::new(
   [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty,[Windows.Automation.ControlType]::Button),
   [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty,'Cancel')
 )
+# Match the full document title and its browser-app suffix, not a prefix of
+# another chapter title. Do not let foreground focus break ambiguity checks.
+function Test-ManagedTitle([string]$name) {
+  return ($name -eq $expected -or $name -eq ($expected+' - Google Chrome') -or $name -eq ($expected+' - Microsoft Edge') -or $name -eq ($expected+' - Chromium'))
+}
+function Test-NativeElement($element,$boundary) {
+  # Website DOM can expose identically named headings/buttons via UIA. A
+  # browser-owned native prompt must not live beneath a web Document node.
+  $raw=[Windows.Automation.TreeWalker]::RawViewWalker
+  for($depth=0;$depth -lt 32 -and $null -ne $element;$depth++) {
+    if($element.Current.ControlType -eq [Windows.Automation.ControlType]::Document) {return $false}
+    if($element.Equals($boundary)) {return $true}
+    $element=$raw.GetParent($element)
+  }
+  return $false
+}
+$reportedError=$false
+$invoked=$false
+Write-Output 'BROWSER_DIALOG_UIA_READY'
 while ([DateTime]::UtcNow -lt $until) {
   try {
-    $hwnd=[ComicDialogWindow]::GetForegroundWindow()
-    # ADDITIVE: if the foreground app is Python/Command Prompt (or a different
-    # browser window), locate the extension-managed Chrome window in the
-    # Windows accessibility desktop tree without moving keyboard focus.
-    $foregroundIsManaged=$false
-    if($hwnd -ne [IntPtr]::Zero) {
-      try {
-        $front=[Windows.Automation.AutomationElement]::FromHandle($hwnd)
-        $frontTitle=[string]$front.Current.Name
-        $frontProcess=[Diagnostics.Process]::GetProcessById([int]$front.Current.ProcessId).ProcessName
-        $frontClass=New-Object Text.StringBuilder 256
-        [void][ComicDialogWindow]::GetClassName($hwnd,$frontClass,$frontClass.Capacity)
-        $foregroundIsManaged=($expected.Length -ge 18 -and $frontTitle.Contains($expected) -and
-          $frontClass.ToString() -eq 'Chrome_WidgetWin_1' -and $frontProcess -in @('chrome','msedge'))
-      } catch { $foregroundIsManaged=$false }
-    }
-    if(-not $foregroundIsManaged) {
+    # Focus is irrelevant. Require exactly one matching browser window.
       $matches=New-Object System.Collections.ArrayList
       $desktop=[Windows.Automation.AutomationElement]::RootElement
       $windows=$desktop.FindAll([Windows.Automation.TreeScope]::Children,[Windows.Automation.Condition]::TrueCondition)
@@ -69,7 +72,7 @@ while ([DateTime]::UtcNow -lt $until) {
         try {
           $window=$windows.Item($i)
           $name=[string]$window.Current.Name
-          if($expected.Length -lt 18 -or -not $name.Contains($expected)) {continue}
+          if($expected.Length -lt 18 -or -not (Test-ManagedTitle $name)) {continue}
           $processName=[Diagnostics.Process]::GetProcessById([int]$window.Current.ProcessId).ProcessName
           if($processName -notin @('chrome','msedge')) {continue}
           $candidate=[IntPtr]([int]$window.Current.NativeWindowHandle)
@@ -78,12 +81,11 @@ while ([DateTime]::UtcNow -lt $until) {
           [void][ComicDialogWindow]::GetClassName($candidate,$candidateClass,$candidateClass.Capacity)
           if($candidateClass.ToString() -ne 'Chrome_WidgetWin_1') {continue}
           [void]$matches.Add($candidate)
-        } catch {continue}
+        } catch {if(-not $reportedError) {Write-Output ('BROWSER_DIALOG_UIA_ERROR: '+$_.Exception.Message);$reportedError=$true};continue}
       }
       # Do not select a random tab when two Chrome windows share a title.
       $hwnd=[IntPtr]::Zero
       if($matches.Count -eq 1) {$hwnd=$matches.Item(0)}
-    }
     if($hwnd -ne [IntPtr]::Zero) {
       $pidValue=[uint32]0
       [void][ComicDialogWindow]::GetWindowThreadProcessId($hwnd,[ref]$pidValue)
@@ -96,8 +98,10 @@ while ([DateTime]::UtcNow -lt $until) {
           $windowTitle=[string]$root.Current.Name
           # The expected title is copied directly from the extension-owned tab.
           # Never operate on a different Chrome window (or unrelated app).
-          if($expected.Length -ge 18 -and $windowTitle.Contains($expected)) {
-            $header=$root.FindFirst([Windows.Automation.TreeScope]::Descendants,$exactHeader)
+          if($expected.Length -ge 18 -and (Test-ManagedTitle $windowTitle)) {
+            $headers=@($root.FindAll([Windows.Automation.TreeScope]::Subtree,$exactHeader) | Where-Object {Test-NativeElement $_ $root})
+            $header=$null
+            if($headers.Count -gt 0) {$header=$headers[0]}
             # ADDITIVE: some Chrome versions put tab-modal prompts in a separate
             # Chrome_WidgetWin_1 owned by the matched managed-browser HWND.
             # Accept a popup ONLY when its Win32 owner is the verified browser.
@@ -114,10 +118,10 @@ while ([DateTime]::UtcNow -lt $until) {
                   [void][ComicDialogWindow]::GetClassName($popupHwnd,$popupClass,$popupClass.Capacity)
                   if($popupClass.ToString() -ne 'Chrome_WidgetWin_1') {continue}
                   $popupProcess=[Diagnostics.Process]::GetProcessById([int]$popup.Current.ProcessId).ProcessName
-                  if($popupProcess -notin @('chrome','msedge')) {continue}
-                  $popupHeader=$popup.FindFirst([Windows.Automation.TreeScope]::Descendants,$exactHeader)
-                  if($null -ne $popupHeader) {[void]$owned.Add([pscustomobject]@{Root=$popup;Header=$popupHeader})}
-                } catch {continue}
+                  if($popupProcess -notin @('chrome','msedge') -or $popup.Current.ProcessId -ne $pidValue) {continue}
+                  $popupHeader=$popup.FindFirst([Windows.Automation.TreeScope]::Subtree,$exactHeader)
+                  if($null -ne $popupHeader -and (Test-NativeElement $popupHeader $popup)) {[void]$owned.Add([pscustomobject]@{Root=$popup;Header=$popupHeader})}
+                } catch {if(-not $reportedError) {Write-Output ('BROWSER_DIALOG_UIA_ERROR: '+$_.Exception.Message);$reportedError=$true};continue}
               }
               if($owned.Count -eq 1) {
                 $root=$owned.Item(0).Root
@@ -125,20 +129,54 @@ while ([DateTime]::UtcNow -lt $until) {
               }
             }
             if($null -ne $header) {
-              $walker=[Windows.Automation.TreeWalker]::ControlViewWalker
+              $walker=[Windows.Automation.TreeWalker]::RawViewWalker
               $container=$header
-              for($level=0;$level -lt 7;$level++) {
+              for($level=0;$level -lt 12;$level++) {
+                if($null -eq $container) {break}
+                $atRoot=$container.Equals($root)
+                $yes=@($container.FindAll([Windows.Automation.TreeScope]::Descendants,$continueCondition) | Where-Object {Test-NativeElement $_ $root})
+                $no=@($container.FindAll([Windows.Automation.TreeScope]::Descendants,$cancelCondition) | Where-Object {Test-NativeElement $_ $root})
+                if($yes.Count -eq 1 -and $no.Count -eq 1 -and $yes[0].Current.IsEnabled -and -not $yes[0].Current.IsOffscreen) {
+                  # At the full browser root require the native warning text too;
+                  # do not combine unrelated browser toolbar buttons with a heading.
+                  if($atRoot -and $root.Current.NativeWindowHandle -eq $hwnd.ToInt64()) {
+                    $messageFound=$false
+                    $nativeText=$container.FindAll([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty,[Windows.Automation.ControlType]::Text))
+                    foreach($item in $nativeText) {
+                      if((Test-NativeElement $item $root) -and ([string]$item.Current.Name -match '(?i)information that you entered|action you took to be repeated|resubmit')) {$messageFound=$true;break}
+                    }
+                    if(-not $messageFound) {break}
+                  }
+                  # No keystrokes or coordinate clicks: invoke the specific native button.
+                  $dialogHwnd=$root.Current.NativeWindowHandle
+                  $pattern=$yes[0].GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+                  Write-Output 'BROWSER_DIALOG_DETECTED kind=chrome_form_resubmission'
+                  $invoked=$true
+                  $pattern.Invoke()
+                  Write-Output 'BROWSER_DIALOG_CONTINUE_INVOKED'
+                  # Re-query the live native UI, not a stale cached element. Never
+                  # invoke twice if the first action might already have worked.
+                  for($check=0;$check -lt 20;$check++) {
+                    Start-Sleep -Milliseconds 250
+                    try {
+                      $remaining=@($root.FindAll([Windows.Automation.TreeScope]::Subtree,$exactHeader) | Where-Object { (Test-NativeElement $_ $root) -and -not $_.Current.IsOffscreen })
+                      if($remaining.Count -eq 0) {
+                        Write-Output 'BROWSER_DIALOG_AUTO_ACCEPTED kind=chrome_form_resubmission'
+                        exit 0
+                      }
+                    } catch [Windows.Automation.ElementNotAvailableException] {
+                      # Owned popup was destroyed. The RPC still independently verifies readiness.
+                      if($dialogHwnd -ne $hwnd.ToInt64()) {
+                        Write-Output 'BROWSER_DIALOG_POPUP_REMOVED_VERIFY_RPC'
+                        exit 0
+                      }
+                    } catch { Write-Output ('BROWSER_DIALOG_VERIFY_ERROR: '+$_.Exception.Message); exit 2 }
+                  }
+                  Write-Output 'BROWSER_DIALOG_DISMISSAL_UNVERIFIED'
+                  exit 2
+                }
+                if($atRoot) {break}
                 $container=$walker.GetParent($container)
-                if($null -eq $container -or $container.Equals($root)) {break}
-                $yes=$container.FindAll([Windows.Automation.TreeScope]::Descendants,$continueCondition)
-                $no=$container.FindAll([Windows.Automation.TreeScope]::Descendants,$cancelCondition)
-                if($yes.Count -ne 1 -or $no.Count -ne 1) {continue}
-                if(-not $yes.Item(0).Current.IsEnabled) {break}
-                # Exactly one native dialog with exact title + both buttons.
-                $pattern=$yes.Item(0).GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
-                $pattern.Invoke()
-                Write-Output 'BROWSER_DIALOG_AUTO_ACCEPTED kind=chrome_form_resubmission'
-                exit 0
               }
             }
           }
@@ -146,24 +184,25 @@ while ([DateTime]::UtcNow -lt $until) {
       }
     }
   } catch {
-    # Dialogs are transient; stale UIA objects are normal during reload.
-    # Never act on an unverified or ambiguously matched Chrome window.
+    if(-not $reportedError -or $invoked) {Write-Output ('BROWSER_DIALOG_UIA_ERROR: '+$_.Exception.Message);$reportedError=$true}
+    if($invoked) {exit 2}
   }
   Start-Sleep -Milliseconds 350
 }
+Write-Output 'BROWSER_DIALOG_MONITOR_TIMEOUT no_verified_dialog'
 '''
 
 
 def _title_key(value: str) -> str:
-    """Use a nonempty prefix to match Chrome's title (+ browser suffix)."""
+    """Use the full verified tab title (Chrome adds its browser suffix)."""
     clean = ' '.join(str(value or '').strip().split())
     if len(clean) < 18 or '\x00' in clean:
         return ''
-    return clean[:48]
+    return clean[:200]
 
 
 class ManagedNativeDialogWatcher:
-    """One short-lived, fail-closed monitor per explicit managed-tab navigation."""
+    """One bounded, fail-closed monitor per navigation or slow managed-tab RPC."""
 
     def __init__(self, tab_title: str, *, timeout: float = 105):
         self.title = _title_key(tab_title)
@@ -185,8 +224,8 @@ class ManagedNativeDialogWatcher:
                 ['powershell.exe', '-NoProfile', '-NonInteractive',
                  '-EncodedCommand', encoded_script],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-            print('BROWSER_DIALOG_MONITOR_ARMED kind=chrome_form_resubmission', flush=True)
+                stderr=subprocess.STDOUT, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            print('BROWSER_DIALOG_MONITOR_ARMED kind=chrome_form_resubmission title='+repr(self.title), flush=True)
         except (OSError, ValueError) as exc:
             print('BROWSER_DIALOG_MONITOR_START_FAILED: '+type(exc).__name__, flush=True)
             # Native UIAutomation is optional and must never break normal
@@ -205,9 +244,11 @@ class ManagedNativeDialogWatcher:
         except subprocess.TimeoutExpired:
             proc.kill()
             output, _ = proc.communicate(timeout=2)
-        accepted = b'BROWSER_DIALOG_AUTO_ACCEPTED kind=chrome_form_resubmission' in (output or b'')
-        if accepted:
-            print('BROWSER_DIALOG_AUTO_ACCEPTED kind=chrome_form_resubmission', flush=True)
-        elif proc.returncode not in (None, 0, -15, 1):
+        decoded = (output or b'').decode('utf-8', errors='replace')
+        for line in decoded.splitlines():
+            if line.strip():
+                print(line[:500], flush=True)
+        accepted = 'BROWSER_DIALOG_AUTO_ACCEPTED kind=chrome_form_resubmission' in decoded
+        if isinstance(proc.returncode, int) and proc.returncode not in (0, -15):
             print('BROWSER_DIALOG_MONITOR_EXIT code='+str(proc.returncode), flush=True)
         return accepted

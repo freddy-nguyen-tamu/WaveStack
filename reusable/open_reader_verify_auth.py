@@ -49,10 +49,18 @@ def _dpapi(data: bytes, *, encrypt: bool) -> bytes:
     source=DATA_BLOB(len(data),cast(buffer,POINTER(ctypes.c_byte)))
     output=DATA_BLOB()
     func=windll.crypt32.CryptProtectData if encrypt else windll.crypt32.CryptUnprotectData
-    func.argtypes=[POINTER(DATA_BLOB),c_void_p,POINTER(DATA_BLOB),c_void_p,c_void_p,ctypes.wintypes.DWORD] if encrypt else [POINTER(DATA_BLOB),POINTER(c_void_p),POINTER(DATA_BLOB),c_void_p,c_void_p,ctypes.wintypes.DWORD]
+    func.argtypes = [
+        POINTER(DATA_BLOB),
+        c_void_p if encrypt else POINTER(c_void_p),
+        POINTER(DATA_BLOB),
+        c_void_p,
+        c_void_p,
+        ctypes.wintypes.DWORD,
+        POINTER(DATA_BLOB),
+    ]
     func.restype=ctypes.wintypes.BOOL
     # CRYPTPROTECT_UI_FORBIDDEN (0x1), prevents interactive Windows dialogs.
-    if not func(byref(source),None,byref(output),None,None,1):
+    if not func(byref(source),None,None,None,None,1,byref(output)):
         raise ctypes.WinError()
     try:
         return ctypes.string_at(output.pbData,output.cbData)
@@ -105,7 +113,13 @@ def _fetch(url: str, *, cookie: str | None, kwargs: dict):
         headers['Cookie']=_cookie_header(cookie)
     args['headers']=headers
     args['allow_redirects']=False  # A protected HTML page redirects to login, never treat it as a verified asset.
-    return requests.get(url,**args)
+    response = requests.get(url, **args)
+    if cookie and 200 <= response.status_code < 300:
+        renewed = getattr(response, 'cookies', {}).get('reader_site')
+        origin = _safe_origin(url)
+        if origin and renewed and renewed != cookie:
+            _save(origin, renewed)
+    return response
 
 
 def _requires_login(response, origin: str) -> bool:

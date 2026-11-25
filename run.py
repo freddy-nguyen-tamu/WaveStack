@@ -270,7 +270,7 @@ _PREFLIGHT_PYTHON = (
     ('test_reader_issue_feed.py', 4),
     ('test_confirmed_source_placeholders.py', 3),
     ('test_managed_tab_recycle_resume.py', 2),
-    ('test_bridge_resume_target_and_reconnect.py', 7),
+    ('test_bridge_resume_target_and_reconnect.py', 14),
     ('test_resume_deferred_and_reader_host.py', 8),
     ('test_open_reader_bell_integration.py', 4),
     ('test_partial_chapter_streaming.py', 4),
@@ -473,7 +473,7 @@ def _run_preflight(*, run_tests=True) -> None:
     except (OSError, subprocess.TimeoutExpired) as exc:
         fail('mandatory resume/reconnect tests did not complete: ' + str(exc))
     resume_count = re.search(r'Ran (\d+) tests?',resume_result.stdout+resume_result.stderr)
-    if resume_result.returncode != 0 or not resume_count or int(resume_count.group(1)) < 7:
+    if resume_result.returncode != 0 or not resume_count or int(resume_count.group(1)) < 14:
         print((resume_result.stdout+resume_result.stderr)[-9000:],file=sys.stderr,flush=True)
         fail('mandatory resume/reconnect regression failed')
     print('  PASS mandatory resume/reconnect regressions (' + resume_count.group(1) + ' tests)',flush=True)

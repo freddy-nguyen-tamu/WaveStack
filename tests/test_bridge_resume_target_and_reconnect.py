@@ -7,7 +7,8 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from unittest.mock import patch
 from reusable import engine
-from reusable.browser_bridge import LocalBridge, BrowserBridgeError, BRIDGE_PROTOCOL
+from reusable.browser_bridge import (LocalBridge, BrowserBridgeError, BrowserTransportUnavailable,
+                                     _bridge_rpc_error, bridge_recovery_reason, BRIDGE_PROTOCOL)
 
 
 SEED='https://reader.example.test/comic/sample/chapter-00/'
@@ -169,5 +170,77 @@ class BoundedReconnectTests(unittest.TestCase):
                     with self.assertRaises(BrowserBridgeError):
                         engine.archive_run(object(),None,SEED,100,True,source_browser=browser)
                 self.assertEqual(run.call_count,1)
+
+class LiveFailureRegressions(unittest.TestCase):
+    def test_actual_browser_errors_are_typed_at_rpc_boundary(self):
+        for action, error in (
+                ('scroll','Error: SCROLL_NOT_READY: current chapter tab is not ready'),
+                ('recover_image','Error: Selected-tab browser API stalled: recover_image existing-listener fallback'),
+                ('image','Error: Selected-tab browser API stalled: position image tile')):
+            with self.subTest(action=action):
+                b=LocalBridge(SEED,port=0)
+                b.ready.set()
+                def deliver(job):
+                    b.responses[job['id']].put({'ok':False,'error':error})
+                with patch.object(b.pending,'put',side_effect=deliver):
+                    with self.assertRaises(BrowserTransportUnavailable):
+                        b.rpc(action)
+                self.assertFalse(b.responses)
+
+    def test_transient_source_and_uncertain_scroll_errors_not_reconnected(self):
+        for message in ('Browser image failed: HTTP 403',
+                        'Browser image failed: image not visibly decoded',
+                        'Browser scroll failed: SCROLL_OUTCOME_UNKNOWN: command may have executed',
+                        'Browser scroll failed: SCROLL_DOCUMENT_CHANGED: refusing stale receipt',
+                        'Browser navigate failed: Cross-site navigation refused'):
+            error=_bridge_rpc_error(message)
+            self.assertIsNone(bridge_recovery_reason(error))
+            self.assertNotIsInstance(error,BrowserTransportUnavailable)
+
+    def test_readiness_and_api_stall_retry_with_fresh_budget_for_later_chapter(self):
+        def failed(chapter, message):
+            exc=_bridge_rpc_error(message)
+            exc.recovery_chapter_id=chapter
+            return exc
+        scroll='Browser scroll failed: Error: SCROLL_NOT_READY: current chapter tab is not ready'
+        stall='Browser recover_image failed: Error: Selected-tab browser API stalled: recover_image existing-listener fallback'
+        failures=[failed('203',scroll),failed('203',stall),failed('211',scroll),'completed']
+        with patch.object(engine,'_archive_run_once',side_effect=failures) as run, \
+             patch.object(engine,'event') as events,patch.object(engine.time,'sleep'):
+            result=engine.archive_run(object(),None,SEED,100,True,source_browser='extension')
+        self.assertEqual(result,'completed')
+        self.assertEqual(run.call_count,4)
+        recovery=[c.kwargs for c in events.call_args_list if c.args[0]=='BROWSER_BRIDGE_AUTO_RECONNECT']
+        self.assertEqual([(r['chapter'],r['attempt']) for r in recovery],[('203',1),('203',2),('211',1)])
+        self.assertEqual([c.kwargs['skip_remote_reconcile'] for c in run.call_args_list],[False,True,True,True])
+
+    def test_image_transfer_stall_not_retried_as_individual_image(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import Mock
+        failure=_bridge_rpc_error('Browser image failed: Error: Selected-tab browser API stalled: capture selected-tab pixels')
+        req=SimpleNamespace(reuses_loaded_page_images=True,get=Mock(side_effect=failure))
+        with tempfile.TemporaryDirectory() as directory, patch.object(engine.time,'sleep') as sleep:
+            with self.assertRaises(BrowserTransportUnavailable):
+                engine.image_download(SimpleNamespace(request=req),'https://cdn.example.test/1.png',
+                    Path(directory)/'0001',SEED,max_tries=4)
+        req.get.assert_called_once()
+        sleep.assert_not_called()
+
+    def test_recover_image_stall_exits_scanner_without_per_image_retry(self):
+        from test_streaming_order import SimPage, Tests
+        page=SimPage(late=True)
+        saved,_,callback=Tests().callback(page)
+        attempts=[]
+        def recover(key,url,**kwargs):
+            attempts.append(key)
+            raise _bridge_rpc_error('Browser recover_image failed: Error: Selected-tab browser API stalled: recover_image existing-listener fallback')
+        page.recover_unloaded_image=recover
+        adapter=SimpleNamespace(READER_SELECTORS=['main'],IMAGE_ATTRIBUTES=['src'],custom_page_snapshot=None)
+        with patch.object(engine,'ADAPTER',adapter),patch.object(engine,'classify_browser_page',return_value=None),patch.object(engine,'event'):
+            with self.assertRaises(BrowserTransportUnavailable):
+                engine.scan_browser_images(page,max_steps=30,stability=2,on_progress=callback)
+        self.assertEqual(attempts,['2'])
+        self.assertEqual(set(saved),{'1'})
 
 if __name__=='__main__':unittest.main()

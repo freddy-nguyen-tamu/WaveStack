@@ -351,7 +351,9 @@ def classify_browser_page(page) -> str | None:
           )].some(el => visible(el) && !passiveRecaptchaBadge(el));
           return {login, challenge, title:document.title||''};
         }""")
-    except Exception:
+    except Exception as exc:
+        if getattr(exc, 'requires_bridge_reconnect', False):
+            raise
         return None
     if state.get("challenge") or re.search(r"(?:attention required|just a moment|verify you are human)", state.get("title", ""), re.I):
         return "challenge"
