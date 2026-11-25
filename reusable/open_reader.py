@@ -120,7 +120,13 @@ def merge_comics(a, b):
         merged = dict(github_streaming.preferred_chapter(chapter, previous))
         for key in ('title', 'label'):
             old_title, new_title = previous.get(key, ''), chapter.get(key, '')
-            if _is_placeholder(new_title, ident) and not _is_placeholder(old_title, ident):
+            # A bare number is not a subtitle. A stale "Chapter 226" must
+            # never defeat the corrected "Chapter 2" via a prefix match.
+            plain_number = r'(?:chapter|ep(?:isode)?\.?)\s+\d+(?:\.\d+)*'
+            if (re.fullmatch(plain_number, str(old_title).strip(), re.I) and
+                    re.fullmatch(plain_number, str(new_title).strip(), re.I)):
+                merged[key] = new_title
+            elif _is_placeholder(new_title, ident) and not _is_placeholder(old_title, ident):
                 merged[key] = old_title
             elif not _is_placeholder(new_title, ident) and _is_placeholder(old_title, ident):
                 merged[key] = new_title

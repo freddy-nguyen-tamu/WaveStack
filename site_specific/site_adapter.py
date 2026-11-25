@@ -336,10 +336,18 @@ def chapter_title_from_anchor(anchor, fallback):
 
 
 def chapter_title_from_html(soup, fallback):
-    heading = soup.select_one('.chapter-title, .navi .chapter-select, h1')
-    label=heading.get_text(' ',strip=True) if heading else ''
-    match=re.search(r'\bChapter\s+([0-9]+(?:\.[0-9]+)?)\b', label, flags=re.I)
-    return 'Chapter '+match.group(1) if match else fallback
+    # The catalogue label belongs to this exact chapter identity. Never read
+    # the whole chapter dropdown: it starts with the newest chapter.
+    expected = re.fullmatch(r'Chapter\s+([0-9]+(?:\.[0-9]+)?)', str(fallback).strip(), flags=re.I)
+    for selector in ('.chapter-title h1', 'h1.current-book', 'meta[property="og:title"]', 'title'):
+        node = soup.select_one(selector)
+        if node is None:
+            continue
+        label = str(node.get('content') or '') if node.name == 'meta' else node.get_text(' ', strip=True)
+        match = re.search(r'\bChapter\s+([0-9]+(?:\.[0-9]+)?)\b', label, flags=re.I)
+        if match and (not expected or match.group(1) == expected.group(1)):
+            return 'Chapter '+match.group(1)
+    return fallback
 
 
 def _parse_menu(raw, page_url):
@@ -457,8 +465,11 @@ def native_chapter_titles_from_catalog(raw_html,page_url):
 
 
 def accept_catalog_title(chapter_id,label):
-    return (isinstance(chapter_id,str) and chapter_id.startswith('truyenqq-relife-chapter-')
-            and bool(re.fullmatch(r'Chapter\s+[0-9]+(?:\.[0-9]+)?',str(label),flags=re.I)))
+    if not isinstance(chapter_id, str) or not chapter_id.startswith('truyenqq-relife-'):
+        return False
+    slug = chapter_id.removeprefix('truyenqq-relife-')
+    match = re.fullmatch(r'Chapter\s+([0-9]+(?:\.[0-9]+)?)', str(label), flags=re.I)
+    return bool(match and _SLUG.fullmatch(slug) and slug.removeprefix('chapter-').replace('-', '.') == match.group(1))
 
 
 def custom_page_snapshot(page):

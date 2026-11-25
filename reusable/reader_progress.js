@@ -48,4 +48,7 @@
  window.addEventListener('scroll',()=>save(),{passive:true});
  document.addEventListener('visibilitychange',()=>{if(document.hidden)save(true)});
  window.addEventListener('pagehide',()=>save(true));
+ window.addEventListener('pageshow',e=>{
+   if(e.persisted){leaving=false;save(true)}
+ });
 })();

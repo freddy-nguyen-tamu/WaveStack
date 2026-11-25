@@ -11,6 +11,14 @@
  let saved={};
  try{const v=JSON.parse(localStorage.getItem(storageKey)||'{}');if(v&&typeof v==='object')saved=v}catch{}
  let chapters=[];
+ let navigationTimer=0;
+ function resetPageTurn(){
+   clearTimeout(navigationTimer);navigationTimer=0;
+   root.classList.remove('is-turning');
+ }
+ // BFCache restores the original DOM and JS state, including finished overlays.
+ window.addEventListener('pagehide',resetPageTurn);
+ window.addEventListener('pageshow',resetPageTurn);
  function navigateChapter(event) {
    if(event.defaultPrevented||event.button!==0||event.metaKey||event.ctrlKey||event.altKey||event.shiftKey)return;
    const anchor=event.currentTarget;
@@ -20,7 +28,10 @@
    if(reduced){location.assign(anchor.href);return}
    if(root.classList.contains('is-turning'))return;
    root.classList.add('is-turning');
-   window.setTimeout(()=>location.assign(anchor.href),500);
+   navigationTimer=window.setTimeout(()=>{
+     navigationTimer=0;
+     location.assign(anchor.href);
+   },500);
  }
  function attachLink(a){a.addEventListener('click',navigateChapter)}
  function render(){

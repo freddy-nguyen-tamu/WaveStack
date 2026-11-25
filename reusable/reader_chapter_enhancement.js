@@ -17,13 +17,26 @@
   document.body.append(flip);
   const reduced = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
   let leaving = false;
+  let exitTimer=0, entryTimer=0;
+  const resetPageFlip = () => {
+    clearTimeout(exitTimer);clearTimeout(entryTimer);exitTimer=entryTimer=0;
+    leaving=false;
+    document.documentElement.classList.remove('or-flip-enter','or-flip-exit');
+  };
+  window.addEventListener('pagehide',resetPageFlip);
+  window.addEventListener('pageshow',e=>{
+    if(e.persisted){
+      resetPageFlip();
+      transitioning=false;heldUp=false;heldDown=false;previous=0;completionStart=0;
+    }
+  });
   const leave = (target='/') => {
     if(leaving)return;
     leaving = true;
     window.OpenReaderSaveProgress?.();
     if(reduced()){location.assign(target);return}
     document.documentElement.classList.add('or-flip-exit');
-    setTimeout(()=>location.assign(target),420);
+    exitTimer=setTimeout(()=>{exitTimer=0;location.assign(target)},420);
   };
   home.addEventListener('click',()=>leave('/'));
   // The comic title is a genuine overview link. Keep the original #panel-series
@@ -70,9 +83,9 @@
   sessionStorage.removeItem('open-reader:skip-entry-flip');
   const navigation=performance.getEntriesByType?.('navigation')?.[0];
   const isReload=navigation?.type==='reload';
-  if(!fromReader && !skipFlip && !isReload && !reduced()){
+  if(!fromReader && !skipFlip && !isReload && navigation?.type!=='back_forward' && !reduced()){
     document.documentElement.classList.add('or-flip-enter');
-    setTimeout(()=>document.documentElement.classList.remove('or-flip-enter'),440);
+    entryTimer=setTimeout(()=>{entryTimer=0;document.documentElement.classList.remove('or-flip-enter')},440);
   }
   // When an ordinary chapter link navigates within the reader, explicitly
   // mark the next load as internal even if the browser strips Referer.
