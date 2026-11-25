@@ -18,6 +18,7 @@ class OpenReaderPublicSanity(unittest.TestCase):
             'index.html': b'<html>Shared library</html>',
             'library.json': b'{"comics":[]}',
             'registry.json': b'{"comics":{}}',
+            'source-issues.json': b'{"schema":"comicarchiver.source_issue_feed.v1","cases":[],"resolved_ids":[]}',
             'comics/sample/manifest.json': b'{"chapters":[]}',
             'comics/sample/index.html': b'<html>Comic reader</html>',
             'comics/sample/app.js': b'console.log("reader");',
@@ -31,6 +32,8 @@ class OpenReaderPublicSanity(unittest.TestCase):
     def fake_get(self, url, **kwargs):
         self.calls.append(url)
         rel = url.split('workers.dev/', 1)[1]
+        if rel == 'api/reader-health':
+            return SimpleNamespace(status_code=200, json=lambda:{'script':'open-reader-panel-replacement-v1'})
         path = rel + 'index.html' if not rel or rel.endswith('/') else rel
         p = self.stage / path
         if p.is_file():
@@ -43,7 +46,7 @@ class OpenReaderPublicSanity(unittest.TestCase):
         self.assertIn('https://open-reader.account.workers.dev/', self.calls)
         self.assertIn('https://open-reader.account.workers.dev/comics/sample/', self.calls)
         self.assertIn('https://open-reader.account.workers.dev/comics/sample/app.js', self.calls)
-        self.assertEqual(len(self.calls), 6)
+        self.assertEqual(len(self.calls), 8)
 
     def test_missing_homepage_must_not_pass_silent_noop(self):
         base = self.fake_get
@@ -86,7 +89,7 @@ class OpenReaderPublicSanity(unittest.TestCase):
             return base(url, **kwargs)
         with patch.object(reader.requests, 'get', side_effect=wrong_html), \
              patch('time.sleep'):
-            with self.assertRaisesRegex(RuntimeError, 'checksum differs'):
+            with self.assertRaisesRegex(RuntimeError, 'SHA-256 mismatch'):
                 reader._verify_published('https://open-reader.account.workers.dev', self.stage, self.registry)
 
 

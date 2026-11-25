@@ -40,6 +40,7 @@ from site_specific import site_adapter as ADAPTER
 
 from .progress import Progress, duration, stop_progress
 from .image_checkpoint import ChapterImageCheckpoint
+from . import open_reader_verify_auth
 
 from .source_session import (SourceAccessPaused, SourceManualActionRequired,
                             SourceRequestGuard, open_source_context, source_browser_context,
@@ -2638,7 +2639,7 @@ def verify_cloudflare_asset(url: str, expected_sha256: str | None = None,
             response_box = queue.Queue(maxsize=1)
             def fetch():
                 try:
-                    response_box.put(('ok', requests.get(url, timeout=45)))
+                    response_box.put(('ok', open_reader_verify_auth.get(url, timeout=45)))
                 except BaseException as err:
                     response_box.put(('error', err))
             worker = threading.Thread(target=fetch, daemon=True)
@@ -3552,7 +3553,9 @@ def all_work_completed(db, *, mode='pages', worker_url=None):
         if not expected_ids or expected_ids != published_ids:
             return False
         route = worker_url.rstrip('/') + '/comics/' + slug + '/'
-        return all(url.startswith(route + '?chapter=') for _,_,url in rows)
+        from urllib.parse import quote
+        return all(url == route + '?chapter=' + quote(str(chapter_id), safe='')
+                   for chapter_id, _, url in rows)
     project = (slug + '-reader')[:58]
     record = db.execute('SELECT production_url FROM deployments WHERE project=?', (project,)).fetchone()
     return bool(record and record[0])
@@ -3606,6 +3609,7 @@ def build_parser():
     a.add_argument("--github-login", action="store_true")
     a.add_argument("--github-account", action="store_true")
     a.add_argument("--status", action="store_true")
+    a.add_argument("--repair-reader-readmes", action="store_true", help="Finish README and final manifest verification for an already published current comic; no deployment or shutdown")
     a.add_argument("--audit-resources", action="store_true", help="Show reader/volume dependencies; does not delete anything")
     a.add_argument("--resume", action="store_true", help="Resume saved archive then publish pending chapters")
     a.add_argument('--retry-server-failures', action='store_true',
@@ -3632,6 +3636,8 @@ def build_parser():
 
 def main():
     args = build_parser().parse_args()
+    if args.repair_reader_readmes and sys.argv[1:] != ["--repair-reader-readmes"]:
+        raise SystemExit("--repair-reader-readmes must be used alone")
     # Keep the existing Webtoon archive exactly where older versions stored it.
     # New adapters use their own state without mixing colliding chapter IDs.
     global DATA
@@ -3640,21 +3646,42 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     db = init_db()
     if args.open_reader_url:
-        from .open_reader import load_state, save_state
+        from .open_reader import load_state, save_state, _public_json, SCHEMA
         url = args.open_reader_url.rstrip('/')
-        parsed = urlsplit(url)
-        if parsed.scheme != 'https' or not re.fullmatch(
-            r'open-reader\.[a-z0-9-]+\.workers\.dev', parsed.netloc, re.I):
+        if open_reader_verify_auth._safe_origin(url) != url:
             raise RuntimeError('Only an actual open-reader.*.workers.dev production URL may be adopted')
-        response = requests.get(url + '/registry.json', timeout=25)
-        if response.status_code != 200 or not isinstance(response.json().get('comics'), dict):
+        remote = _public_json(url + '/registry.json')
+        if (not isinstance(remote, dict) or remote.get('version') != SCHEMA or
+                not isinstance(remote.get('comics'), dict)):
             raise RuntimeError('Existing open-reader registry could not be verified. No URL was adopted.')
         existing = load_state(ROOT)
+        if existing.get('worker_url', '').rstrip('/') != url:
+            # Verification of a different origin cannot be inherited.
+            existing.pop('verified_frontend_hash', None)
         existing['worker_url'] = url
         save_state(sys.modules[__name__], existing)
         print('Verified existing open-reader Worker URL:', url)
     if not (args.github_login or args.github_switch_account or args.github_logout):
         _inherit_shared_github_auth(db)
+    if args.repair_reader_readmes:
+        from .open_reader_focused import repair_verified_readmes
+        try:
+            repair_verified_readmes(sys.modules[__name__], db)
+            from .open_reader import load_state
+            from .shared_reader_volume import verify_current_in_shared_reader
+            url = load_state(ROOT)['worker_url']
+            verify_current_in_shared_reader(sys.modules[__name__], db, url)
+            if not all_work_completed(db, mode='shared-worker', worker_url=url):
+                raise RuntimeError('Final completion gate did not pass; no publication or archive was changed')
+            print('RUN COMPLETE: existing shared reader, chapter manifest and README links verified; no upload or shutdown.', flush=True)
+            event('RUN_COMPLETE', chapters=db.execute('SELECT COUNT(*) FROM chapters').fetchone()[0],
+                  all_published=True, source_recrawl=False, reader_mode='shared-worker', reader_url=url)
+        except (RuntimeError, requests.RequestException, ValueError) as exc:
+            print('READER COMPLETION PENDING: ' + str(exc), file=sys.stderr, flush=True)
+            raise SystemExit(1) from None
+        finally:
+            db.close()
+        return
     if args.default_source_url:
         print(ADAPTER.DEFAULT_START_URL)
         return

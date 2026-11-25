@@ -478,31 +478,23 @@ def _run_preflight(*, run_tests=True) -> None:
         fail('mandatory resume/reconnect regression failed')
     print('  PASS mandatory resume/reconnect regressions (' + resume_count.group(1) + ' tests)',flush=True)
 
-    # Always run the short, provider-neutral regression for the live blob
-    # handler revision and exact-image fail-closed behavior. Skipping the long
-    # historical suites must not disable this required release contract.
-    required = 'test_blob_transfer_runtime_gate.py'
-    if not (ROOT / 'tests' / required).is_file():
-        fail('mandatory live-blob runtime regression missing: tests/' + required)
-    # Missing Pillow is handled by the project's existing first-run dependency
-    # bootstrap. Never block that bootstrap solely because this test needs PIL.
+    # The complete authenticated publication path is mandatory, even when
+    # optional tests are skipped. Replaces the duplicate live-blob test run.
+    completion_test = 'test_publication_completion.py'
+    if not (ROOT / 'tests' / completion_test).is_file():
+        fail('mandatory publication completion test missing: tests/' + completion_test)
     try:
-        import PIL  # noqa: F401
-    except ImportError:
-        print('  NOTE: mandatory blob test deferred until Python dependencies are installed', flush=True)
-    else:
-        try:
-            result = subprocess.run([sys.executable, '-m', 'unittest', 'discover',
-                                     '-s', 'tests', '-p', required, '-v'],
-                                    cwd=ROOT, capture_output=True, text=True,
-                                    timeout=45, encoding='utf-8', errors='replace')
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            fail('mandatory live-blob regression did not run: ' + str(exc))
-        count = re.search(r'Ran (\d+) tests?', result.stdout + result.stderr)
-        if result.returncode != 0 or not count or int(count.group(1)) < 6:
-            print((result.stdout + result.stderr)[-9000:], file=sys.stderr, flush=True)
-            fail('mandatory live-blob runtime regression failed')
-        print('  PASS mandatory live-blob runtime regression (' + count.group(1) + ' tests)', flush=True)
+        completion_result = subprocess.run(
+            [sys.executable, '-m', 'unittest', 'discover', '-s', 'tests',
+             '-p', completion_test, '-v'], cwd=ROOT, capture_output=True,
+            text=True, timeout=45, encoding='utf-8', errors='replace')
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        fail('mandatory publication completion tests did not complete: ' + str(exc))
+    completion_count = re.search(r'Ran (\d+) tests?', completion_result.stdout + completion_result.stderr)
+    if completion_result.returncode != 0 or not completion_count or int(completion_count.group(1)) < 18:
+        print((completion_result.stdout + completion_result.stderr)[-9000:], file=sys.stderr, flush=True)
+        fail('mandatory publication completion regression failed')
+    print('  PASS mandatory publication completion regressions (' + completion_count.group(1) + ' tests)', flush=True)
 
     if not run_tests:
         print('PREFLIGHT COMPATIBILITY PASSED: optional regression suites skipped by user.\n', flush=True)
@@ -553,6 +545,14 @@ def _run_preflight(*, run_tests=True) -> None:
 def main() -> None:
     os.chdir(ROOT)
     _relaunch_project_venv()
+    if '--repair-reader-readmes' in sys.argv[1:]:
+        if sys.argv[1:] != ['--repair-reader-readmes']:
+            raise SystemExit('--repair-reader-readmes must be used alone')
+        # This is a post-publication recovery operation: no Wrangler, archive,
+        # workflow prompts, bootstrap, deployment, or shutdown.
+        import reusable.engine as engine
+        engine.main()
+        return
     # Always run quick, fail-closed release/manifest contract checks. The
     # expensive local suites and old GitHub audit may be explicitly skipped
     # for this interactive run; --self-test-only ALWAYS runs all tests.

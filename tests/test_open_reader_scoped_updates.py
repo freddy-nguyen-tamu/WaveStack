@@ -47,15 +47,65 @@ class ScopedUpdates(unittest.TestCase):
             self.assertEqual(engine.build_parser().parse_args(
                 ['--open-reader-update-scope',value]).open_reader_update_scope,value)
 
-    def test_comic_only_requires_same_frontend(self):
+    def test_comic_with_changed_frontend_verifies_all_routes_only_current_images(self):
+        old=self._comic('old')
+        new=self._comic('new')
+        live={'version':2,'comics':{'old':old},'frontend_hash':'oldhash'}
+        state={'worker_url':URL,'comics':{'old':old}}
+        engine_stub=SimpleNamespace(ROOT=ROOT,get_option=lambda *a:'new',
+            credential_for_selected=lambda db:('owner','token'),
+            select_cloudflare_account=lambda:None)
+        payload={'version':2,'comics':{'old':old,'new':new},'frontend_hash':'newhash'}
+        with mock.patch.object(focused.reader,'load_state',return_value=state), \
+            mock.patch.object(focused.reader,'_public_json',return_value=live), \
+            mock.patch.object(focused,'current_comic',return_value=new), \
+            mock.patch.object(focused.reader,'_reader_hash',return_value='newhash'), \
+            mock.patch.object(focused.reader,'_remote_shared_registry',return_value=(
+                {'comics':live['comics']},'version_sha')), \
+            mock.patch.object(focused.github_streaming,'load_mode',return_value=False), \
+            mock.patch.object(focused.reader,'_validate_live_assets') as sample, \
+            mock.patch.object(focused.reader,'stage_worker_assets',return_value=payload) as stage, \
+            mock.patch.object(focused.reader,'_assert_no_unowned_existing_worker'), \
+            mock.patch.object(focused.reader,'_deploy',return_value=URL) as deploy, \
+            mock.patch.object(focused.reader,'_verify_published') as verify, \
+            mock.patch.object(focused.reader,'save_state'), \
+            mock.patch.object(focused.reader,'_checkpoint_shared_registry'), \
+            mock.patch.object(focused,'_checkpoint_current'), \
+            mock.patch.object(focused,'_target_readmes'):
+            self.assertEqual(focused.publish(engine_stub,None,scope='comic'),URL)
+            deploy.assert_called_once()
+            self.assertEqual(verify.call_args.kwargs,
+                             {'verify_slugs':None,'verify_image_slugs':{'new'}})
+            self.assertEqual(stage.call_args.args[1]['comics']['old'],old)
+            sample.assert_called_once_with(new,engine_stub)
+
+    def test_interrupted_shared_deploy_rechecks_every_frontend_before_adoption(self):
+        old=self._comic('old')
+        new=self._comic('new')
+        payload={'version':2,'comics':{'old':old,'new':new},'frontend_hash':'newhash'}
+        engine_stub=SimpleNamespace(ROOT=ROOT,get_option=lambda *a:'new',
+            credential_for_selected=lambda db:('owner','token'),
+            select_cloudflare_account=lambda:None)
         with mock.patch.object(focused.reader,'load_state',return_value={
-            'worker_url':URL,'comics':{}}), \
-            mock.patch.object(focused.reader,'_public_json',return_value={
-                'version':2,'comics':{'old':self._comic('old')},'frontend_hash':'oldhash'}), \
-            mock.patch.object(focused,'current_comic',return_value=self._comic('new')), \
-            mock.patch.object(focused.reader,'_reader_hash',return_value='newhash'):
-            with self.assertRaisesRegex(RuntimeError,'Shared reader/frontend'):
-                focused.publish(SimpleNamespace(ROOT=ROOT,get_option=lambda *a:'new'),None,scope='comic')
+                'worker_url':URL,'comics':{'old':old},'verified_frontend_hash':'oldhash'}), \
+            mock.patch.object(focused.reader,'_public_json',return_value=payload), \
+            mock.patch.object(focused,'current_comic',return_value=new), \
+            mock.patch.object(focused.reader,'_reader_hash',return_value='newhash'), \
+            mock.patch.object(focused.reader,'_remote_shared_registry',return_value=(
+                {'comics':{'old':old}},'version_sha')), \
+            mock.patch.object(focused.github_streaming,'load_mode',return_value=False), \
+            mock.patch.object(focused.reader,'_validate_live_assets'), \
+            mock.patch.object(focused.reader,'stage_worker_assets',return_value=payload), \
+            mock.patch.object(focused.reader,'_deploy') as deploy, \
+            mock.patch.object(focused.reader,'_verify_published') as verify, \
+            mock.patch.object(focused.reader,'save_state') as save, \
+            mock.patch.object(focused.reader,'_checkpoint_shared_registry'), \
+            mock.patch.object(focused,'_checkpoint_current'), \
+            mock.patch.object(focused,'_target_readmes'):
+            self.assertEqual(focused.publish(engine_stub,None,scope='comic'),URL)
+            deploy.assert_not_called()
+            self.assertEqual(verify.call_args.kwargs,{'verify_slugs':None,'verify_image_slugs':{'new'}})
+            self.assertEqual(save.call_args.args[1]['verified_frontend_hash'],'newhash')
 
     def test_site_only_always_deploys_worker_even_if_registry_unchanged(self):
         live={'version':2,'frontend_hash':'same','comics':{'old':self._comic('old')}}

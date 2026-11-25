@@ -12,6 +12,8 @@ import json
 import re
 import sqlite3
 import tempfile
+
+import requests
 from pathlib import Path
 from urllib.parse import urlsplit, quote
 
@@ -77,14 +79,61 @@ def _target_readmes(engine, owner, token, registry, slug):
     repos = {im['github']['repo'] for chapter in registry['comics'][slug]['chapters']
              for im in chapter['images'] if im.get('github')}
     route = registry['worker_url'].rstrip('/') + '/comics/' + slug + '/'
-    for repo in sorted(repos):
-        check = engine.github_http('GET',
-            f'{engine.GITHUB_API}/repos/{owner}/{repo}', token)
-        data = check.json() if check.status_code == 200 else {}
-        if check.status_code != 200 or not isinstance(data,dict) or not data.get('private') or \
-                (data.get('owner') or {}).get('login','').lower() != owner.lower():
-            raise RuntimeError('Current comic repository identity could not be verified: ' + repo)
-        reader._sync_github_readme(engine, owner, token, repo, slug, route)
+    pending = []
+    for index, repo in enumerate(sorted(repos), 1):
+        print(f'open-reader: README {index}/{len(repos)} {repo}', flush=True)
+        try:
+            check = engine.github_http('GET', f'{engine.GITHUB_API}/repos/{owner}/{repo}', token)
+            data = check.json() if check.status_code == 200 else {}
+            if check.status_code != 200 or not isinstance(data,dict) or not data.get('private') or \
+                    (data.get('owner') or {}).get('login','').lower() != owner.lower():
+                raise RuntimeError('Current comic repository identity could not be verified: ' + repo)
+            changed = reader._sync_github_readme(engine, owner, token, repo, slug, route)
+            print(f'open-reader: README {repo} ' + ('updated and verified' if changed else 'already current'), flush=True)
+        except (RuntimeError, requests.RequestException, ValueError) as exc:
+            pending.append(repo)
+            print(f'open-reader: README PENDING {repo}: {exc}', flush=True)
+    if pending:
+        raise RuntimeError('Publication verified; README synchronization pending: ' + ', '.join(pending) +
+                           '. Run python run.py --repair-reader-readmes to retry only README files.')
+
+
+def repair_verified_readmes(engine, db):
+    """Documentation-only recovery; never deploy, archive, or mark a chapter verified."""
+    state = reader.load_state(engine.ROOT)
+    url = str(state.get('worker_url') or '').rstrip('/')
+    if not re.fullmatch(r'https://open-reader\.[a-z0-9-]+\.workers\.dev', url):
+        raise RuntimeError('No verified shared Worker URL; run normal publication first')
+    slug = engine.get_option(db, 'series_slug')
+    comic = state['comics'].get(slug)
+    rows = db.execute('SELECT chapter_id,status,published_url FROM chapters').fetchall()
+    route = url + '/comics/' + str(slug) + '/'
+    if (not comic or not rows or
+            {str(row[0]) for row in rows} != {str(ch['id']) for ch in comic['chapters']} or
+            any(status != 'PUBLISHED_VERIFIED' or not link or
+                link != route + '?chapter=' + quote(str(chid), safe='') for chid, status, link in rows)):
+        raise RuntimeError('Current comic is not fully checkpointed as published; run normal publication first')
+    # Compare current local archive identity, the live index and the durable
+    # private index. Do not rely on stale SQLite alone and do not repeat image
+    # or asset verification for a documentation-only operation.
+    current = current_comic(engine, db)
+    if reader.canonical(current['chapters']) != reader.canonical(comic['chapters']):
+        raise RuntimeError('Current archive metadata differs from verified registry; run normal publication first')
+    owner, token = engine.credential_for_selected(db)
+    if not owner or not token:
+        raise RuntimeError('GitHub authentication is required to repair README files')
+    print('open-reader: checking live and private registry for README-only recovery', flush=True)
+    live = reader._public_json(url + '/registry.json')
+    saved, known_sha = reader._remote_shared_registry(engine, owner, token, {reader.WORKER_NAME})
+    expected = {'version':reader.SCHEMA, 'worker_url':url, 'comics':state['comics']}
+    if (not known_sha or not isinstance(live, dict) or live.get('version') != reader.SCHEMA or
+            reader.canonical(live.get('comics')) != reader.canonical(state['comics']) or
+            reader.canonical(saved) != reader.canonical(expected)):
+        raise RuntimeError('Live/private registry differs from verified local index; run normal publication first')
+    if state.get('verified_frontend_hash') and live.get('frontend_hash') != state['verified_frontend_hash']:
+        raise RuntimeError('Live frontend differs from previously verified version; run normal publication first')
+    _target_readmes(engine, owner, token, state, slug)
+    print('README REPAIR COMPLETE: documentation only; no archive, asset or deployment changes.', flush=True)
 
 
 def publish(engine, db, *, scope):
@@ -110,17 +159,23 @@ def publish(engine, db, *, scope):
     if pending - ({current_slug} if current_slug else set()):
         raise RuntimeError('Other comics exist only in local registry; choose full sync to avoid dropping them: '
                            + ', '.join(sorted(pending)))
+    shared_frontend_changed = False
     if scope == 'comic':
         comic = current_comic(engine, db)
         current_slug = comic['slug']
         if current_slug not in registry['comics'] and len(set(state['comics']) - set(registry['comics'])) > 1:
             raise RuntimeError('Other unpublished comics require full sync first')
         reader.combine(registry, {current_slug: comic})
-        # A shared frontend change would affect old comics too; refuse the
-        # comic-only mode instead of quietly publishing it without validation.
-        if reader._reader_hash(engine.ROOT) != live.get('frontend_hash'):
-            raise RuntimeError('Shared reader/frontend code differs from live. Use the homepage/routes '
-                               'or full-library update mode, not current-comic-only.')
+        # Shared changes affect every generated reader route. Expand STATIC
+        # verification, not historical repository discovery or image sampling.
+        # Preserve all other live comic manifests and retain the private registry
+        # consistency checks below.
+        frontend_hash = reader._reader_hash(engine.ROOT)
+        shared_frontend_changed = (frontend_hash != live.get('frontend_hash')
+                                   or frontend_hash != state.get('verified_frontend_hash'))
+        if shared_frontend_changed:
+            print('open-reader: shared frontend changed; verifying all frontend routes '
+                  'with current-comic image samples only. Other comics preserved.', flush=True)
     owner, token = engine.credential_for_selected(db)
     if not owner or not token:
         raise RuntimeError('Authenticated GitHub account is required to protect the private registry')
@@ -157,14 +212,19 @@ def publish(engine, db, *, scope):
         payload = reader.stage_worker_assets(engine.ROOT, registry, stage,
                                              partial_records=partial_records)
         verify_slugs = {current_slug} if scope == 'comic' else set()
+        verify_kwargs = {'verify_slugs': verify_slugs}
+        if shared_frontend_changed:
+            verify_kwargs = {'verify_slugs': None, 'verify_image_slugs': {current_slug}}
         # Shared-route changes may live ONLY in Worker JS and leave the static
         # registry hash unchanged, so a site-only request must always deploy.
         if scope == 'comic' and reader.canonical(live) == reader.canonical(payload):
             try:
-                reader._verify_published(url,stage,registry, verify_slugs=verify_slugs)
-            except RuntimeError:
+                reader._verify_published(url,stage,registry, **verify_kwargs)
+            except reader.PublishedAssetsStale:
                 print('open-reader: targeted assets stale; redeploying.',flush=True)
             else:
+                if scope == 'comic':
+                    registry['verified_frontend_hash'] = frontend_hash
                 reader.save_state(engine,registry)
                 reader._checkpoint_shared_registry(engine,db,owner,token,registry,
                                                    known_sha,{reader.WORKER_NAME})
@@ -178,14 +238,22 @@ def publish(engine, db, *, scope):
               ('current comic plus shared routes' if scope == 'comic' else 'shared routes only') +
               '. Older comics preserved from live registry.',flush=True)
         deployed = reader._deploy(engine,stage,registry)
-        reader._verify_published(deployed,stage,registry, verify_slugs=verify_slugs)
+        reader._verify_published(deployed,stage,registry, **verify_kwargs)
         registry['worker_url']=deployed
+        if scope == 'comic':
+            registry['verified_frontend_hash'] = frontend_hash
+        elif (state.get('verified_frontend_hash') and
+              state['verified_frontend_hash'] == payload.get('frontend_hash')):
+            # Site-only verification does not verify every comic route; retain
+            # an existing matching fingerprint but never claim a new one.
+            registry['verified_frontend_hash'] = state['verified_frontend_hash']
         reader.save_state(engine,registry)
         reader._checkpoint_shared_registry(engine,db,owner,token,registry,
                                            known_sha,{reader.WORKER_NAME})
         if scope == 'comic':
             _checkpoint_current(db,engine,registry,current_slug)
             _target_readmes(engine,owner,token,registry,current_slug)
-        print('open-reader: '+scope+' update verified on selected routes; '
-              'old comic endpoints not resampled.',flush=True)
+        print('open-reader: '+scope+' update verified; '
+              + ('all frontend routes checked; ' if shared_frontend_changed else '')
+              + 'old comic images not resampled.',flush=True)
         return deployed

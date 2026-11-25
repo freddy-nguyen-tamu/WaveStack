@@ -47,7 +47,7 @@ class VolumePreflightTests(unittest.TestCase):
         d=sqlite3.connect(':memory:');d.row_factory=sqlite3.Row
         d.execute('CREATE TABLE chapters (chapter_id TEXT, status TEXT, repository TEXT, pages_json TEXT, ordinal INTEGER DEFAULT 0)')
         d.execute("INSERT INTO chapters VALUES ('98','ARCHIVED_PENDING_DEPLOYMENT','a-vol-001', '{}', 98)")
-        response=SimpleNamespace(raise_for_status=lambda:None,
+        response=SimpleNamespace(status_code=200,raise_for_status=lambda:None,
                                  json=lambda:{'chapters':[{'id':'97'}]})
         with patch.object(e,'get_option',return_value='annoying-alice'), \
              patch.object(v.requests,'get',return_value=response):

@@ -163,6 +163,8 @@ def load_state(root):
     if not isinstance(raw, dict) or not isinstance(raw.get('comics'), dict):
         raise RuntimeError('Existing open-reader registry is invalid; refusing to overwrite')
     result = {'version': SCHEMA, 'worker_url': str(raw.get('worker_url') or ''), 'comics': {}}
+    if re.fullmatch(r'[a-f0-9]{64}', str(raw.get('verified_frontend_hash') or '')):
+        result['verified_frontend_hash'] = raw['verified_frontend_hash']
     return combine(result, raw['comics'])
 
 
@@ -1161,7 +1163,12 @@ def _deploy(engine, stage, registry):
                        'Check Cloudflare Workers > open-reader for its production URL.')
 
 
-def _verify_published(worker_url, staged, registry, *, verify_slugs=None):
+class PublishedAssetsStale(RuntimeError):
+    """Positive evidence of stale static assets; safe to consider redeploying."""
+
+
+def _verify_published(worker_url, staged, registry, *, verify_slugs=None,
+                      verify_image_slugs=None):
     """Validate all deployed assets, allowing *only* registered panel overlays.
 
     /source-issues.json is computed dynamically with R2 replacement states.
@@ -1180,8 +1187,10 @@ def _verify_published(worker_url, staged, registry, *, verify_slugs=None):
         health = check.json()
     except ValueError as exc:
         raise RuntimeError('Open Reader Worker health endpoint returned invalid JSON') from exc
+    if not isinstance(health, dict):
+        raise RuntimeError('Open Reader Worker health endpoint returned an invalid object')
     if health.get('script') != 'open-reader-panel-replacement-v1':
-        raise RuntimeError('Open Reader Worker health endpoint returned an outdated script marker')
+        raise PublishedAssetsStale('Open Reader Worker health endpoint returned an outdated script marker')
     if (stage / 'upload-catalog.json').is_file() and not health.get('github_streaming_configured'):
         raise RuntimeError('GitHub App credentials missing on Worker; preserving previous Cloudflare image volumes')
     expected_feed = json.loads((stage / 'source-issues.json').read_text(encoding='utf-8'))
@@ -1189,10 +1198,15 @@ def _verify_published(worker_url, staged, registry, *, verify_slugs=None):
     live_feed = None
     github_replacements = None
 
+    def feed_shape(data):
+        return (isinstance(data, dict) and
+                data.get('schema') == 'comicarchiver.source_issue_feed.v1' and
+                isinstance(data.get('cases'), list) and
+                all(isinstance(c, dict) and isinstance(c.get('id'), str)
+                    for c in data['cases']))
+
     def validate_feed(data):
-        if (not isinstance(data, dict) or
-                data.get('schema') != 'comicarchiver.source_issue_feed.v1' or
-                not isinstance(data.get('cases'), list)):
+        if not feed_shape(data):
             return False
         ids = {c.get('id') for c in data['cases'] if isinstance(c, dict)}
         resolved = set(expected_feed.get('resolved_ids') or [])
@@ -1211,10 +1225,14 @@ def _verify_published(worker_url, staged, registry, *, verify_slugs=None):
             if len(parts)==3 and parts[0]=='comics' and parts[2]=='manifest.json':
                 if github_replacements is None:
                     response=open_reader_verify_auth.get(worker_url.rstrip('/')+'/api/github-replacements.json',timeout=30)
-                    if response.ok and response.json().get('schema')=='reader-github-replacements-v1':
-                        github_replacements=response.json().get('panels') or {}
-                    else:
-                        github_replacements={}
+                    if response.status_code != 200:
+                        raise RuntimeError('Cannot verify GitHub replacement index: HTTP ' + str(response.status_code))
+                    replacements = response.json()
+                    if (not isinstance(replacements, dict) or
+                            replacements.get('schema') != 'reader-github-replacements-v1' or
+                            not isinstance(replacements.get('panels'), dict)):
+                        raise RuntimeError('Cannot verify malformed GitHub replacement index')
+                    github_replacements = replacements['panels']
                 original=json.loads(json.dumps(expected))
                 edited=json.loads(json.dumps(deployed))
                 if (isinstance(edited.get('chapters'),list) and
@@ -1303,6 +1321,13 @@ def _verify_published(worker_url, staged, registry, *, verify_slugs=None):
         expected_hash = sha(source.read_bytes())
         url = worker_url.rstrip('/') + '/' + public_path
         problem = 'no response'
+        stale_observations = 0
+        # A dynamic manifest/feed can be stale when newly archived partial
+        # panels change, even if registry.json has not changed. Require valid
+        # independent overlay responses before classifying it as stale.
+        is_feed = relative == 'source-issues.json'
+        is_manifest = relative.startswith('comics/') and relative.endswith('/manifest.json')
+        static = not (is_feed or is_manifest)
         for attempt in range(5):
             try:
                 response = open_reader_verify_auth.get(url, headers={'Cache-Control': 'no-cache'}, timeout=40)
@@ -1325,22 +1350,38 @@ def _verify_published(worker_url, staged, registry, *, verify_slugs=None):
                 if response.status_code == 200:
                     if sha(response.content) == expected_hash:
                         break
-                    if relative == 'source-issues.json':
+                    if is_feed:
                         data = response.json()
                         if validate_feed(data):
                             live_feed = data
                             break
-                    elif relative.startswith('comics/') and relative.endswith('/manifest.json'):
-                        if live_feed is None:
-                            feed_response = open_reader_verify_auth.get(worker_url.rstrip('/') + '/source-issues.json',
-                                                         headers={'Cache-Control':'no-cache'}, timeout=40)
-                            if feed_response.ok and validate_feed(feed_response.json()):
-                                live_feed = feed_response.json()
-                        if validate_manifest(relative, response.json()):
-                            break
+                        if feed_shape(data):
+                            stale_observations += 1
+                    elif is_manifest:
+                        data = response.json()
+                        if (isinstance(data, dict) and isinstance(data.get('chapters'), list) and
+                                all(isinstance(ch, dict) and isinstance(ch.get('images'), list)
+                                    for ch in data['chapters'])):
+                            if live_feed is None:
+                                feed_response = open_reader_verify_auth.get(worker_url.rstrip('/') + '/source-issues.json',
+                                                             headers={'Cache-Control':'no-cache'}, timeout=40)
+                                if feed_response.status_code != 200:
+                                    raise RuntimeError('Cannot verify source issue overlay: HTTP ' + str(feed_response.status_code))
+                                feed_data = feed_response.json()
+                                if not feed_shape(feed_data):
+                                    raise RuntimeError('Cannot verify malformed source issue overlay')
+                                if validate_feed(feed_data):
+                                    live_feed = feed_data
+                            if validate_manifest(relative, data):
+                                break
+                            stale_observations += 1
+                    elif static:
+                        stale_observations += 1
                     problem = 'HTTP 200 but unexpected dynamic content or SHA-256 mismatch'
                 else:
                     problem = f'HTTP {response.status_code}'
+                    if static and response.status_code == 404:
+                        stale_observations += 1
             except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
                 problem = f'{type(exc).__name__}: {exc}'
             if attempt < 4:
@@ -1348,8 +1389,9 @@ def _verify_published(worker_url, staged, registry, *, verify_slugs=None):
                 print(f'open-reader: verifying {url}: {problem}; retry {attempt+1}/5', flush=True)
                 time.sleep(min(10, 2**attempt))
         else:
-            raise RuntimeError(f'Open Reader live URL is unavailable or outdated: {url} '
-                               f'({problem}); refusing to claim deployment complete')
+            error_type = PublishedAssetsStale if stale_observations == 5 else RuntimeError
+            raise error_type(f'Open Reader live URL is unavailable or outdated: {url} '
+                             f'({problem}); refusing to claim deployment complete')
         print(f'open-reader: HTTP 200 + integrity OK {url}', flush=True)
     if (stage / 'upload-catalog.json').is_file():
         # Inspect actual Worker -> private GitHub -> browser bytes BEFORE any
@@ -1357,6 +1399,8 @@ def _verify_published(worker_url, staged, registry, *, verify_slugs=None):
         found = {}
         for slug, comic in registry['comics'].items():
             if verify_slugs is not None and slug not in verify_slugs:
+                continue
+            if verify_image_slugs is not None and slug not in verify_image_slugs:
                 continue
             for ch in comic['chapters']:
                 for im in ch['images']:
@@ -1373,26 +1417,50 @@ def _verify_published(worker_url, staged, registry, *, verify_slugs=None):
             print('open-reader: live GitHub-on-demand pixels verified '+repo,flush=True)
 
 
-def _sync_github_readme(engine, owner, token, repo, slug, route):
-    """Non-destructively replace ONLY a marker-owned README block via GitHub API.
+def _read_readme_version(engine, owner, token, repo):
+    """Read the version and its bytes together, with bounded safe GET retries."""
+    import time
+    url = f'{engine.GITHUB_API}/repos/{owner}/{repo}/contents/README.md?ref=main'
+    for attempt in range(3):
+        try:
+            response = engine.github_http('GET', url, token)
+            if response.status_code == 404:
+                return None, None
+            if response.status_code == 200:
+                info = response.json()
+                version = info.get('sha')
+                if not version:
+                    raise RuntimeError(f'GitHub omitted README blob identity: {repo}')
+                if info.get('encoding') == 'base64' and 'content' in info:
+                    body = base64.b64decode(info['content'])
+                else:
+                    body = _repo_contents(engine, owner, token, repo, 'README.md')
+                if body is None:
+                    raise RuntimeError(f'{repo} README disappeared during sync')
+                # A second fetch, when needed for a large README, must not
+                # accidentally pair newer bytes with an older version token.
+                if re.fullmatch(r'[a-f0-9]{40}', version):
+                    actual = hashlib.sha1(b'blob ' + str(len(body)).encode('ascii') + b'\0' + body).hexdigest()
+                    if actual != version:
+                        raise RuntimeError(f'{repo} README changed during read; refusing overwrite')
+                return version, body
+            if response.status_code not in (500, 502, 503, 504):
+                raise RuntimeError(f'Cannot check {repo} README: HTTP {response.status_code}')
+            problem = f'HTTP {response.status_code}'
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            problem = type(exc).__name__
+        if attempt < 2:
+            print(f'open-reader: {repo} README read uncertain ({problem}); retrying', flush=True)
+            time.sleep(2 ** attempt)
+    raise RuntimeError(f'Cannot check {repo} README: {problem}; verified publication retained')
 
-    The 409/422 compare-and-swap conflict is not retried blindly. All original
-    README lines and image/tree files remain in the original repository.
-    """
+
+def _sync_github_readme(engine, owner, token, repo, slug, route):
+    """Update only the managed README marker; recover uncertain writes safely."""
+    import time
     url = f'{engine.GITHUB_API}/repos/{owner}/{repo}/contents/README.md'
-    response = engine.github_http('GET', url + '?ref=main', token)
-    if response.status_code not in (200, 404):
-        raise RuntimeError(f'Cannot check {repo} README: HTTP {response.status_code}')
-    sha_value = None
-    if response.status_code == 200:
-        info = response.json()
-        sha_value = info.get('sha')
-        if not sha_value:
-            raise RuntimeError(f'GitHub omitted README blob identity: {repo}')
-        body = _repo_contents(engine, owner, token, repo, 'README.md')
-        original = body.decode('utf-8')
-    else:
-        original = f'# {slug.replace("-", " ").title()}\n'
+    sha_value, body = _read_readme_version(engine, owner, token, repo)
+    original = body.decode('utf-8') if body is not None else f'# {slug.replace("-", " ").title()}\n'
     start = '<!-- open-reader:begin -->'
     end = '<!-- open-reader:end -->'
     marker = (f'{start}\n\nShared comic library: '
@@ -1413,15 +1481,46 @@ def _sync_github_readme(engine, owner, token, repo, slug, route):
                'branch': 'main'}
     if sha_value:
         payload['sha'] = sha_value
-    save = engine.github_http('PUT', url, token, json=payload)
-    if save.status_code not in (200, 201):
-        raise RuntimeError(f'{repo} README changed during sync or GitHub rejected update '
-                           f'(HTTP {save.status_code}); no other repository files modified')
-    after = _repo_contents(engine, owner, token, repo, 'README.md')
-    if after != updated.encode('utf-8'):
-        raise RuntimeError(f'{repo} README remote verification mismatch')
-    return True
+    desired = updated.encode('utf-8')
 
+    def inspect_after_write():
+        actual_sha, actual = _read_readme_version(engine, owner, token, repo)
+        if actual == desired:
+            return True
+        if actual_sha != sha_value or actual != body:
+            raise RuntimeError(f'{repo} README changed during sync; refusing overwrite')
+        return False
+
+    for attempt in range(2):
+        try:
+            save = engine.github_http('PUT', url, token, json=payload)
+            status = save.status_code
+        except (requests.Timeout, requests.ConnectionError):
+            status = None
+        if status in (200, 201):
+            if not inspect_after_write():
+                raise RuntimeError(f'{repo} README remote verification mismatch')
+            return True
+        if status not in (None, 409, 422, 500, 502, 503, 504):
+            raise RuntimeError(f'{repo} README update rejected (HTTP {status})')
+        print(f'open-reader: {repo} README write uncertain ({status or "connection error"}); checking remote version', flush=True)
+        if inspect_after_write():
+            return True
+        if status in (409, 422):
+            raise RuntimeError(f'{repo} README conflict (HTTP {status}); refusing blind retry')
+        if attempt == 0:
+            time.sleep(2)
+    print(f'open-reader: {repo} README Contents API still failing; using non-forced Git commit fallback', flush=True)
+    try:
+        _git_file_commit(engine, owner, token, repo, 'main', 'README.md', sha_value, desired,
+                         'Document verified open-reader library route')
+    except (RuntimeError, requests.Timeout, requests.ConnectionError):
+        if inspect_after_write():
+            return True
+        raise
+    if not inspect_after_write():
+        raise RuntimeError(f'{repo} README fallback remote verification mismatch')
+    return True
 
 
 def _remote_shared_registry(engine, owner, token, repo_names):
@@ -1456,6 +1555,49 @@ def _remote_shared_registry(engine, owner, token, repo_names):
     if not blob_sha:
         raise RuntimeError('GitHub shared registry returned no version token')
     return decoded, blob_sha
+
+
+def _git_file_commit(engine, owner, token, repo, branch, filepath, expected_sha, data, message):
+    """Fallback for a failing Contents endpoint; change exactly one file.
+
+    A commit based on the observed branch head is installed with a non-forced
+    ref update. Concurrent changes cannot be overwritten by a divergent commit.
+    """
+    base = f'{engine.GITHUB_API}/repos/{owner}/{repo}'
+    ref_path = 'heads/' + quote(branch, safe='/')
+
+    def call(method, path, accepted, **kwargs):
+        result = engine.github_http(method, base + path, token, **kwargs)
+        if result.status_code not in accepted:
+            raise RuntimeError(f'GitHub file Git-data fallback failed at {method} {path} '
+                               f'(HTTP {result.status_code}); verified Worker retained')
+        return result.json()
+
+    head = call('GET', '/git/ref/' + ref_path, (200,))['object']['sha']
+    original = engine.github_http('GET', base + '/contents/' + quote(filepath, safe='/') + '?ref=' + quote(head, safe=''), token)
+    if original.status_code not in (200, 404):
+        raise RuntimeError(f'Cannot inspect file at Git head: HTTP {original.status_code}')
+    blob = original.json().get('sha') if original.status_code == 200 else None
+    if original.status_code == 200 and not blob:
+        raise RuntimeError('GitHub file returned no blob identity')
+    if blob != expected_sha:
+        raise RuntimeError('GitHub file changed during publication; refusing overwrite')
+    parent = call('GET', '/git/commits/' + head, (200,))
+    new_blob = call('POST', '/git/blobs', (201,), json={
+        'content': base64.b64encode(data).decode('ascii'), 'encoding': 'base64'})['sha']
+    tree = call('POST', '/git/trees', (201,), json={
+        'base_tree': parent['tree']['sha'], 'tree': [{'path': filepath,
+        'mode': '100644', 'type': 'blob', 'sha': new_blob}]})['sha']
+    commit = call('POST', '/git/commits', (201,), json={
+        'message': message,
+        'tree': tree, 'parents': [head]})['sha']
+    # No force push; a newer unrelated commit causes a safe conflict.
+    call('PATCH', '/git/refs/' + ref_path, (200,), json={'sha': commit, 'force': False})
+
+
+def _registry_git_commit(engine, owner, token, branch, expected_sha, data):
+    return _git_file_commit(engine, owner, token, WORKER_NAME, branch, 'registry.json',
+                            expected_sha, data, 'Back up verified open-reader library registry')
 
 
 def _checkpoint_shared_registry(engine, db, owner, token, registry, known_sha, owned_repos):
@@ -1497,10 +1639,54 @@ def _checkpoint_shared_registry(engine, db, owner, token, registry, known_sha, o
                'content':base64.b64encode(data).decode('ascii'), 'branch':branch}
     if current_sha:
         payload['sha'] = current_sha
-    updated = engine.github_http('PUT', endpoint, token, json=payload)
-    if updated.status_code not in (200,201):
-        raise RuntimeError('GitHub could not checkpoint shared library index '
-                           f'(HTTP {updated.status_code}). Worker remains verified; rerun to retry.')
+    # A server error or dropped response does not prove a write failed. Read
+    # back the branch before retrying; accept only exact desired bytes or the
+    # original version. Never blindly overwrite a concurrently changed index.
+    def inspect_after_error():
+        check = engine.github_http('GET', endpoint + '?ref=' + quote(branch, safe=''), token)
+        if check.status_code not in (200, 404):
+            raise RuntimeError(f'Cannot verify uncertain GitHub registry write (HTTP {check.status_code}); '
+                               'Worker remains verified; rerun to retry')
+        actual_sha = check.json().get('sha') if check.status_code == 200 else None
+        if check.status_code == 200 and not actual_sha:
+            raise RuntimeError('GitHub registry returned no version token after uncertain write')
+        if actual_sha:
+            actual = _repo_contents(engine, owner, token, WORKER_NAME, 'registry.json', ref=branch)
+            if actual == data:
+                return True
+        if actual_sha != current_sha:
+            raise RuntimeError('GitHub open-reader registry changed during publication; refusing overwrite')
+        return False
+
+    import time
+    print(f'open-reader: checkpointing private GitHub registry ({len(data):,} bytes)', flush=True)
+    for attempt in range(2):
+        try:
+            updated = engine.github_http('PUT', endpoint, token, json=payload)
+            status = updated.status_code
+        except (requests.Timeout, requests.ConnectionError):
+            status = None
+        if status in (200, 201):
+            break
+        if status not in (None, 500, 502, 503, 504):
+            raise RuntimeError('GitHub could not checkpoint shared library index '
+                               f'(HTTP {status}). Worker remains verified; rerun to retry.')
+        print(f'open-reader: registry write uncertain ({status or "connection error"}); '
+              'checking remote version before recovery', flush=True)
+        if inspect_after_error():
+            print('open-reader: registry already saved despite uncertain response', flush=True)
+            return
+        if attempt == 0:
+            time.sleep(2)
+    else:
+        print('open-reader: Contents API still failing; using non-forced Git commit fallback', flush=True)
+        try:
+            _registry_git_commit(engine, owner, token, branch, current_sha, data)
+        except (RuntimeError, requests.Timeout, requests.ConnectionError):
+            if inspect_after_error():
+                print('open-reader: registry fallback commit verified after uncertain response', flush=True)
+                return
+            raise
     verified = _repo_contents(engine, owner, token, WORKER_NAME, 'registry.json', ref=branch)
     if verified != data:
         raise RuntimeError('GitHub shared library index remote checksum mismatch')
@@ -1545,6 +1731,7 @@ def _finalize_legacy_links(engine, registry, owner, token, owned_repos):
     """
     _checkpoint_legacy_sqlite(engine, registry)
     worker = registry['worker_url'].rstrip('/')
+    pending = []
     for slug in sorted(registry['comics']):
         route = f'{worker}/comics/{slug}/'
         series_repos = sorted(repo for repo in owned_repos
@@ -1553,7 +1740,12 @@ def _finalize_legacy_links(engine, registry, owner, token, owned_repos):
                                VOLUME_RE.fullmatch(repo).group(1) == slug))
         for repo in series_repos:
             print(f'open-reader: checking GitHub {repo} README...', flush=True)
-            changed = _sync_github_readme(engine, owner, token, repo, slug, route)
+            try:
+                changed = _sync_github_readme(engine, owner, token, repo, slug, route)
+            except (RuntimeError, requests.RequestException, ValueError) as exc:
+                pending.append(repo)
+                print(f'open-reader: README PENDING {repo}: {exc}', flush=True)
+                continue
             if changed:
                 print(f'open-reader: GitHub {repo} README now links to shared reader', flush=True)
     # Local README has a discoverable URL too, even if current adapter changed.
@@ -1574,6 +1766,9 @@ def _finalize_legacy_links(engine, registry, owner, token, owned_repos):
             updated = old.rstrip() + '\n\n' + line + '\n<!-- /shared-open-reader-url -->\n'
         if updated != old:
             file.write_bytes(updated.encode('utf-8'))
+    if pending:
+        raise RuntimeError('Publication verified; README synchronization pending: ' + ', '.join(pending) +
+                           '. Retry after resolving the GitHub error; archives remain verified.')
 
 
 def publish(engine, db, *, dry_run=False):
@@ -1634,9 +1829,10 @@ def publish(engine, db, *, dry_run=False):
             # No deployed Worker version is replaced unnecessarily.
             try:
                 _verify_published(registry['worker_url'], stage, registry)
-            except RuntimeError:
+            except PublishedAssetsStale:
                 print('open-reader: stale Worker static files detected; republishing...', flush=True)
             else:
+                registry['verified_frontend_hash'] = payload['frontend_hash']
                 save_state(engine, registry)
                 _checkpoint_shared_registry(engine, db, owner, token, registry,
                                             known_registry_sha, owned_repos)
@@ -1648,6 +1844,7 @@ def publish(engine, db, *, dry_run=False):
         url = _deploy(engine, stage, registry)
         _verify_published(url, stage, registry)
         registry['worker_url'] = url
+        registry['verified_frontend_hash'] = payload['frontend_hash']
         save_state(engine, registry)
         _checkpoint_shared_registry(engine, db, owner, token, registry,
                                     known_registry_sha, owned_repos)

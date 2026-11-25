@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import sqlite3
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,6 +24,15 @@ def comic(slug, count=2, *, suffix=''):
                       'images':[{'url':f'https://{slug}-vol-001.pages.dev/chapters/{n}/1.jpg',
                                  'width':450, 'height':900, 'sha256':hashlib.sha256(raw).hexdigest()}]})
     return o.validate_comic(slug,slug.title(),items)
+
+
+def copy_reader_fixture(root):
+    # Staging verifies actual frontend contracts; minimal toy HTML/JS no
+    # longer represents the deployed reader. Copy only application files.
+    project = Path(__file__).resolve().parents[1]
+    shutil.copytree(project / 'reader', root / 'reader')
+    shutil.copytree(project / 'reusable', root / 'reusable',
+                    ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
 
 
 class OpenReaderContracts(unittest.TestCase):
@@ -68,10 +78,7 @@ class OpenReaderContracts(unittest.TestCase):
 
     def test_worker_redeploy_accumulates_comics_and_skips_same_build(self):
         with tempfile.TemporaryDirectory() as d:
-            root=Path(d);(root/'reader').mkdir()
-            (root/'reader'/'app.js').write_text('console.log("reader")',encoding='utf8')
-            (root/'reader'/'index.html').write_text('<h1>reader</h1>',encoding='utf8')
-            (root/'reader'/'style.css').write_text('',encoding='utf8')
+            root=Path(d);copy_reader_fixture(root)
             dummy=SimpleNamespace(ROOT=root,credential_for_selected=lambda db:('owner','token'),
                                   select_cloudflare_account=lambda:None,
                                   atomic_json=lambda path,data:(path.parent.mkdir(parents=True,exist_ok=True),path.write_text(json.dumps(data),encoding='utf8')))
@@ -109,10 +116,7 @@ class OpenReaderContracts(unittest.TestCase):
 
     def test_static_route_uses_existing_reader_app_without_new_site_code(self):
         with tempfile.TemporaryDirectory() as d:
-            root=Path(d);reader=root/'reader';reader.mkdir()
-            (reader/'index.html').write_text('reader markup',encoding='utf8')
-            (reader/'app.js').write_text("fetch('./manifest.json')",encoding='utf8')
-            (reader/'style.css').write_text('body{}',encoding='utf8')
+            root=Path(d);copy_reader_fixture(root)
             reg={'comics':{'comic-a':comic('comic-a'),'comic-b':comic('comic-b')}}
             out=root/'staged';o.stage_worker_assets(root,reg,out)
             self.assertTrue((out/'comics/comic-a/manifest.json').exists())

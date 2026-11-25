@@ -13,6 +13,8 @@ from pathlib import Path
 
 import requests
 
+from . import open_reader_verify_auth
+
 
 def _validated_repositories(engine, db):
     rows = engine._reader_archive_rows(db)
@@ -261,18 +263,29 @@ def verify_current_in_shared_reader(engine, db, url):
     slug = engine.get_option(db, 'series_slug')
     if not slug:
         raise RuntimeError('Cannot verify active comic: series slug is missing')
-    if not isinstance(url, str) or not url.startswith('https://'):
+    if (not isinstance(url, str) or
+            open_reader_verify_auth._safe_origin(url) != url.rstrip('/')):
         raise RuntimeError('Shared publisher did not return a verified Worker URL')
+    import re
+    if not isinstance(slug, str) or not re.fullmatch(r'[a-z0-9][a-z0-9-]*', slug):
+        raise RuntimeError('Cannot verify active comic: invalid series slug')
     target = url.rstrip('/') + '/comics/' + slug + '/manifest.json'
     try:
-        response = requests.get(target, timeout=35)
-        response.raise_for_status()
+        response = open_reader_verify_auth.get(target, timeout=35,
+                                               headers={'Cache-Control': 'no-cache'})
+        if response.status_code != 200:
+            raise RuntimeError(f'Shared reader final manifest verification failed: HTTP {response.status_code} at {target}; publication checkpoint retained')
         manifest = response.json()
     except (requests.RequestException, ValueError) as exc:
-        raise RuntimeError('Shared open-reader omitted current comic or its manifest: ' + target) from exc
+        raise RuntimeError('Cannot inspect shared reader final manifest: ' + target +
+                           '; publication checkpoint retained') from exc
     if not isinstance(manifest, dict) or not isinstance(manifest.get('chapters'), list):
         raise RuntimeError('Active comic manifest has no chapter catalog: ' + target)
-    found = {str(item.get('id')) for item in manifest['chapters'] if isinstance(item, dict)}
+    ids = [str(item['id']) for item in manifest['chapters']
+           if isinstance(item, dict) and item.get('id') is not None]
+    if len(ids) != len(manifest['chapters']) or len(ids) != len(set(ids)):
+        raise RuntimeError('Active comic manifest has missing or duplicate chapter IDs: ' + target)
+    found = set(ids)
     expected = {str(row['chapter_id']) for row in rows}
     missing = expected - found
     if missing:

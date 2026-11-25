@@ -26,7 +26,7 @@ SLUG = 'salty-studio'
 
 
 def seed(tmp: Path, *, published=True, present=True, correct=True):
-    state = tmp / '.archiver_state' / 'sites' / 'webtoon-salty-studio'
+    state = tmp / '.archiver_state' / 'sites' / engine.safe_slug(engine.ADAPTER.SOURCE_NAME)
     with patch.object(engine, 'DATA', state):
         db = engine.init_db()
         engine.set_option(db, 'series_slug', SLUG)
@@ -80,7 +80,7 @@ class ShutdownPromptRegression(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td)
             with patch.object(engine,'ROOT',root),patch.object(engine,'DATA',
-                 root/'.archiver_state'/'sites'/'webtoon-salty-studio'):
+                 root/'.archiver_state'/'sites'/engine.safe_slug(engine.ADAPTER.SOURCE_NAME)):
                 db=seed(root)
                 self.assertTrue(engine.all_work_completed(db,mode='shared-worker',worker_url=WORKER))
                 self.assertFalse(engine.all_work_completed(db,mode='pages'))
@@ -92,7 +92,7 @@ class ShutdownPromptRegression(unittest.TestCase):
             with self.subTest(state=state),tempfile.TemporaryDirectory() as td:
                 root=Path(td)
                 with patch.object(engine,'ROOT',root),patch.object(engine,'DATA',
-                     root/'.archiver_state'/'sites'/'webtoon-salty-studio'):
+                     root/'.archiver_state'/'sites'/engine.safe_slug(engine.ADAPTER.SOURCE_NAME)):
                     db=seed(root,present=state!='missing',correct=state!='wrong',
                             published=state!='unpublished')
                     self.assertFalse(engine.all_work_completed(db,mode='shared-worker',worker_url=WORKER))
@@ -104,7 +104,7 @@ class ShutdownPromptRegression(unittest.TestCase):
     def test_verified_noop_publish_triggers_shutdown_after_success(self):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td)
-            data=root/'.archiver_state'/'sites'/'webtoon-salty-studio'
+            data=root/'.archiver_state'/'sites'/engine.safe_slug(engine.ADAPTER.SOURCE_NAME)
             with patch.object(engine,'ROOT',root),patch.object(engine,'DATA',data):
                 db=seed(root)
                 db.close()
@@ -124,7 +124,7 @@ class ShutdownPromptRegression(unittest.TestCase):
 
     def test_no_shutdown_on_failed_publish_even_if_flag_set(self):
         with tempfile.TemporaryDirectory() as td:
-            root=Path(td); data=root/'.archiver_state'/'sites'/'webtoon-salty-studio'
+            root=Path(td); data=root/'.archiver_state'/'sites'/engine.safe_slug(engine.ADAPTER.SOURCE_NAME)
             with patch.object(engine,'ROOT',root),patch.object(engine,'DATA',data):
                 db=seed(root);db.close()
                 with patch.object(engine,'_inherit_shared_github_auth'), \
@@ -140,7 +140,7 @@ class ShutdownPromptRegression(unittest.TestCase):
 
     def test_actual_shutdown_command_only_after_verified_shared_worker(self):
         with tempfile.TemporaryDirectory() as td:
-            root=Path(td); data=root/'.archiver_state'/'sites'/'webtoon-salty-studio'
+            root=Path(td); data=root/'.archiver_state'/'sites'/engine.safe_slug(engine.ADAPTER.SOURCE_NAME)
             with patch.object(engine,'ROOT',root),patch.object(engine,'DATA',data):
                 db=seed(root)
                 with patch.object(engine,'os',SimpleNamespace(name='nt')), \

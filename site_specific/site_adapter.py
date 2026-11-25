@@ -464,6 +464,12 @@ def native_chapter_titles_from_catalog(raw_html,page_url):
     return {x.chapter_id:x.label for x in custom_chapters(raw_html,page_url,_Chapter)}
 
 
+def captured_native_chapter_titles():
+    """Exact previously observed native labels; no HTTP or browser access."""
+    return {chapter_identity(None, urljoin(DEFAULT_START_URL, '/relife/' + slug), label): label
+            for slug, label in _validate_menu(_CAPTURED_MENU)}
+
+
 def accept_catalog_title(chapter_id,label):
     if not isinstance(chapter_id, str) or not chapter_id.startswith('truyenqq-relife-'):
         return False
@@ -572,6 +578,16 @@ def adapter_self_test():
     assert len(parsed)==226 and parsed[0].label=='Chapter 1' and parsed[-1].label=='Chapter 224'
     assert any(c.label=='Chapter 221.1' and c.url.endswith('/chapter-221-1') for c in parsed)
     assert len(set(c.chapter_id for c in parsed))==226
+    assert len(captured_native_chapter_titles()) == 226
+    assert captured_native_chapter_titles()['truyenqq-relife-chapter-150-5'] == 'Chapter 150.5'
+    assert all(accept_catalog_title(k, v) for k, v in captured_native_chapter_titles().items())
+    assert not accept_catalog_title('truyenqq-relife-chapter-2', 'Chapter 226')
+    heading = BeautifulSoup('<div class="navi"><select><option>Chapter 224</option>'
+                            '</select></div><div class="chapter-title"><h1>Relife : Chapter 2</h1></div>',
+                            'html.parser')
+    assert chapter_title_from_html(heading, 'Chapter 2') == 'Chapter 2'
+    wrong_heading = BeautifulSoup('<h1 class="current-book">Chapter 224</h1>', 'html.parser')
+    assert chapter_title_from_html(wrong_heading, 'Chapter 150.5') == 'Chapter 150.5'
     for bad in ('http://truyenqq.com.vn/relife/chapter-1',
                 'https://evil.example/relife/chapter-1',
                 'https://truyenqq.com.vn/relife/chapter-225?x=1'):
