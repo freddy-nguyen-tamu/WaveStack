@@ -409,7 +409,7 @@ export const SongArtwork = memo(function SongArtwork({
       <span className={`${fallbackClassName} song-artwork__placeholder`} aria-hidden="true">
         <img
           className="song-artwork__placeholder-logo"
-          src="/icon-512.png"
+          src="/song-placeholder.png"
           alt=""
           draggable={false}
           decoding="async"

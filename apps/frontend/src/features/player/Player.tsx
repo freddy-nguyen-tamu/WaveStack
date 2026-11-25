@@ -1203,7 +1203,7 @@ export function Player({
     }
 
     return [{
-      src: new URL("/icon-512.png", window.location.origin).href,
+      src: new URL("/song-placeholder.png", window.location.origin).href,
       sizes: "512x512",
       type: "image/png"
     }];

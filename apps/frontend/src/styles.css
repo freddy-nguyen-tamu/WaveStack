@@ -527,7 +527,7 @@ article li small,
     transform 180ms ease;
 }
 .song-artwork {
-  background: #242629 url("/favicon.ico") center / 48% no-repeat;
+  background: #26334d url("/song-placeholder.png") center / cover no-repeat;
 }
 .song-artwork__loading {
   position: absolute;
@@ -545,7 +545,7 @@ article li small,
   background: transparent;
 }
 .song-artwork[data-artwork-loaded="false"] {
-  background: #242629 url("/favicon.ico") center / 48% no-repeat !important;
+  background: #26334d url("/song-placeholder.png") center / cover no-repeat !important;
 }
 .loading-status {
   display: flex;
@@ -3382,9 +3382,8 @@ html[data-theme="dark"] textarea {
   height: 2rem;
   place-items: center;
   margin-right: 0.48rem;
-  background: var(--color-accent-strong);
-  color: #ffffff;
-  content: "W";
+  background: url("/icon-192.png") center / contain no-repeat;
+  content: "";
   font-size: 0.85rem;
   font-weight: 700;
   vertical-align: middle;
@@ -5474,17 +5473,16 @@ html[data-theme="dark"] .player-card .player-actions__button--favorite[aria-pres
   margin: 0 !important;
   padding: 0 !important;
   border: 0 !important;
-  background: color-mix(in srgb, var(--frontier-surface-muted) 82%, var(--color-accent) 18%) !important;
+  background: transparent !important;
   opacity: 1;
   transition: opacity 120ms ease;
 }
 .song-artwork__placeholder-logo {
-  width: min(62%, 11rem) !important;
-  height: min(62%, 11rem) !important;
-  max-width: 62% !important;
-  max-height: 62% !important;
-  object-fit: contain !important;
-  opacity: 0.88;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  object-fit: cover !important;
 }
 .song-artwork > img:not(.song-artwork__placeholder-logo) {
   position: relative;
@@ -6065,9 +6063,7 @@ button:not(:disabled):active {
 }
 .global-search__art-placeholder {
   z-index: 0;
-  padding: 21%;
-  object-fit: contain;
-  background: color-mix(in srgb, var(--frontier-surface-muted) 84%, var(--color-accent) 16%);
+  object-fit: cover;
 }
 .global-search__art-image {
   z-index: 1;
@@ -6398,6 +6394,11 @@ button:not(:disabled):active {
     max-height: var(--frontier-player-art-size) !important;
     flex: 0 0 var(--frontier-player-art-size) !important;
     align-self: center !important;
+    /* Match the viewport-sized player, even when zoom triggers compact rules. */
+    padding: 0 !important;
+    border: 0 !important;
+    grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+    place-items: stretch;
     aspect-ratio: 1 / 1 !important;
     border-radius: 0.5dvw !important;
     overflow: hidden !important;
@@ -7224,15 +7225,31 @@ article.dashboard-page .dashboard-song-tile:has(:focus-visible) {
    to the recommendation wall itself so the user sees the spinner while the
    next batch is fetched, even though the observer fires well before page end. */
 article.dashboard-page .dashboard-page__load-more {
+  position: sticky;
+  bottom: calc(var(--frontier-mini-player-height, 8rem) + var(--frontier-shell-pad, 1rem) + 0.65rem + env(safe-area-inset-bottom, 0px));
+  z-index: 8;
   display: grid;
+  width: max-content;
+  max-width: 100%;
   min-height: 3.25rem;
   place-items: center;
-  margin: 0.55rem 0 0;
+  margin: 0.55rem auto 0;
+  pointer-events: none;
+  overflow-anchor: none;
 }
 article.dashboard-page .dashboard-page__load-more .loading-status {
   margin: 0;
-  border: 0;
-  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--frontier-border);
+  border-radius: var(--radius-pill);
+  padding: 0.45rem 0.85rem;
+  background: var(--frontier-surface-strong);
+  color: var(--color-ink);
+  box-shadow: var(--frontier-card-shadow);
+  text-align: center;
+}
+article.dashboard-page .dashboard-page__load-more .loading-status svg {
+  flex: 0 0 20px;
+  color: var(--color-accent);
 }
 article.dashboard-page .dashboard-page__recommendation-sentinel {
   height: 1px;

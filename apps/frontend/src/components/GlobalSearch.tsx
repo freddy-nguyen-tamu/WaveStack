@@ -38,7 +38,7 @@ function SearchResultArtwork({ song }: { song: Song }) {
     <span className="global-search__art" aria-hidden="true">
       <img
         className="global-search__art-placeholder"
-        src="/icon-512.png"
+        src="/song-placeholder.png"
         alt=""
         draggable={false}
         decoding="async"
