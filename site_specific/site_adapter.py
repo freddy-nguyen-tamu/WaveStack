@@ -1,615 +1,640 @@
-"""Single-provider adapter for Relife on truyenqq.com.vn.
+"""Orange Marmalade, Comix native reader. Only source-specific code lives here.
 
-Grounding: 2026-11-24 browser runtime capture of /relife/chapter-1.
-Original HTTP HTML contains *two identical* 226-item native chapter <select>
-menus, newest first; both menus are EMPTY in the hydrated/live HTML.
-The 27 chapter-1 artwork images are in .reading-content > .inner and are
-served by s40.cc3t.net. The site loads /images/loading.svg and
-/images/placeholder.jpg as successfully decoded spinner/placeholder images.
-
-Only this file changes on provider switch. No inferred chapter or CDN URLs:
-the frozen catalog below is an exact, captured source menu, used only if
-live source HTML and one normal HTTP catalog request cannot supply a menu.
-It does not prove chapters created after the capture; fresh catalog wins.
-Browser-rendered CDN images use the existing Comic Bridge selected-tab
-transfer; the adapter never performs an extra image download or bypasses
-challenge pages. Source-origin HTTP failures remain visible and retryable.
+Grounded in 2026-11-25 captured chapter-0 DOM and runtime. The capture contains native chapter navigation metadata, but not the entire
+catalog. Discover from ordinary native HTML if available, or follow the site's
+actual next-chapter links. Never synthesize opaque IDs, decode protected API
+payloads, bypass an access denial, or declare a partial catalog complete.
+The reusable bridge supports normal document and nested reader scrolling.
+All Comix-specific discovery and image identity stay in this file.
 """
 from __future__ import annotations
-
+import json
 import re
-import threading
-from urllib.error import HTTPError, URLError
+import sys
+from decimal import Decimal
+from pathlib import Path
 from urllib.parse import urljoin, urlsplit
-from urllib.request import urlopen
-
 from bs4 import BeautifulSoup
 
 SOURCE_BROWSER_TRANSPORT = 'extension'
-SOURCE_NAME = 'truyenqq-relife'
+SOURCE_NAME = 'comix-orange-marmalade'
 STATE_STORAGE_MODE = 'scoped'
-TITLE_ADAPTER_VERSION = 'truyenqq-relife-native-select-20261124-v1'
-SERIES_SLUG_HINT = 'relife'
-DEFAULT_START_URL = 'https://truyenqq.com.vn/relife/chapter-1'
-ALLOWED_HOSTS = ('truyenqq.com.vn',)
-# This is the only *observed* panel CDN in the supplied runtime/network trace.
-# Never give Comic Bridge blanket access to ads, scripts or unknown CDNs.
-BRIDGE_IMAGE_HOSTS = ('s40.cc3t.net',)
-EXTENSION_MATCHES = ('https://truyenqq.com.vn/relife/chapter-*',)
+TITLE_ADAPTER_VERSION = 'comix-orange-marmalade-native-20261125-v6'
+SERIES_SLUG_HINT = 'orange-marmalade'
+DEFAULT_START_URL = 'https://comix.to/title/65gg-orange-marmalade/6312339-chapter-0'
+ALLOWED_HOSTS = ('comix.to',)
+BRIDGE_IMAGE_HOSTS = ('8pl.olivawrites.site', '8pl.lifebetweenlines.site',
+                      '8pl.quietreflectionsblog.site', '8pl.ericlog.site',
+                      '8pl.mycreativespace.site', '8pl.pureandsimpleshop.site',
+                      '8pl.homeandheartshop.site', '8pl.notesbykevin.site')
+# The installed bridge sourceMatches() accepts a single trailing wildcard.
+# Python chapter_identity still checks the exact native chapter route.
+EXTENSION_MATCHES = ('https://comix.to/title/65gg-orange-marmalade/*',)
 TITLE_SELECTORS = ('meta[property="og:title"]', 'title')
-READER_SELECTORS = ('.reading-content > .inner', '.reading-content .inner')
-PAGE_TOTAL_SELECTORS = ()  # One source-declared <img> = one physical panel.
-IMAGE_ATTRIBUTES = ('data-src', 'data-original', 'data-lazy-src', 'src')
-IMAGE_PLACEHOLDER_URL_MARKERS = (
-    '/images/loading.svg', '/images/placeholder.jpg', '/images/image-placeholder.webp',
-)
+READER_SELECTORS = ('.rpage-main__inner',)
+# CDN names rotate. Unlisted URLs are eligible only for already-decoded
+# pixels from this precise native slot; never grant broad CDN permissions.
+BRIDGE_RENDERED_IMAGE_SELECTOR = '.rpage-main__inner .rpage-page[data-page] img.rpage-page__img'
+PAGE_TOTAL_SELECTORS = ('.rpage-progress__seg',)
+IMAGE_ATTRIBUTES = ('src',)
+IMAGE_PLACEHOLDER_URL_MARKERS = ('/assets/gotaku-banner-',)
 SOURCE_CONFIRMED_MISSING_PANELS = {}
-
-# The unhydrated HTTP HTML supplies the entire authoritative chapter menu.
-# Do not set generic next/prev or normal anchor-list selectors: those would
-# bypass custom_chapters() and trigger an unnecessary 226-page navigation crawl.
-# Native links observed: a.next[href], a.back[href]; menu #select-reading.
 CHAPTER_LIST_SELECTORS = ()
 NEXT_NAV_SELECTORS = ()
 PREV_NAV_SELECTORS = ()
 CHAPTER_MENU_SELECTORS = ()
-NATIVE_CHAPTER_MENU_SELECTORS = ('#select-reading option[value]', '#select-reading-2 option[value]')
-NATIVE_NEXT_NAV_SELECTORS = ('a.next[href]',)
-NATIVE_PREV_NAV_SELECTORS = ('a.back[href]',)
 
-_SITE = 'truyenqq.com.vn'
-_CDN = 's40.cc3t.net'
-_SEED_PATH = '/relife/chapter-1'
-_SLUG = re.compile(r'chapter-(?:0|[1-9][0-9]*)(?:-[0-9]+)*\Z')
-_MENU_LOCK = threading.Lock()
-_MENU_CACHE = None
-_MENU_ATTEMPTED = False
-
-# Source-verbatim option value and text pairs from the browser's original
-# document HTTP response. NOT guessed from a chapter-number range; contains
-# the actual decimals and latest native entries as observed at capture time.
-_CAPTURED_MENU = (
-    ('chapter-224', 'Chapter 224'),
-    ('chapter-223', 'Chapter 223'),
-    ('chapter-222', 'Chapter 222'),
-    ('chapter-221-1', 'Chapter 221.1'),
-    ('chapter-221', 'Chapter 221'),
-    ('chapter-220', 'Chapter 220'),
-    ('chapter-219', 'Chapter 219'),
-    ('chapter-218', 'Chapter 218'),
-    ('chapter-217', 'Chapter 217'),
-    ('chapter-216', 'Chapter 216'),
-    ('chapter-215', 'Chapter 215'),
-    ('chapter-214', 'Chapter 214'),
-    ('chapter-213', 'Chapter 213'),
-    ('chapter-212', 'Chapter 212'),
-    ('chapter-211', 'Chapter 211'),
-    ('chapter-210', 'Chapter 210'),
-    ('chapter-209', 'Chapter 209'),
-    ('chapter-208', 'Chapter 208'),
-    ('chapter-207', 'Chapter 207'),
-    ('chapter-206', 'Chapter 206'),
-    ('chapter-205', 'Chapter 205'),
-    ('chapter-204', 'Chapter 204'),
-    ('chapter-203', 'Chapter 203'),
-    ('chapter-202', 'Chapter 202'),
-    ('chapter-201', 'Chapter 201'),
-    ('chapter-200', 'Chapter 200'),
-    ('chapter-199', 'Chapter 199'),
-    ('chapter-198', 'Chapter 198'),
-    ('chapter-197', 'Chapter 197'),
-    ('chapter-196', 'Chapter 196'),
-    ('chapter-195', 'Chapter 195'),
-    ('chapter-194', 'Chapter 194'),
-    ('chapter-193', 'Chapter 193'),
-    ('chapter-192', 'Chapter 192'),
-    ('chapter-191', 'Chapter 191'),
-    ('chapter-190', 'Chapter 190'),
-    ('chapter-189', 'Chapter 189'),
-    ('chapter-188', 'Chapter 188'),
-    ('chapter-187', 'Chapter 187'),
-    ('chapter-186', 'Chapter 186'),
-    ('chapter-185', 'Chapter 185'),
-    ('chapter-184', 'Chapter 184'),
-    ('chapter-183', 'Chapter 183'),
-    ('chapter-182', 'Chapter 182'),
-    ('chapter-181', 'Chapter 181'),
-    ('chapter-180', 'Chapter 180'),
-    ('chapter-179', 'Chapter 179'),
-    ('chapter-178', 'Chapter 178'),
-    ('chapter-177', 'Chapter 177'),
-    ('chapter-176', 'Chapter 176'),
-    ('chapter-175', 'Chapter 175'),
-    ('chapter-174', 'Chapter 174'),
-    ('chapter-173', 'Chapter 173'),
-    ('chapter-172', 'Chapter 172'),
-    ('chapter-171', 'Chapter 171'),
-    ('chapter-170', 'Chapter 170'),
-    ('chapter-169', 'Chapter 169'),
-    ('chapter-168', 'Chapter 168'),
-    ('chapter-167', 'Chapter 167'),
-    ('chapter-166', 'Chapter 166'),
-    ('chapter-165', 'Chapter 165'),
-    ('chapter-164', 'Chapter 164'),
-    ('chapter-163', 'Chapter 163'),
-    ('chapter-162', 'Chapter 162'),
-    ('chapter-161', 'Chapter 161'),
-    ('chapter-160', 'Chapter 160'),
-    ('chapter-159', 'Chapter 159'),
-    ('chapter-158', 'Chapter 158'),
-    ('chapter-157', 'Chapter 157'),
-    ('chapter-156', 'Chapter 156'),
-    ('chapter-155', 'Chapter 155'),
-    ('chapter-154', 'Chapter 154'),
-    ('chapter-153', 'Chapter 153'),
-    ('chapter-152', 'Chapter 152'),
-    ('chapter-151', 'Chapter 151'),
-    ('chapter-150-5', 'Chapter 150.5'),
-    ('chapter-150', 'Chapter 150'),
-    ('chapter-149', 'Chapter 149'),
-    ('chapter-148', 'Chapter 148'),
-    ('chapter-147', 'Chapter 147'),
-    ('chapter-146', 'Chapter 146'),
-    ('chapter-145', 'Chapter 145'),
-    ('chapter-144', 'Chapter 144'),
-    ('chapter-143', 'Chapter 143'),
-    ('chapter-142', 'Chapter 142'),
-    ('chapter-141', 'Chapter 141'),
-    ('chapter-140', 'Chapter 140'),
-    ('chapter-139', 'Chapter 139'),
-    ('chapter-138', 'Chapter 138'),
-    ('chapter-137', 'Chapter 137'),
-    ('chapter-136', 'Chapter 136'),
-    ('chapter-135', 'Chapter 135'),
-    ('chapter-134', 'Chapter 134'),
-    ('chapter-133', 'Chapter 133'),
-    ('chapter-132', 'Chapter 132'),
-    ('chapter-131', 'Chapter 131'),
-    ('chapter-130', 'Chapter 130'),
-    ('chapter-129', 'Chapter 129'),
-    ('chapter-128', 'Chapter 128'),
-    ('chapter-127', 'Chapter 127'),
-    ('chapter-126', 'Chapter 126'),
-    ('chapter-125', 'Chapter 125'),
-    ('chapter-124', 'Chapter 124'),
-    ('chapter-123', 'Chapter 123'),
-    ('chapter-122', 'Chapter 122'),
-    ('chapter-121', 'Chapter 121'),
-    ('chapter-120', 'Chapter 120'),
-    ('chapter-119', 'Chapter 119'),
-    ('chapter-118', 'Chapter 118'),
-    ('chapter-117', 'Chapter 117'),
-    ('chapter-116', 'Chapter 116'),
-    ('chapter-115', 'Chapter 115'),
-    ('chapter-114', 'Chapter 114'),
-    ('chapter-113', 'Chapter 113'),
-    ('chapter-112', 'Chapter 112'),
-    ('chapter-111', 'Chapter 111'),
-    ('chapter-110', 'Chapter 110'),
-    ('chapter-109', 'Chapter 109'),
-    ('chapter-108', 'Chapter 108'),
-    ('chapter-107', 'Chapter 107'),
-    ('chapter-106', 'Chapter 106'),
-    ('chapter-105', 'Chapter 105'),
-    ('chapter-104', 'Chapter 104'),
-    ('chapter-103', 'Chapter 103'),
-    ('chapter-102', 'Chapter 102'),
-    ('chapter-101', 'Chapter 101'),
-    ('chapter-100', 'Chapter 100'),
-    ('chapter-99', 'Chapter 99'),
-    ('chapter-98', 'Chapter 98'),
-    ('chapter-97', 'Chapter 97'),
-    ('chapter-96', 'Chapter 96'),
-    ('chapter-95', 'Chapter 95'),
-    ('chapter-94', 'Chapter 94'),
-    ('chapter-93', 'Chapter 93'),
-    ('chapter-92', 'Chapter 92'),
-    ('chapter-91', 'Chapter 91'),
-    ('chapter-90', 'Chapter 90'),
-    ('chapter-89', 'Chapter 89'),
-    ('chapter-88', 'Chapter 88'),
-    ('chapter-87', 'Chapter 87'),
-    ('chapter-86', 'Chapter 86'),
-    ('chapter-85', 'Chapter 85'),
-    ('chapter-84', 'Chapter 84'),
-    ('chapter-83', 'Chapter 83'),
-    ('chapter-82', 'Chapter 82'),
-    ('chapter-81', 'Chapter 81'),
-    ('chapter-80', 'Chapter 80'),
-    ('chapter-79', 'Chapter 79'),
-    ('chapter-78', 'Chapter 78'),
-    ('chapter-77', 'Chapter 77'),
-    ('chapter-76', 'Chapter 76'),
-    ('chapter-75', 'Chapter 75'),
-    ('chapter-74', 'Chapter 74'),
-    ('chapter-73', 'Chapter 73'),
-    ('chapter-72', 'Chapter 72'),
-    ('chapter-71', 'Chapter 71'),
-    ('chapter-70', 'Chapter 70'),
-    ('chapter-69', 'Chapter 69'),
-    ('chapter-68', 'Chapter 68'),
-    ('chapter-67', 'Chapter 67'),
-    ('chapter-66', 'Chapter 66'),
-    ('chapter-65', 'Chapter 65'),
-    ('chapter-64', 'Chapter 64'),
-    ('chapter-63', 'Chapter 63'),
-    ('chapter-62', 'Chapter 62'),
-    ('chapter-61', 'Chapter 61'),
-    ('chapter-60', 'Chapter 60'),
-    ('chapter-59', 'Chapter 59'),
-    ('chapter-58', 'Chapter 58'),
-    ('chapter-57', 'Chapter 57'),
-    ('chapter-56', 'Chapter 56'),
-    ('chapter-55', 'Chapter 55'),
-    ('chapter-54', 'Chapter 54'),
-    ('chapter-53', 'Chapter 53'),
-    ('chapter-52', 'Chapter 52'),
-    ('chapter-51', 'Chapter 51'),
-    ('chapter-50', 'Chapter 50'),
-    ('chapter-49', 'Chapter 49'),
-    ('chapter-48', 'Chapter 48'),
-    ('chapter-47', 'Chapter 47'),
-    ('chapter-46', 'Chapter 46'),
-    ('chapter-45', 'Chapter 45'),
-    ('chapter-44', 'Chapter 44'),
-    ('chapter-43', 'Chapter 43'),
-    ('chapter-42', 'Chapter 42'),
-    ('chapter-41', 'Chapter 41'),
-    ('chapter-40', 'Chapter 40'),
-    ('chapter-39', 'Chapter 39'),
-    ('chapter-38', 'Chapter 38'),
-    ('chapter-37', 'Chapter 37'),
-    ('chapter-36', 'Chapter 36'),
-    ('chapter-35', 'Chapter 35'),
-    ('chapter-34', 'Chapter 34'),
-    ('chapter-33', 'Chapter 33'),
-    ('chapter-32', 'Chapter 32'),
-    ('chapter-31', 'Chapter 31'),
-    ('chapter-30', 'Chapter 30'),
-    ('chapter-29', 'Chapter 29'),
-    ('chapter-28', 'Chapter 28'),
-    ('chapter-27', 'Chapter 27'),
-    ('chapter-26', 'Chapter 26'),
-    ('chapter-25', 'Chapter 25'),
-    ('chapter-24', 'Chapter 24'),
-    ('chapter-23', 'Chapter 23'),
-    ('chapter-22', 'Chapter 22'),
-    ('chapter-21', 'Chapter 21'),
-    ('chapter-20', 'Chapter 20'),
-    ('chapter-19', 'Chapter 19'),
-    ('chapter-18', 'Chapter 18'),
-    ('chapter-17', 'Chapter 17'),
-    ('chapter-16', 'Chapter 16'),
-    ('chapter-15', 'Chapter 15'),
-    ('chapter-14', 'Chapter 14'),
-    ('chapter-13', 'Chapter 13'),
-    ('chapter-12', 'Chapter 12'),
-    ('chapter-11', 'Chapter 11'),
-    ('chapter-10', 'Chapter 10'),
-    ('chapter-9', 'Chapter 9'),
-    ('chapter-8', 'Chapter 8'),
-    ('chapter-7', 'Chapter 7'),
-    ('chapter-6', 'Chapter 6'),
-    ('chapter-5', 'Chapter 5'),
-    ('chapter-4', 'Chapter 4'),
-    ('chapter-3', 'Chapter 3'),
-    ('chapter-2', 'Chapter 2'),
-    ('chapter-1', 'Chapter 1'),
-)
+_SITE = 'https://comix.to'
+_PATH = '/title/65gg-orange-marmalade/'
+_LAST = 120
+_PREFIX = 'comix-orange-marmalade-chapter-'
+_NEXT = _SITE + _PATH + '6312417-chapter-1'
+_LAST_URL = _SITE + _PATH + '7613251-chapter-120'
+_OBSERVED_119_URL = _SITE + _PATH + '10825677-chapter-119'
+_SERIES_URL = _SITE + _PATH.rstrip('/')
+_DISCOVERED_CATALOG = ()
+# Native URLs imported from the user's normal browser UI, not a guessed range.
+# BEGIN CAPTURED CATALOG
+_CAPTURED_CATALOG = ()
+# END CAPTURED CATALOG
 
 
-def _slug(url):
+def _chapter_number(url):
     p = urlsplit(str(url or ''))
-    if (p.scheme != 'https' or p.hostname != _SITE or p.port is not None or
-            p.username or p.password or p.query or p.fragment):
-        raise ValueError('Only the observed HTTPS Relife chapter host is accepted: '+str(url))
-    path = p.path.rstrip('/')
-    if not path.startswith('/relife/'):
-        raise ValueError('Not a Relife chapter: '+str(url))
-    tail = path[len('/relife/'):]
-    if not _SLUG.fullmatch(tail):
-        raise ValueError('Unrecognized source chapter slug: '+str(url))
-    return tail
+    if (p.scheme != 'https' or p.netloc != 'comix.to' or p.query or p.fragment
+            or not p.path.startswith(_PATH)):
+        raise ValueError('Unexpected Comix comic/URL: '+str(url)[:180])
+    m = re.fullmatch(r'[0-9]+-chapter-([0-9]+(?:[.-][0-9]+)?)', p.path[len(_PATH):])
+    if not m:
+        raise ValueError('Unexpected native chapter route: '+p.path)
+    return m.group(1).replace('-', '.')
+
+
+def _id(number):
+    return _PREFIX + number
 
 
 def chapter_identity(anchor, url, label):
-    return 'truyenqq-relife-' + _slug(url)
+    return _id(_chapter_number(url))
+
+
+def _json_script(soup, name):
+    node = soup.select_one('script#'+name+'[type="application/json"]')
+    if node is None:
+        return {}
+    try:
+        data = json.loads(node.get_text())
+    except (ValueError, TypeError):
+        raise RuntimeError('Invalid native Comix metadata: '+name)
+    if not isinstance(data, dict):
+        raise RuntimeError('Invalid native Comix metadata object: '+name)
+    return data
 
 
 def title_from_html(soup):
-    texts=[]
-    for selector in ('meta[property="og:title"]', 'title'):
-        tag=soup.select_one(selector)
-        if tag is not None:
-            texts.append(str(tag.get('content') or '') if tag.name=='meta'
-                         else tag.get_text(' ',strip=True))
-    for title in texts:
-        if re.match(r'^\s*relife\s*(?:[-:|]|$)', title, flags=re.I):
-            return 'Relife'
-    if not texts:
+    data = _json_script(soup, 'initial-data')
+    if data:
+        detail = data.get('queries', {}).get('["manga","detail","65gg"]', {})
+        if detail.get('hid') != '65gg' or detail.get('title') != 'Orange Marmalade':
+            raise RuntimeError('Native metadata does not identify Orange Marmalade')
+        return detail['title']
+    if not soup.title and not soup.select_one('meta[property="og:title"]'):
         return None
-    raise RuntimeError('Source page does not identify the captured Relife comic')
+    raise RuntimeError('Orange Marmalade native series identity unavailable; check the current reader page')
 
 
 def chapter_title_from_anchor(anchor, fallback):
-    return anchor.get_text(' ',strip=True) if anchor is not None else fallback
-
-
-def chapter_title_from_html(soup, fallback):
-    # The catalogue label belongs to this exact chapter identity. Never read
-    # the whole chapter dropdown: it starts with the newest chapter.
-    expected = re.fullmatch(r'Chapter\s+([0-9]+(?:\.[0-9]+)?)', str(fallback).strip(), flags=re.I)
-    for selector in ('.chapter-title h1', 'h1.current-book', 'meta[property="og:title"]', 'title'):
-        node = soup.select_one(selector)
-        if node is None:
-            continue
-        label = str(node.get('content') or '') if node.name == 'meta' else node.get_text(' ', strip=True)
-        match = re.search(r'\bChapter\s+([0-9]+(?:\.[0-9]+)?)\b', label, flags=re.I)
-        if match and (not expected or match.group(1) == expected.group(1)):
-            return 'Chapter '+match.group(1)
     return fallback
 
 
-def _parse_menu(raw, page_url):
-    _slug(page_url)
-    soup=BeautifulSoup(raw or '', 'html.parser')
-    raw_groups=[]
-    for selector in NATIVE_CHAPTER_MENU_SELECTORS:
-        entries=soup.select(selector)
-        if not entries:
+def chapter_title_from_html(soup, fallback):
+    # Never use the chapter dropdown's first label. Bind title to actual chapter.
+    sync = _json_script(soup, 'syncData')
+    if sync:
+        if sync.get('manga_id') != '65gg' or sync.get('name') != 'Orange Marmalade':
+            raise RuntimeError('Current reader belongs to a different comic')
+        expected = re.fullmatch(r'Chapter ([0-9]+(?:\.[0-9]+)?)', str(fallback))
+        if expected is None or Decimal(str(sync.get('number'))) != Decimal(expected.group(1)):
+            raise RuntimeError('Current reader chapter does not match saved native catalog')
+    return fallback
+
+
+def _validate_catalog(rows):
+    by_number = {}
+    for row in rows:
+        url = row if isinstance(row, str) else row.get('url', '')
+        url = str(url).strip()
+        n = _chapter_number(url)
+        value = Decimal(n)
+        if value < 0 or value > _LAST:
+            raise ValueError('Chapter outside captured series range: '+n)
+        if value in by_number and by_number[value] != url:
+            raise ValueError('Multiple editions for chapter '+n+'; select one native URL per chapter')
+        by_number[value] = url
+    missing = [str(n) for n in range(_LAST+1) if Decimal(n) not in by_number]
+    if missing:
+        raise ValueError(f'Native catalog is incomplete: {len(by_number)} unique chapter numbers; '
+                         'missing '+', '.join(missing[:20])+(' ...' if len(missing)>20 else ''))
+    # The capture proves these are the first two chapters in the chosen edition.
+    if by_number.get(Decimal(0)) != DEFAULT_START_URL or by_number.get(Decimal(1)) != _NEXT:
+        raise ValueError('Catalog does not match the captured chapter-0 -> chapter-1 edition')
+    return tuple(by_number[n] for n in sorted(by_number))
+
+
+def _native_links(raw, page_url):
+    """Extract actual URLs from native anchors and plain JSON metadata only."""
+    soup = BeautifulSoup(raw, 'html.parser')
+    data = _json_script(soup, 'initial-data')
+    detail = data.get('queries', {}).get('["manga","detail","65gg"]', {})
+    if detail.get('hid') != '65gg' or detail.get('title') != 'Orange Marmalade':
+        return []
+    values = [a.get('href') for a in soup.select('a[href]')]
+    def walk(value):
+        if isinstance(value, dict):
+            for item in value.values():
+                yield from walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                yield from walk(item)
+        elif isinstance(value, str) and ('/title/65gg-orange-marmalade/' in value):
+            yield value
+    # The firstChapterUrl metadata points to a different edition than the
+    # user's actual starting reader. Do not mix editions silently.
+    queries = {k:v for k,v in data.get('queries', {}).items()
+               if k != '["manga","detail","65gg"]'}
+    values.extend(walk(queries))
+    found = set()
+    for value in values:
+        if not isinstance(value, str):
             continue
-        menu=[]
-        for o in entries:
-            raw_href=str(o.get('value') or '').strip()
-            url=urljoin(page_url,raw_href)
-            slug=_slug(url)
-            if raw_href.startswith('//'):
-                raise RuntimeError('Source menu contains a protocol-relative chapter URL')
-            label=o.get_text(' ',strip=True)
-            if not re.fullmatch(r'Chapter\s+[0-9]+(?:\.[0-9]+)?',label,flags=re.I):
-                raise RuntimeError('Unexpected native Relife chapter title: '+repr(label))
-            menu.append((slug,label))
-        if len({slug for slug,label in menu}) != len(menu):
-            raise RuntimeError('Duplicate chapter in source native menu')
-        raw_groups.append(menu)
-    if len(raw_groups)>1 and any(x!=raw_groups[0] for x in raw_groups[1:]):
-        raise RuntimeError('Top and bottom chapter menus disagree; refuse incomplete catalog')
-    return tuple(raw_groups[0]) if raw_groups else ()
-
-
-def _validate_menu(rows):
-    if not rows:
-        raise RuntimeError('Relife chapter catalog missing: refusing to guess URLs')
-    if len(rows)<len(_CAPTURED_MENU):
-        raise RuntimeError('Relife catalog has fewer rows than the 226 independently observed chapter entries')
-    if len(set(rows))!=len(rows) or len({slug for slug,_ in rows})!=len(rows):
-        raise RuntimeError('Relife catalog has duplicate entries')
-    captured=dict(_CAPTURED_MENU)
-    observed=dict(rows)
-    changed=[(k,v,observed.get(k)) for k,v in captured.items() if observed.get(k)!=v]
-    if changed:
-        raise RuntimeError('Relife native catalog contradicted previously observed chapter identities/labels: '
-                           +str(changed[:3]))
-    if 'chapter-1' not in observed:
-        raise RuntimeError('Seed chapter missing from Relife catalog')
-    return tuple(rows)
-
-
-def _source_catalog():
-    """One metadata-only HTTP read if live JS removed native menu options.
-
-    If the normal source request is blocked, fall back to the browser-captured
-    exact menu; never fabricate the next chapter or request unknown image URLs.
-    The original chapter browser session remains the access authority.
-    """
-    global _MENU_CACHE, _MENU_ATTEMPTED
-    with _MENU_LOCK:
-        if _MENU_ATTEMPTED:
-            return _MENU_CACHE
-        _MENU_ATTEMPTED=True
+        url = urljoin(page_url, value)
         try:
-            with urlopen(DEFAULT_START_URL,timeout=12) as response:
-                landed=response.geturl()
-                if urlsplit(landed).hostname != _SITE or urlsplit(landed).path.rstrip('/') != _SEED_PATH:
-                    raise RuntimeError('Catalog HTTP request redirected to a different site or chapter')
-                if response.status != 200:
-                    raise RuntimeError('Catalog HTTP response status: '+str(response.status))
-                body=response.read(2*1024*1024+1)
-                if len(body)>2*1024*1024:
-                    raise RuntimeError('Catalog HTTP HTML exceeded 2 MiB safety bound')
-                raw=body.decode('utf-8','replace')
-                fresh=_parse_menu(raw,DEFAULT_START_URL)
-                if fresh:
-                    _MENU_CACHE=_validate_menu(fresh)
-                    print('RELIFE_CATALOG_SOURCE: verified_live_http_native_menu entries='+str(len(_MENU_CACHE)),flush=True)
-                    return _MENU_CACHE
-                # A 200 challenge page or changed document is NOT proof of a
-                # complete catalog; do not silently treat it as a valid result.
-                raise RuntimeError('Live HTTP document contained no native chapter menu')
-        except (HTTPError, URLError, TimeoutError, OSError) as exc:
-            print('RELIFE_CATALOG_SOURCE: live HTTP catalog unavailable ('+type(exc).__name__+
-                  '); using 226 exact browser-captured options from 2026-11-24',flush=True)
-            _MENU_CACHE=_CAPTURED_MENU
-        return _MENU_CACHE
+            _chapter_number(url)
+        except ValueError:
+            continue
+        found.add(url)
+    return sorted(found)
 
 
-def _catalog_from_html_or_verified_capture(raw, page_url):
-    parsed=_parse_menu(raw,page_url)
-    if parsed:
-        return _validate_menu(parsed)
-    result=_source_catalog()
-    if result is None:
-        raise RuntimeError('Current Relife catalog unavailable; no verified chapter list')
-    return _validate_menu(result)
+def _native_next(raw, url):
+    soup = BeautifulSoup(raw, 'html.parser')
+    if title_from_html(soup) != 'Orange Marmalade':
+        raise RuntimeError('Native series identity unavailable during chapter discovery')
+    meta = _json_script(soup, 'syncData')
+    n = Decimal(_chapter_number(url))
+    if (meta.get('manga_id') != '65gg' or meta.get('name') != 'Orange Marmalade'
+            or not re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', str(meta.get('number')))
+            or Decimal(str(meta.get('number'))) != n):
+        raise RuntimeError('Native next-chapter metadata unavailable for '+url)
+    nxt = meta.get('next_chapter_url')
+    if not nxt:
+        if n == _LAST:
+            return None
+        # The captured chapter 119 has disabled Next and empty syncData next,
+        # but its own series detail explicitly publishes the final chapter URL.
+        # Only bridge a one-chapter gap; never jump over missing chapters.
+        detail = _json_script(soup, 'initial-data').get('queries', {}).get(
+            '["manga","detail","65gg"]', {})
+        if (n == _LAST - 1 and detail.get('finalChapter') == _LAST
+                and detail.get('latestChapter') == _LAST):
+            candidate = urljoin(url, str(detail.get('latestChapterUrl') or ''))
+            if candidate == _LAST_URL and Decimal(_chapter_number(candidate)) == _LAST:
+                print('COMIX_NATIVE_FINAL_LINK: chapter 119 has no Next; using series latestChapterUrl for 120', flush=True)
+                return candidate
+        raise RuntimeError('Native navigation ended before chapter 120; incomplete catalog refused')
+    nxt = urljoin(url, str(nxt))
+    m = Decimal(_chapter_number(nxt))
+    if not n < m <= _LAST:
+        raise RuntimeError('Native chapter navigation loop or out-of-order chapter')
+    return nxt
+
+
+def _public_html(url, guard):
+    # Ordinary public HTML only. The runtime capture's encrypted XHR is NOT
+    # replayed or decoded; an actual access denial is respected.
+    import requests
+    guard.before(url, operation='native-chapter-catalog')
+    r = requests.get(url, headers={'Accept':'text/html',
+                     'User-Agent':'AuthorizedComicMetadata/1.0'},
+                     timeout=(10,25), allow_redirects=False)
+    guard.response(url, r.status_code, dict(r.headers))
+    if r.status_code != 200 or 'html' not in r.headers.get('Content-Type','text/html').lower():
+        raise RuntimeError(f'Native public chapter metadata unavailable (HTTP {r.status_code})')
+    return r.text
+
+
+def _discover_catalog(raw_html, page_url, fetch):
+    # Try a complete catalog in the supplied DOM, then the public series page.
+    # If the public page is a client-side shell, follow only real native
+    # next_chapter_url metadata where available. No guessed numeric route IDs.
+    if page_url != DEFAULT_START_URL:
+        raise RuntimeError('Full native discovery must start at the selected chapter 0 edition')
+    if title_from_html(BeautifulSoup(raw_html, 'html.parser')) != 'Orange Marmalade':
+        raise RuntimeError('Live source series identity not established')
+    if _native_next(raw_html, page_url) != _NEXT:
+        raise RuntimeError('Selected chapter edition no longer matches the supplied native navigation')
+    try:
+        return _validate_catalog(_native_links(raw_html,page_url))
+    except ValueError:
+        pass
+    series = fetch(_SERIES_URL)
+    try:
+        return _validate_catalog(_native_links(series,_SERIES_URL))
+    except ValueError:
+        pass
+    rows = [page_url]
+    raw, url = raw_html, page_url
+    while True:
+        nxt = _native_next(raw,url)
+        if nxt is None:
+            break
+        if nxt in rows or len(rows) >= 1000:
+            raise RuntimeError('Native navigation loop or chapter safety limit reached')
+        print('COMIX_NATIVE_DISCOVERY: '+_chapter_number(nxt)+' / 120', flush=True)
+        raw = fetch(nxt)
+        rows.append(nxt)
+        url = nxt
+    return _validate_catalog(rows)
 
 
 def custom_chapters(raw_html, page_url, chapter_class):
-    rows=_catalog_from_html_or_verified_capture(raw_html,page_url)
-    # Native selects are newest-first; archive oldest-first, preserving
-    # subchapters and all original labels, never inferring chapter numbers.
-    return [chapter_class(chapter_identity(None,urljoin(DEFAULT_START_URL,'/relife/'+slug),label),
-                          label,urljoin(DEFAULT_START_URL,'/relife/'+slug))
-            for slug,label in reversed(rows)]
+    global _DISCOVERED_CATALOG
+    _chapter_number(page_url)
+    if _CAPTURED_CATALOG:
+        rows = _validate_catalog(_CAPTURED_CATALOG)
+    else:
+        from reusable.source_session import SourceRequestGuard
+        root = Path(__file__).resolve().parents[1]
+        config = json.loads((root/'config/default.json').read_text(encoding='utf-8'))
+        guard = SourceRequestGuard(root/'.archiver_state'/'sites'/SOURCE_NAME,
+            min_interval_seconds=config.get('source_min_host_interval_seconds',1.5),
+            max_inline_wait_seconds=config.get('source_max_inline_wait_seconds',25))
+        rows = _discover_catalog(raw_html,page_url,lambda url:_public_html(url,guard))
+    _DISCOVERED_CATALOG = rows
+    if page_url not in rows:
+        raise RuntimeError('Current reader edition not present in native catalog')
+    print('COMIX_NATIVE_CATALOG_VERIFIED entries='+str(len(rows)), flush=True)
+    return [chapter_class(chapter_identity(None,u,''), 'Chapter '+_chapter_number(u), u) for u in rows]
+
+
+def _catalog_checkpoint():
+    return (Path(__file__).resolve().parents[1] / '.archiver_state' /
+            'sites' / SOURCE_NAME / 'native_catalog_progress.json')
+
+
+def _validate_prefix(rows):
+    rows = list(rows)
+    if not rows or rows[0] != DEFAULT_START_URL:
+        raise ValueError('Catalog prefix must start at captured chapter zero')
+    numbers = [Decimal(_chapter_number(u)) for u in rows]
+    if numbers != [Decimal(i) for i in range(len(rows))] or len(rows) > _LAST+1:
+        raise ValueError('Catalog prefix must be consecutive and unique')
+    if len(rows) > 1 and rows[1] != _NEXT:
+        raise ValueError('Catalog prefix does not match captured first edition')
+    if len(rows) > _LAST and rows[_LAST] != _LAST_URL:
+        raise ValueError('Catalog prefix does not match captured final URL')
+    return rows
+
+
+def _save_catalog_prefix(rows, *, origin='native-browser'):
+    rows = _validate_prefix(rows)
+    path = _catalog_checkpoint()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix('.tmp')
+    with tmp.open('w', encoding='utf-8') as out:
+        json.dump({'schema':1,'source':SOURCE_NAME,'seed':DEFAULT_START_URL,
+                   'origin':origin,'rows':rows}, out)
+        out.flush()
+        import os
+        os.fsync(out.fileno())
+    tmp.replace(path)
+
+
+def _load_catalog_prefix():
+    path = _catalog_checkpoint()
+    if not path.exists():
+        return [DEFAULT_START_URL]
+    data = json.loads(path.read_text(encoding='utf-8'))
+    if (data.get('schema') != 1 or data.get('source') != SOURCE_NAME or
+            data.get('seed') != DEFAULT_START_URL):
+        raise RuntimeError('Native catalog checkpoint belongs to a different source')
+    return _validate_prefix(data['rows'])
+
+
+def _read_live_chapter(page, url, visit):
+    import time
+    visit(page, url)
+    deadline = time.monotonic()+20
+    while True:
+        raw = page.content()
+        soup = BeautifulSoup(raw, 'html.parser')
+        meta = _json_script(soup, 'syncData')
+        if (page.url == url and meta.get('manga_id') == '65gg' and
+                str(meta.get('number')) == _chapter_number(url)):
+            if title_from_html(soup) != 'Orange Marmalade':
+                raise RuntimeError('Native reader series identity mismatch')
+            read = _json_script(soup, 'initial-data').get('read', {})
+            if read:
+                expected_id = int(urlsplit(url).path.rsplit('/',1)[1].split('-chapter-')[0])
+                if read.get('chapterId') != expected_id or read.get('mangaHid') != '65gg':
+                    raise RuntimeError('Native reader edition identity mismatch: '+url)
+            if url == _LAST_URL:
+                # A metadata link alone is not proof that the final chapter loads.
+                _declared_slots(soup)
+            return raw
+        if time.monotonic() >= deadline:
+            raise RuntimeError('Native reader metadata did not settle: '+url)
+        page.wait_for_timeout(500)
+
+
+def custom_browser_chapters(context, seed_url, seed_html, chapter_class, visit):
+    """Use normal paired browser and persist each validated native visit."""
+    global _DISCOVERED_CATALOG
+    if seed_url != DEFAULT_START_URL or _native_next(seed_html, seed_url) != _NEXT:
+        raise RuntimeError('Native chapter-zero edition does not match capture')
+    if _CAPTURED_CATALOG:
+        rows = _validate_catalog(_CAPTURED_CATALOG)
+    else:
+        try:
+            rows = _validate_catalog(_native_links(seed_html, seed_url))
+        except ValueError:
+            # Only the actual extension-backed context owns persistent
+            # browser-discovery state. Offline callers/fixture contexts must
+            # never mutate or consume a real user's checkpoint.
+            persistent = getattr(context, 'bridge', None) is not None
+            rows = _load_catalog_prefix() if persistent else [seed_url]
+            page = context.new_page()
+            try:
+                raw, url = seed_html, seed_url
+                if len(rows) > 1:
+                    url = rows[-1]
+                    print('COMIX_CATALOG_RESUME: '+str(len(rows))+' saved chapter URLs; checking '+url, flush=True)
+                    raw = _read_live_chapter(page, url, visit)
+                elif persistent:
+                    _save_catalog_prefix(rows)
+                while True:
+                    nxt = _native_next(raw, url)
+                    if nxt is None:
+                        break
+                    if nxt in rows or Decimal(_chapter_number(nxt)) != len(rows):
+                        raise RuntimeError('Native navigation is not consecutive; refusing incomplete catalog')
+                    print('COMIX_BROWSER_CATALOG: '+_chapter_number(nxt)+' / 120', flush=True)
+                    raw = _read_live_chapter(page, nxt, visit)
+                    rows.append(nxt)
+                    if persistent:
+                        _save_catalog_prefix(rows)
+                    url = nxt
+            finally:
+                page.close()
+            rows = _validate_catalog(rows)
+    _DISCOVERED_CATALOG = rows
+    print('COMIX_NATIVE_CATALOG_VERIFIED entries='+str(len(rows)), flush=True)
+    return [chapter_class(chapter_identity(None,u,''), 'Chapter '+_chapter_number(u), u) for u in rows]
+
+
+def _history_prefix(history_path):
+    """Read only matching visit URLs from a local Chromium History database."""
+    import sqlite3
+    from contextlib import closing
+    with closing(sqlite3.connect(Path(history_path).resolve().as_uri()+'?mode=ro', uri=True, timeout=2)) as db:
+        records = db.execute(
+            'SELECT urls.url FROM visits JOIN urls ON visits.url=urls.id '
+            'WHERE urls.url LIKE ? ORDER BY visits.visit_time, visits.id',
+            (_SITE+_PATH+'%',)).fetchall()
+    # Match the observed run: chapter 0,1,...119, with possible duplicate
+    # visits to the current page. Do not combine conflicting editions or
+    # silently bridge missing interior chapters.
+    chain = []
+    recovered = []
+    for (url,) in records:
+        try:
+            n = Decimal(_chapter_number(url))
+        except ValueError:
+            continue
+        if url == DEFAULT_START_URL:
+            if len(chain) <= 1:
+                chain = [url]
+            else:
+                chain = [url]
+            continue
+        if not chain or url == chain[-1]:
+            continue
+        if n == len(chain) and (n != 1 or url == _NEXT):
+            chain.append(url)
+            if url == _OBSERVED_119_URL and len(chain)==120:
+                recovered.append(tuple(chain))
+        else:
+            chain = []
+    unique = set(recovered)
+    if len(unique)>1:
+        raise RuntimeError('Conflicting complete visit sequences in browser history; refusing to select one')
+    return list(next(iter(unique))) if unique else []
+
+
+def _recover_catalog_history():
+    import os
+    import sqlite3
+    base = Path(os.environ.get('LOCALAPPDATA', ''))
+    roots = (base/'Google'/'Chrome'/'User Data',
+             base/'Microsoft'/'Edge'/'User Data')
+    found = set()
+    locked = 0
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for profile in root.iterdir():
+            if profile.name != 'Default' and not re.fullmatch(r'Profile [0-9]+', profile.name):
+                continue
+            history = profile/'History'
+            if not history.is_file():
+                continue
+            try:
+                prefix = _history_prefix(history)
+            except (OSError, sqlite3.Error):
+                locked += 1
+                continue
+            if prefix:
+                found.add(tuple(_validate_prefix(prefix)))
+    if len(found) > 1:
+        raise RuntimeError('Multiple conflicting browser visit sequences; no checkpoint written')
+    if not found:
+        print('COMIX_HISTORY_RECOVERY_UNAVAILABLE: no complete matching 0-119 sequence'+
+              ('; some History databases were locked' if locked else '')+
+              '. Normal discovery will use persistent checkpoints.', flush=True)
+        return False
+    rows = list(next(iter(found)))
+    existing = _load_catalog_prefix()
+    if rows[:min(len(existing),len(rows))] != existing[:min(len(existing),len(rows))]:
+        raise RuntimeError('Browser history conflicts with saved checkpoint; no changes written')
+    if len(existing)<len(rows):
+        _save_catalog_prefix(rows, origin='local-browser-history')
+    print('COMIX_HISTORY_RECOVERED: 120 previously visited chapter URLs (0-119). '
+          'Next run verifies live chapter 119 and visits chapter 120.', flush=True)
+    return True
 
 
 def title_catalog_url(saved_url):
-    _slug(saved_url or DEFAULT_START_URL)
-    return saved_url or DEFAULT_START_URL
-
-
-def native_chapter_titles_from_catalog(raw_html,page_url):
-    class _Chapter:
-        def __init__(self,chapter_id,label,url):
-            self.chapter_id,self.label,self.url=chapter_id,label,url
-    return {x.chapter_id:x.label for x in custom_chapters(raw_html,page_url,_Chapter)}
+    return _SERIES_URL
 
 
 def captured_native_chapter_titles():
-    """Exact previously observed native labels; no HTTP or browser access."""
-    return {chapter_identity(None, urljoin(DEFAULT_START_URL, '/relife/' + slug), label): label
-            for slug, label in _validate_menu(_CAPTURED_MENU)}
+    # Only real captured URLs; do not pretend that all 121 are captured.
+    rows = _DISCOVERED_CATALOG or _CAPTURED_CATALOG or (DEFAULT_START_URL,_NEXT,_LAST_URL)
+    return {_id(_chapter_number(u)): 'Chapter '+_chapter_number(u) for u in rows}
 
 
-def accept_catalog_title(chapter_id,label):
-    if not isinstance(chapter_id, str) or not chapter_id.startswith('truyenqq-relife-'):
+def native_chapter_titles_from_catalog(raw_html, page_url):
+    # Title maintenance must stay a single metadata request, not a full crawl.
+    rows = _native_links(raw_html,page_url)
+    return {**captured_native_chapter_titles(),
+            **{_id(_chapter_number(u)):'Chapter '+_chapter_number(u) for u in rows}}
+
+
+def accept_catalog_title(chapter_id, label):
+    return (isinstance(chapter_id, str) and chapter_id.startswith(_PREFIX) and
+            bool(re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', chapter_id[len(_PREFIX):])) and
+            label == 'Chapter '+chapter_id[len(_PREFIX):])
+
+
+def _declared_slots(soup):
+    root = soup.select_one('.rpage-main__inner')
+    if root is None:
+        raise RuntimeError('Comix reader container unavailable')
+    # Native progress segments declare the chapter total even when image nodes
+    # are still unmounted. Do not count the sponsored image or comment avatars.
+    segs = soup.select('.rpage-progress__seg')
+    numbers = []
+    for item in segs:
+        m = re.fullmatch(r'Go to page ([0-9]+)', str(item.get('aria-label', '')))
+        if not m:
+            raise RuntimeError('Unknown native page progress label')
+        numbers.append(int(m.group(1)))
+    if not numbers or numbers != list(range(1, len(numbers)+1)):
+        raise RuntimeError('Native page total/order not verified; refusing incomplete archive')
+    slots = {}
+    for wrapper in root.select('.rpage-page[data-page]'):
+        k = int(wrapper['data-page'])
+        if k in slots or k not in numbers:
+            raise RuntimeError('Duplicate or out-of-range native reader page')
+        images = wrapper.select('img.rpage-page__img')
+        if len(images) > 1:
+            raise RuntimeError('More than one artwork image in native page '+str(k))
+        slots[k] = images[0] if images else None
+    return numbers, slots
+
+
+def accept_rendered_image_url(url):
+    """Shape check, NOT network authorization. The bridge independently proves
+    a unique decoded currentSrc inside BRIDGE_RENDERED_IMAGE_SELECTOR.
+    """
+    try:
+        p = urlsplit(url)
+        host = p.hostname or ''
+        return bool(p.scheme == 'https' and not p.username and not p.password
+                    and p.port is None and p.netloc == host and not p.fragment
+                    and not p.query and re.fullmatch(r'(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}', host)
+                    and re.fullmatch(r'/hi/[A-Za-z0-9_-]+', p.path))
+    except (ValueError, TypeError):
         return False
-    slug = chapter_id.removeprefix('truyenqq-relife-')
-    match = re.fullmatch(r'Chapter\s+([0-9]+(?:\.[0-9]+)?)', str(label), flags=re.I)
-    return bool(match and _SLUG.fullmatch(slug) and slug.removeprefix('chapter-').replace('-', '.') == match.group(1))
+
+
+def _image_url(raw, page_url):
+    if not raw or str(raw).startswith(('data:', 'about:')):
+        return ''
+    url = urljoin(page_url, str(raw))
+    p = urlsplit(url)
+    if not accept_rendered_image_url(url):
+        raise RuntimeError('COMIX_INVALID_NATIVE_PANEL_URL: '+str(p.hostname)+' '+p.path[:12])
+    return url
 
 
 def custom_page_snapshot(page):
-    """Correct site's misleading loaded spinner state without source requests.
-
-    Comic Bridge's generic snapshot gives the image order and actual decode
-    status. The same currently loaded page HTML exposes the original data-src
-    and current src. A spinner can have naturalWidth>0, but it is not artwork.
-    Return the declared real URL with loaded=False until the browser actually
-    decodes that *same* real URL. Never infer panel names or visit a CDN here.
-    """
-    _slug(page.url)
-    info=page.evaluate(r"""() => { /* MutationObserver: source browser DOM reader snapshot */
-      const root=document.querySelector('.reading-content > .inner') ||
-                 document.querySelector('.reading-content .inner');
-      if(!root) return {imgs:[],total:0,missingSlots:0,unloadedSlots:0,
-                       scrollY:scrollY||0,bottom:0,viewportHeight:innerHeight};
-      const imgs=[...root.querySelectorAll('img')].map((im,i)=>{
-        const rect=im.getBoundingClientRect();
-        return {key:String(i+1),url:im.currentSrc||im.getAttribute('src')||'',
-          loaded:!!(im.complete&&im.naturalWidth>0&&im.naturalHeight>0),
-          width:im.naturalWidth||0,height:im.naturalHeight||0,
-          pageY:rect.top+scrollY};
-      });
-      const height=Math.max(document.documentElement.scrollHeight,document.body.scrollHeight);
-      return {imgs,total:imgs.length,readerCount:imgs.length,
-        missingSlots:imgs.filter(v=>!v.url).length,
-        unloadedSlots:imgs.filter(v=>!v.loaded).length,
-        scrollY:scrollY||0,bottom:Math.max(0,height-innerHeight),
-        viewportHeight:innerHeight,height,revision:0};
-    }""")
-    if not isinstance(info,dict) or not isinstance(info.get('imgs'),list):
-        raise RuntimeError('Comic Bridge did not return structured current-document image evidence')
-    html=page.content()
-    _slug(page.url)  # A managed-tab recycle must not silently change chapter.
-    soup=BeautifulSoup(html, 'html.parser')
-    root=None
-    for selector in READER_SELECTORS:
-        root=soup.select_one(selector)
-        if root is not None:
-            break
-    if root is None:
-        raise RuntimeError('The current chapter has no source .reading-content image container')
-    nodes=root.select('img')
-    observations=info['imgs']
-    if not nodes or len(nodes)!=len(observations):
-        raise RuntimeError('Reader image nodes changed while scanning; retry this chapter without guessing ordinals')
-    out=[]
-    for i,(node,obs) in enumerate(zip(nodes,observations),1):
-        if str(obs.get('key') or '') != str(i):
-            raise RuntimeError('Reader panel numbering changed during the DOM snapshot')
-        declared=str(node.get('data-src') or node.get('data-original') or
-                     node.get('data-lazy-src') or node.get('src') or '').strip()
-        if not declared:
-            out.append({'key':str(i),'url':'','loaded':False,
-                        'width':0,'height':0,'pageY':float(obs.get('pageY') or 0)})
-            continue
-        normalized=urljoin(page.url,declared)
-        p=urlsplit(normalized)
-        if any(marker in normalized for marker in IMAGE_PLACEHOLDER_URL_MARKERS):
-            out.append({'key':str(i),'url':'','loaded':False,
-                        'width':0,'height':0,'pageY':float(obs.get('pageY') or 0)})
-            continue
-        if p.scheme!='https' or p.hostname!=_CDN or p.port is not None or p.username or p.password:
-            raise RuntimeError('Unrecognized real chapter image host, adjust adapter after observation: '+normalized[:180])
-        if not p.path.startswith('/chapters/') or p.query or p.fragment:
-            raise RuntimeError('Unexpected chapter image CDN path or query: '+normalized[:180])
-        actual=urljoin(page.url,str(node.get('src') or '').strip())
-        snapshot_url=urljoin(page.url,str(obs.get('url') or '').strip())
-        # The source's spinner SVG is a decoded image; the real URL is loaded
-        # only when its current src and the bridge's decoded src both agree.
-        loaded=(obs.get('loaded') is True and actual==normalized and
-                snapshot_url==normalized and int(obs.get('width') or 0)>0 and
-                int(obs.get('height') or 0)>0)
-        out.append({'key':str(i),'url':normalized,'loaded':loaded,
+    # BridgePage.evaluate accepts only its existing generic snapshot operation.
+    # No arbitrary JS execution, direct CDN fetch or private API replay.
+    number = _chapter_number(page.url)
+    info = page.evaluate('() => { /* MutationObserver */ return {imgs:[]}; }')
+    html = page.content()
+    if _chapter_number(page.url) != number:
+        raise RuntimeError('Managed tab changed chapter during snapshot')
+    soup = BeautifulSoup(html, 'html.parser')
+    chapter_title_from_html(soup, 'Chapter '+number)
+    numbers, slots = _declared_slots(soup)
+    by_key = {}
+    for im in info.get('imgs', []):
+        key = str(im.get('key', ''))
+        by_key.setdefault(key, []).append(im)
+    out = []
+    for k in numbers:
+        node = slots.get(k)
+        url = _image_url(node.get('src', '') if node else '', page.url)
+        matches = [x for x in by_key.get(str(k), []) if url and urljoin(page.url, str(x.get('url') or '')) == url]
+        if len(matches) > 1:
+            raise RuntimeError('Ambiguous live image observation for native page '+str(k))
+        obs = matches[0] if matches else {}
+        loaded = bool(obs.get('loaded') is True and obs.get('width',0)>0 and obs.get('height',0)>0)
+        out.append({'key':str(k),'url':url,'loaded':loaded,
                     'width':int(obs.get('width') or 0) if loaded else 0,
                     'height':int(obs.get('height') or 0) if loaded else 0,
                     'pageY':float(obs.get('pageY') or 0)})
-    return {**info,'imgs':out,'total':len(out),'readerCount':len(out),
-            'missingSlots':sum(not image['url'] for image in out),
-            'unloadedSlots':sum(not image['loaded'] for image in out)}
+    # Diagnose a real geometry mismatch if the live reader did not expose
+    # a scrollable surface; never declare the currently mounted subset complete.
+    viewport = float(info.get('viewportHeight') or 0)
+    if (viewport and float(info.get('bottom') or 0) <= 4 and
+            any(x['pageY'] >= viewport for x in out) and len(out)>1 and
+            any(not x['loaded'] for x in out)):
+        raise RuntimeError('COMIX_NESTED_SCROLL: native artwork extends beyond the viewport with unloaded slots, but '
+                           'the live bridge detected no scrollable reader surface. Reload the updated extension; '
+                           'verify the native reader layout if this persists.')
+    return {**info,'imgs':out,'total':len(numbers),'readerCount':len(numbers),
+            'missingSlots':sum(not x['url'] for x in out),
+            'unloadedSlots':sum(not x['loaded'] for x in out)}
+
+
+def _import_catalog(raw):
+    payload = json.loads(raw.lstrip('\ufeff'))
+    if not isinstance(payload, dict) or payload.get('source') != _SITE+_PATH.rstrip('/'):
+        raise ValueError('Capture must come from the Orange Marmalade native UI')
+    rows = _validate_catalog(payload.get('links', ()))
+    p = Path(__file__).resolve()
+    s = p.read_text(encoding='utf-8')
+    replacement = '# BEGIN CAPTURED CATALOG\n_CAPTURED_CATALOG = (\n'+''.join('    '+repr(u)+',\n' for u in rows)+')\n# END CAPTURED CATALOG'
+    updated, n = re.subn(r'^# BEGIN CAPTURED CATALOG\n.*?^# END CAPTURED CATALOG', lambda _:replacement,s,flags=re.M|re.S)
+    if n != 1:
+        raise RuntimeError('Adapter catalog markers changed; nothing written')
+    compile(updated,str(p),'exec')
+    tmp = p.with_suffix('.tmp')
+    tmp.write_text(updated,encoding='utf-8')
+    tmp.replace(p)
+    print(f'PASS: imported {len(rows)} actual chapter URLs into the single adapter')
 
 
 def adapter_self_test():
-    """Fast offline chapter/host/placeholder checks, callable without a browser.
+    assert all(p.count('*') == 1 and p.endswith('*') for p in EXTENSION_MATCHES)
+    assert any(DEFAULT_START_URL.startswith(p[:-1]) for p in EXTENSION_MATCHES)
+    assert _chapter_number(DEFAULT_START_URL)=='0'
+    assert _chapter_number(_NEXT)=='1'
+    assert chapter_identity(None,_NEXT,'')==_PREFIX+'1'
+    assert not accept_catalog_title(_PREFIX+'1','Chapter 120')
+    assert accept_rendered_image_url('https://lov.digitalsoulstudio.site/hi/bEqPbYfo')
+    assert accept_rendered_image_url('https://future-cdn.example/hi/panel_1')
+    assert not accept_rendered_image_url('http://future-cdn.example/hi/panel_1')
+    assert not accept_rendered_image_url('https://future-cdn.example/ad.png')
+    assert not accept_rendered_image_url('https://127.0.0.1/hi/panel_1')
+    try: _validate_catalog([DEFAULT_START_URL,_NEXT])
+    except ValueError: pass
+    else: raise AssertionError('incomplete catalog accepted')
+    if _CAPTURED_CATALOG:
+        assert len(_validate_catalog(_CAPTURED_CATALOG))>=121
+    return {'captured_catalog_entries':len(_CAPTURED_CATALOG),'observed_cdn_hosts':len(BRIDGE_IMAGE_HOSTS)}
 
-    Imported only from this file: no additional provider-specific test file
-    or reusable change is required. The normal run.py preflight handles the
-    global reusable/bridge compatibility and regression suites.
-    """
-    class Chapter:
-        def __init__(self,chapter_id,label,url):
-            self.chapter_id,self.label,self.url=chapter_id,label,url
-    rows=_validate_menu(_CAPTURED_MENU)
-    assert len(rows)==226 and rows[0]==('chapter-224','Chapter 224')
-    assert rows[-1]==('chapter-1','Chapter 1')
-    parsed=custom_chapters('<select id="select-reading">'+''.join(
-        '<option value="/relife/'+slug+'">'+label+'</option>' for slug,label in rows)
-        +'</select>',DEFAULT_START_URL,Chapter)
-    assert len(parsed)==226 and parsed[0].label=='Chapter 1' and parsed[-1].label=='Chapter 224'
-    assert any(c.label=='Chapter 221.1' and c.url.endswith('/chapter-221-1') for c in parsed)
-    assert len(set(c.chapter_id for c in parsed))==226
-    assert len(captured_native_chapter_titles()) == 226
-    assert captured_native_chapter_titles()['truyenqq-relife-chapter-150-5'] == 'Chapter 150.5'
-    assert all(accept_catalog_title(k, v) for k, v in captured_native_chapter_titles().items())
-    assert not accept_catalog_title('truyenqq-relife-chapter-2', 'Chapter 226')
-    heading = BeautifulSoup('<div class="navi"><select><option>Chapter 224</option>'
-                            '</select></div><div class="chapter-title"><h1>Relife : Chapter 2</h1></div>',
-                            'html.parser')
-    assert chapter_title_from_html(heading, 'Chapter 2') == 'Chapter 2'
-    wrong_heading = BeautifulSoup('<h1 class="current-book">Chapter 224</h1>', 'html.parser')
-    assert chapter_title_from_html(wrong_heading, 'Chapter 150.5') == 'Chapter 150.5'
-    for bad in ('http://truyenqq.com.vn/relife/chapter-1',
-                'https://evil.example/relife/chapter-1',
-                'https://truyenqq.com.vn/relife/chapter-225?x=1'):
-        try:_slug(bad)
-        except ValueError:pass
-        else:raise AssertionError('Untrusted chapter identity accepted: '+bad)
-    class Page:
-        url=DEFAULT_START_URL
-        def __init__(self,src):self.src=src
-        def evaluate(self,s):
-            return {'imgs':[{'key':'1','url':self.src,'loaded':True,'width':100,'height':125,'pageY':0}],
-                    'scrollY':0,'bottom':0,'viewportHeight':700,'total':1,'readerCount':1}
-        def content(self):
-            return ('<div class="reading-content"><div class="inner">'
-                    '<img data-src="https://s40.cc3t.net/chapters/example/panel.jpg" src="'+self.src+'">'
-                    '</div></div>')
-    spinner=custom_page_snapshot(Page('/images/loading.svg'))
-    assert spinner['imgs'][0]['loaded'] is False and spinner['imgs'][0]['url'].endswith('/panel.jpg')
-    real=custom_page_snapshot(Page('https://s40.cc3t.net/chapters/example/panel.jpg'))
-    assert real['imgs'][0]['loaded'] is True
-    return {'chapters':226,'real_panels_observed_in_seed':27,'hosts':(_SITE,_CDN)}
 
-# The adapter itself is the ONLY provider-specific test fixture allowed on a
-# one-file site switch. run.py imports it before its existing global tests.
 _ADAPTER_PREFLIGHT_PROOF = adapter_self_test()
+if __name__ == '__main__':
+    if sys.argv[1:] == ['--import-catalog']:
+        _import_catalog(sys.stdin.read())
+    elif sys.argv[1:] == ['--recover-catalog-history']:
+        _recover_catalog_history()
+    elif sys.argv[1:] == ['--check']:
+        print(adapter_self_test())
+    else:
+        raise SystemExit('Use --import-catalog (JSON via stdin), --recover-catalog-history, or --check')

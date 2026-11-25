@@ -9,7 +9,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://truyenqq.com.vn/relife/chapter-*"
+        "https://comix.to/title/65gg-orange-marmalade/*"
       ],
       "js": [
         "content.js"

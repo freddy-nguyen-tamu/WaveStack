@@ -1622,6 +1622,17 @@ def save_chapters(db, chapters):
 
 
 def discover_from_live(context, seed_url, seed_html, max_chapters=1000, guard=None, visible=True):
+    browser_catalog = getattr(ADAPTER, 'custom_browser_chapters', None)
+    if callable(browser_catalog):
+        def visit(page, url):
+            if guard:
+                return visit_source_page(page, url, guard, visible=visible)
+            return page.goto(url, wait_until='domcontentloaded', timeout=50000)
+        catalog = browser_catalog(context, seed_url, seed_html, Chapter, visit)
+        if catalog is not None:
+            if not catalog:
+                raise RuntimeError('Native browser catalog returned no chapters')
+            return catalog[:max_chapters]
     initial, nav = chapter_links(seed_html, seed_url)
     if not initial and not nav:
         # A site adapter can supply a VERIFIED complete catalog from the current

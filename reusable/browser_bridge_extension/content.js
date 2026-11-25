@@ -4,17 +4,48 @@
   // an older content script into this tab. Upgrade without refreshing it.
   if (window.__comicBridgeContentLoadedVersion === 10 &&
       window.__comicBridgeScrollRevision === 1 &&
+      window.__comicBridgeNestedScrollRevision === 1 &&
+      window.__comicBridgeScopedRenderedRevision === 1 &&
       typeof window.__comicBridgeDirect === 'function') return;
   window.__comicBridgeContentLoadedVersion = 10;
   window.__comicBridgeContentLoaded = true;
   // Document-scoped result ledger survives an in-place content script upgrade.
   // Only the current chapter may answer status for a command; navigation loses it.
   window.__comicBridgeScrollRevision = 1;
+  window.__comicBridgeNestedScrollRevision = 1;
+  window.__comicBridgeScopedRenderedRevision = 1;
   const scrollLedger = window.__comicBridgeScrollLedger || Object.create(null);
   window.__comicBridgeScrollLedger = scrollLedger;
   const scrollHistory = window.__comicBridgeScrollOrder || [];
   window.__comicBridgeScrollOrder = scrollHistory;
 
+  // A reader may scroll a nested overflow container instead of the window.
+  // Infer it from the actual reader/image ancestors, never from a site name.
+  let readerRoot=null;
+  function scrollContainer(node) {
+    for(let el=node; el && el!==document.body && el!==document.documentElement; el=el.parentElement) {
+      if(typeof getComputedStyle!=='function') break;
+      const style=getComputedStyle(el);
+      if(/^(auto|scroll|overlay)$/.test(style.overflowY) &&
+         el.clientHeight>0 && el.scrollHeight>el.clientHeight+4) return el;
+    }
+    return null;
+  }
+  function scrollSurface(node=readerRoot) {
+    return scrollContainer(node) || (readerRoot!==node ? scrollContainer(readerRoot) : null);
+  }
+  const position = el => el ? Number(el.scrollTop)||0 : Number(window.scrollY)||0;
+  const setPosition = (el,top) => {
+    if(el) el.scrollTo({top,behavior:'instant'});
+    else window.scrollTo({top,behavior:'instant'});
+  };
+  function scrollBounds(el) {
+    if(!el) return {top:0,bottom:innerHeight,left:0,right:innerWidth};
+    const r=el.getBoundingClientRect();
+    const top=r.top+(el.clientTop||0),left=r.left+(el.clientLeft||0);
+    return {top:Math.max(0,top),bottom:Math.min(innerHeight,top+el.clientHeight),
+      left:Math.max(0,left),right:Math.min(innerWidth,left+el.clientWidth)};
+  }
   const html = () => ({url: location.href, html: '<!doctype html>\n' + document.documentElement.outerHTML});
   const classify = () => {
     const visible = el => {
@@ -36,6 +67,9 @@
     let root = selectors.map(s => { try {return document.querySelector(s);} catch {return null;} })
       .find(n => n && n.querySelector('img,[data-page]'));
     if (!root) root = document.querySelector('main,article') || document.body;
+    readerRoot=root;
+    const surface=scrollSurface(root);
+    const bounds=surface ? scrollBounds(surface) : {top:0};
     let state = window.__comicBridgeReaderObserver;
     if (!state || state.root !== root) {
       if (state?.observer) state.observer.disconnect();
@@ -64,15 +98,37 @@
                       im.getAttribute('data-index') || String(i+1);
       return {key:String(ordinal),url,width:im.naturalWidth || 0,height:im.naturalHeight || 0,
         loaded:!!(im.complete && im.naturalWidth && im.naturalHeight),
-        pageY:rect.top+window.scrollY};
+        pageY:rect.top-bounds.top+position(surface)};
     });
     const doc = document.documentElement, body = document.body;
-    const height = Math.max(doc.scrollHeight, body?.scrollHeight || 0);
+    const height = surface ? surface.scrollHeight : Math.max(doc.scrollHeight, body?.scrollHeight || 0);
+    const viewportHeight=surface ? surface.clientHeight : innerHeight;
     return {imgs,total:nodes.length,readerCount:nodes.length,missingSlots,unloadedSlots,
-      scrollY:window.scrollY || doc.scrollTop || 0,
-      bottom:Math.max(0, height-window.innerHeight),viewportHeight:innerHeight,height,revision:state.revision};
+      scrollY:surface ? position(surface) : (window.scrollY || doc.scrollTop || 0),
+      bottom:Math.max(0, height-viewportHeight),viewportHeight,height,revision:state.revision,
+      nestedScroll:!!surface};
   }
-  function imageStatus(url) {
+  function scopedDecodedImages(selector, url='') {
+    if(typeof selector!=='string' || !selector || selector.length>180) return [];
+    try {
+      return [...document.querySelectorAll(selector)].filter(im=>{
+        if(!im.currentSrc) return false;
+        const u=abs(im.currentSrc);
+        if(!u.startsWith('https://') || (url && u!==abs(url))) return false;
+        if(!im.complete || !im.naturalWidth || !im.naturalHeight) return false;
+        const r=im.getBoundingClientRect();
+        const style=typeof getComputedStyle==='function' ? getComputedStyle(im) : {};
+        return r.width>0 && r.height>0 && style.visibility!=='hidden' && style.display!=='none' && style.opacity!=='0';
+      });
+    } catch {return [];}
+  }
+  function imageStatus(url, selector) {
+    if(selector) {
+      const imgs=scopedDecodedImages(selector,url);
+      return {found:imgs.length===1,loaded:imgs.length===1,count:imgs.length,
+        visible:imgs.length===1,dimensions:imgs.map(im=>[im.naturalWidth,im.naturalHeight]).slice(0,3),
+        rendered_reader_revision:'scoped-rendered-reader-v1'};
+    }
     const key = raw => {try {const u=new URL(raw,location.href);u.hash='';return u.href;}catch{return '';}};
     const requested=key(url);
     const imgs=[...document.querySelectorAll('img')].filter(im=>
@@ -105,6 +161,30 @@
     const nodeKey=(im,i)=>String(im.closest('[data-page]')?.getAttribute('data-page')||
                                   im.getAttribute('data-index')||i+1);
     const matches=nodes.map((im,i)=>({im,key:nodeKey(im,i)})).filter(x=>x.key===key);
+    // Some native lazy readers mount the image only when a declared page
+    // placeholder enters view. Revisit exactly that unique, existing slot,
+    // without inventing an image URL or altering the page's loading rules.
+    if (matches.length===0 && !desired) {
+      const slots=[...root.querySelectorAll('[data-page]')]
+        .filter(el=>el.getAttribute('data-page')===key);
+      if(slots.length===1) {
+        const slot=slots[0];readerRoot=root;
+        const surface=scrollSurface(slot), bounds=surface ? scrollBounds(surface) : {top:0};
+        const rect=slot.getBoundingClientRect();
+        await moveViewportTo(position(surface)+rect.top-bounds.top,210,surface);
+        await waitForPaintOrTimer();
+        const deadline=Date.now()+6500;
+        while(Date.now()<deadline && slot.isConnected) {
+          const mounted=[...slot.querySelectorAll('img')].filter(im=>
+            im.closest('[data-page]')===slot);
+          if(mounted.length===1 && mounted[0].complete && mounted[0].naturalWidth>0 && mounted[0].naturalHeight>0)
+            return {loaded:true,key,width:mounted[0].naturalWidth,height:mounted[0].naturalHeight,
+              reason:'Native reader mounted the declared image after targeted slot scroll'};
+          await new Promise(resolve=>setTimeout(resolve,250));
+        }
+        return {loaded:false,key,reason:'Declared native slot still has no decoded image'};
+      }
+    }
     if (matches.length!==1) return {loaded:false,key,reason:'Image ordinal not unique in current reader DOM',matches:matches.length};
     const im=matches[0].im;
     const urls=[im.currentSrc,im.getAttribute('src'),im.src,...attrs.map(a=>im.getAttribute(a))]
@@ -132,7 +212,10 @@
     // Targeted correction happens once per missing slot; a decoded image
     // requires no re-scroll.  Keep the camera there while lazy loading settles.
     const rect=im.getBoundingClientRect();
-    await moveViewportTo(window.scrollY+rect.top+(rect.height-window.innerHeight)/2,210);
+    readerRoot=root;
+    const surface=scrollSurface(im),bounds=surface ? scrollBounds(surface) : {top:0};
+    await moveViewportTo(position(surface)+rect.top-bounds.top+
+      (rect.height-(surface ? surface.clientHeight : window.innerHeight))/2,210,surface);
     const paintReady=await waitForPaintOrTimer();
     const deadline=Date.now()+6500;
     while(Date.now()<deadline && !isReady()){
@@ -179,6 +262,11 @@
   // A site may instead have decoded panels at its own origin; the adapter
   // already specifies the reader container, so add this narrow fallback.
   const firstLoadedImage = options => {
+    if(options?.rendered_reader_selector) {
+      const images=scopedDecodedImages(options.rendered_reader_selector);
+      const first=images.find(im=>images.filter(x=>abs(x.currentSrc)===abs(im.currentSrc)).length===1);
+      return {url:first ? abs(first.currentSrc) : '',rendered_reader_revision:'scoped-rendered-reader-v1'};
+    }
     const origins=Array.isArray(options) ? options : (options?.origins || []);
     let image=[...document.images].find(im=>im.complete && im.naturalWidth>0 &&
       (origins||[]).some(o=>abs(im.currentSrc).startsWith(o+'/')));
@@ -235,8 +323,8 @@
   // Visible, bounded progression; no one-frame jumps across the scrollbar.
   // Timers, not rAF, drive motion so a paused animation clock cannot strand
   // a browser-extension command. The final position is exact for screenshots.
-  async function moveViewportTo(destination, duration=180) {
-    const start=Number(window.scrollY)||0;
+  async function moveViewportTo(destination, duration=180, surface=scrollSurface()) {
+    const start=position(surface);
     const target=Math.max(0,Number(destination)||0);
     const distance=target-start;
     if(Math.abs(distance)<2) return target;
@@ -245,7 +333,7 @@
     for(let i=1;i<=steps;i++) {
       const t=i/steps;
       const eased=t*t*(3-2*t);
-      window.scrollTo({top:i===steps?target:start+distance*eased,behavior:'instant'});
+      setPosition(surface,i===steps?target:start+distance*eased);
       if(i<steps) await new Promise(resolve=>setTimeout(resolve,interval));
     }
     return target;
@@ -253,24 +341,37 @@
   async function imageTile(p) {
     // Hidden source widgets and visible reader clones may share the same
     // blob URL. Prefer the decoded, visible image instead of a zero-size node.
-    const candidates=[...document.images].filter(im=>matchesImage(im,p.url) &&
+    const scoped=p.rendered_reader_selector;
+    const candidates=scoped ? scopedDecodedImages(scoped,p.url) : [...document.images].filter(im=>matchesImage(im,p.url) &&
       im.complete && im.naturalWidth>0 && im.naturalHeight>0);
+    if(scoped && candidates.length!==1) return {ok:false,reason:'No unique decoded native reader image matches URL'};
     const img=candidates.find(im=>{const r=im.getBoundingClientRect();
       return r.width>0 && r.height>0;}) || candidates[0];
     if(!img) return {ok:false,reason:'No image DOM element matches requested URL'};
     if(!img.complete || !img.naturalWidth || !img.naturalHeight)
       return {ok:false,reason:'Source image has not decoded'};
     const rect=img.getBoundingClientRect();
-    const docY=rect.top+window.scrollY;
-    // Place the next unseen slice just below any sticky page header.
-    await moveViewportTo(Math.max(0,docY+Math.max(0,Number(p.offsetCss)||0)-100), 130);
+    const surface=scrollSurface(img);
+    if(surface) readerRoot=img;
+    const offset=Math.max(0,Number(p.offsetCss)||0);
+    const bounds=surface ? scrollBounds(surface) : {top:0};
+    const docY=rect.top-bounds.top+position(surface);
+    // Nested reader's content starts at its own viewport, not document y=0.
+    // Start at the first pixel; subsequent tiles overlap for safe stitching.
+    const margin=surface ? (offset===0 ? 0 : Math.min(100,surface.clientHeight/5)) : 100;
+    await moveViewportTo(Math.max(0,docY+offset-margin),130,surface);
     const paintReady=await waitForPaintOrTimer();
     // Force fresh layout geometry even when Chrome has paused the animation clock.
     // A deferred paint is an observation, not grounds to skip/renumber a page.
+    if(scoped && (scopedDecodedImages(scoped,p.url).length!==1 || scopedDecodedImages(scoped,p.url)[0]!==img))
+      return {ok:false,reason:'Native reader image changed during capture'};
     const r=img.getBoundingClientRect();
-    return {ok:true,loaded:true,naturalWidth:img.naturalWidth,naturalHeight:img.naturalHeight,
+    return {ok:true,loaded:true,...(scoped?{rendered_reader_revision:'scoped-rendered-reader-v1'}:{}),naturalWidth:img.naturalWidth,naturalHeight:img.naturalHeight,
       paintReady,rect:{left:r.left,top:r.top,width:r.width,height:r.height},
-      viewportWidth:innerWidth,viewportHeight:innerHeight};
+      viewportWidth:innerWidth,viewportHeight:innerHeight,
+      ...(surface ? {captureBounds:scrollBounds(surface)} : {}),
+      scrollDiagnostics:{nested:!!surface,position:position(surface),
+        scrollHeight:surface ? surface.scrollHeight : (document.documentElement?.scrollHeight||0)}};
   }
   // Return page data directly to chrome.scripting.executeScript. This
   // survives document navigation without a persistent message receiver.
@@ -281,51 +382,53 @@
     if (message?.type === 'CAPTURE_IMAGE_TILE') return imageTile(message.payload || {});
     if (message?.type === 'CLASSIFY') return classify();
     if (message?.type === 'SNAPSHOT') return snapshot(message.payload || {});
-    if (message?.type === 'IMAGE_STATUS') return imageStatus(message.payload?.url);
+    if (message?.type === 'IMAGE_STATUS') return imageStatus(message.payload?.url,message.payload?.rendered_reader_selector);
     if (message?.type === 'RECOVER_IMAGE') return recoverImage(message.payload || {});
     if (message?.type === 'REOBSERVE_LOADED_IMAGE') return reobserveLoadedImage(message.payload?.url);
-    if (message?.type === 'SCROLL_POSITION') return {scrollY:window.scrollY};
+    if (message?.type === 'SCROLL_POSITION') return {scrollY:position(scrollSurface())};
     if (message?.type === 'RESTORE_SCROLL') {
       const pos=Number(message.payload?.scrollY);
       if (!Number.isFinite(pos) || pos < 0) return {error:'Invalid scroll restore position'};
-      window.scrollTo({top:pos,behavior:'instant'});
-      return {scrollY:window.scrollY};
+      const surface=scrollSurface();
+      setPosition(surface,pos);
+      return {scrollY:position(surface)};
     }
     if (message?.type === 'SCROLL_STATUS') {
       // Read-only. Never issue a second relative scroll after an uncertain ACK.
       const id=String(message.payload?.command_id||'');
       const entry=scrollLedger[id];
-      return entry ? {...entry,scrollY:window.scrollY,url:location.href} :
-        {command_id:id,status:'unknown',url:location.href,scrollY:window.scrollY};
+      return entry ? {...entry,scrollY:position(scrollSurface()),url:location.href} :
+        {command_id:id,status:'unknown',url:location.href,scrollY:position(scrollSurface())};
     }
     if (message?.type === 'SCROLL') {
-      const move=Math.max(450,Math.floor(innerHeight*.85));
+      const surface=scrollSurface();
+      const move=surface ? Math.max(1,Math.floor(surface.clientHeight*.65)) : Math.max(450,Math.floor(innerHeight*.85));
       const id=String(message.payload?.command_id||'');
       // Legacy callers retain their existing visible animated behavior. Only
       // generic Python archiving sends IDs and uses the non-timer transport.
       if (!id) {
-        const from=window.scrollY;
-        await moveViewportTo(from+move,210);
+        const from=position(surface);
+        await moveViewportTo(from+move,210,surface);
         return move;
       }
       if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id))
         return {error:'Invalid scroll command ID'};
       if (scrollLedger[id]) {
         const entry=scrollLedger[id];
-        return {...entry,scrollY:window.scrollY,url:location.href};
+        return {...entry,scrollY:position(scrollSurface()),url:location.href};
       }
       // Record BEFORE changing the page so any lost reply is observable.
       // Absolute instant position avoids background-tab timer throttling and
       // ensures this ID can never advance the page more than once.
-      const from=Number(window.scrollY)||0;
+      const from=position(surface);
       const target=Math.max(0,from+move);
       const entry={command_id:id,status:'issued',from,target,move,url:location.href};
       scrollLedger[id]=entry;
       scrollHistory.push(id);
       if (scrollHistory.length>128) delete scrollLedger[scrollHistory.shift()];
-      window.scrollTo({top:target,behavior:'instant'});
+      setPosition(surface,target);
       entry.status='applied';
-      entry.observed=Number(window.scrollY)||0;
+      entry.observed=position(surface);
       return {...entry,scrollY:entry.observed};
     }
     if (message?.type === 'PING') return {ok:true,url:location.href,bridgeContentProtocol:6};

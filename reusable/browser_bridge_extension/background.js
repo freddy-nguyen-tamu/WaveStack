@@ -37,6 +37,8 @@ async function directTabCommand(id, payload) {
         const reply=await chrome.scripting.executeScript({target,
           func: command => {
             if(window.__comicBridgeContentLoadedVersion !== 10 ||
+               window.__comicBridgeNestedScrollRevision !== 1 ||
+               (command.payload?.rendered_reader_selector && window.__comicBridgeScopedRenderedRevision !== 1) ||
                typeof window.__comicBridgeDirect !== 'function' ||
                ((command.type==='SCROLL' || command.type==='SCROLL_STATUS') &&
                 window.__comicBridgeScrollRevision !== 1))
@@ -522,7 +524,7 @@ async function selectedTabScreenshot(tab) {
   }
 }
 
-async function captureVisibleImage(url) {
+async function captureVisibleImage(url, readerSelector=null) {
   const key=normalizeResourceUrl(url);
   // Same-origin blob images can already be fully decoded in the selected
   // browser tab. Only accept an actual decoded DOM image and an exact origin
@@ -534,8 +536,19 @@ async function captureVisibleImage(url) {
     selectedBlob=sourceMatches(selected.url) && blobOrigin===new URL(selected.url).origin &&
       !!(await checkedIO(send(state.tabId,{type:'IMAGE_STATUS',payload:{url:key}}),'verify decoded blob')).loaded;
   }
-  if(!imagePermission(key) && !selectedBlob) throw Error('Image URL not allowed by adapter or decoded tab');
-  const prior=visualImages.get(key);
+  let scopedTabUrl=null;
+  if(readerSelector) {
+    if(typeof readerSelector!=='string' || readerSelector.length>180 || !key.startsWith('https://'))
+      throw Error('Invalid scoped rendered reader request');
+    const selected=await checkedIO(tabsGet(state.tabId),'verify scoped reader tab');
+    if(!sourceMatches(selected.url)) throw Error('Rendered image outside managed reader');
+    scopedTabUrl=selected.url;
+    const observation=await checkedIO(send(state.tabId,{type:'IMAGE_STATUS',payload:{url:key,rendered_reader_selector:readerSelector}}),'verify exact decoded native reader image');
+    if(observation?.rendered_reader_revision!=='scoped-rendered-reader-v1' || !observation.loaded || observation.count!==1)
+      throw Error('No unique decoded native reader image; refusing unapproved CDN access');
+  }
+  if(!imagePermission(key) && !selectedBlob && !scopedTabUrl) throw Error('Image URL not allowed by adapter or decoded tab');
+  const prior=scopedTabUrl ? null : visualImages.get(key);
   if(prior) return {base64:prior,via:'rendered-png'};
   if ((!chrome.tabs.captureVisibleTab && !chrome.debugger?.attach) ||
       typeof OffscreenCanvas === 'undefined' ||
@@ -549,7 +562,12 @@ async function captureVisibleImage(url) {
   // Screenshots now advance the normal tab toward the next ordered image.
   let canvas=null, ctx=null, nextCss=0, sourceWidth=0, sourceHeight=0;
   for(let tile=0;tile<100;tile++) {
-    const r=await checkedIO(send(state.tabId,{type:'CAPTURE_IMAGE_TILE',payload:{url:key,offsetCss:nextCss}}), 'position image tile');
+    if(scopedTabUrl && (await checkedIO(tabsGet(state.tabId),'verify reader tile document')).url!==scopedTabUrl)
+      throw Error('Managed reader changed during image capture');
+    const r=await checkedIO(send(state.tabId,{type:'CAPTURE_IMAGE_TILE',payload:{url:key,offsetCss:nextCss,
+      ...(scopedTabUrl?{rendered_reader_selector:readerSelector}:{})}}), 'position image tile');
+    if(scopedTabUrl && r?.rendered_reader_revision!=='scoped-rendered-reader-v1')
+      throw Error('Scoped image tile not verified; reload extension');
     if(!r?.ok || !r.loaded) throw Error('The image is not visibly decoded in the paired tab: '+String(r?.reason||key));
     if (!r.rect || !r.rect.width || !r.rect.height) throw Error('Image has no visible dimensions');
     if(!canvas) {
@@ -559,11 +577,24 @@ async function captureVisibleImage(url) {
       ctx=canvas.getContext('2d',{alpha:false});
       if(!ctx) throw Error('2D screenshot renderer unavailable');
     }
+    if(scopedTabUrl && (Math.round(r.naturalWidth)!==sourceWidth || Math.round(r.naturalHeight)!==sourceHeight))
+      throw Error('Native reader image dimensions changed during capture');
     const rect=r.rect;
     // Only capture the unobscured viewport; keep space for sticky headers.
-    const start=Math.max(nextCss,Math.max(0,90-rect.top));
-    const end=Math.min(rect.height, r.viewportHeight-12-rect.top);
-    if(end<=start+1) throw Error('Image cannot be fully captured at this viewport size');
+    const bounds=r.captureBounds;
+    const start=Math.max(nextCss,Math.max(0,(bounds ? bounds.top : 90)-rect.top));
+    const end=Math.min(rect.height, (bounds ? bounds.bottom : r.viewportHeight-12)-rect.top);
+    if((bounds || scopedTabUrl) && (start>nextCss+0.5 || rect.left<(bounds?.left??0)-0.5 ||
+        rect.left+rect.width>(bounds?.right??r.viewportWidth)+0.5))
+      throw Error('Reader image is clipped: refusing to save an incomplete rendered panel');
+    // A native image may be a single row (or column). Require actual
+    // positive coverage, not an arbitrary >1 CSS-pixel tile height.
+    // A very thin whole image must be fully visible, with no rounding gap.
+    const geometryEpsilon=1e-6;
+    if(!(end>start) || (rect.height<=1 && (start>geometryEpsilon || end<rect.height-geometryEpsilon)))
+      throw Error('Image cannot be fully captured at this viewport size; '+
+      JSON.stringify({tile,offset:nextCss,rect,viewport:[r.viewportWidth,r.viewportHeight],
+        bounds:bounds||null,scroll:r.scrollDiagnostics||null}));
     // chrome.tabs.captureVisibleTab enforces 2 screenshots/sec. The CDP
     // selected-tab fallback does not need this additional artificial delay.
     const wait=screenshotBackend==='chrome-tabs'
@@ -572,6 +603,8 @@ async function captureVisibleImage(url) {
     const dataURL=await checkedIO(selectedTabScreenshot(
       await checkedIO(tabsGet(state.tabId), 'screenshot tab lookup')), 'capture selected-tab pixels');
     lastScreenshotAt=Date.now();
+    if(scopedTabUrl && (await checkedIO(tabsGet(state.tabId),'verify captured reader document')).url!==scopedTabUrl)
+      throw Error('Managed reader changed while capturing pixels');
     const bmp=await checkedIO(createImageBitmap(
       await checkedIO((await checkedIO(fetch(dataURL), 'decode screenshot data URL')).blob(), 'read screenshot blob')),
       'decode screenshot bitmap');
@@ -584,6 +617,15 @@ async function captureVisibleImage(url) {
       const right=Math.min(r.viewportWidth,rect.left+rect.width);
       const destX=(left-rect.left)/rect.width*sourceWidth;
       const destWidth=(right-left)/rect.width*sourceWidth;
+      // CSS pixels and bitmap pixels differ with zoom/device scale. For
+      // extremely thin tiles, require at least one real screenshot pixel
+      // and enough samples for the native rows/columns being written.
+      // Never turn a clipped or collapsed larger image into a fake strip.
+      const sampleHeight=(end-start)*scaleY, sampleWidth=(right-left)*scaleX;
+      if((end-start<=1 && (sampleHeight<1-geometryEpsilon || sampleHeight<destHeight-geometryEpsilon)) ||
+         (rect.width<=1 && (left>rect.left+geometryEpsilon || right<rect.left+rect.width-geometryEpsilon ||
+           sampleWidth<1-geometryEpsilon || sampleWidth<destWidth-geometryEpsilon)))
+        throw Error('Thin image has insufficient visible bitmap pixels; use normal browser zoom or restore its native layout');
       ctx.drawImage(bmp,left*scaleX,(rect.top+start)*scaleY,
         (right-left)*scaleX,(end-start)*scaleY,
         destX,destY,destWidth,destHeight);
@@ -593,8 +635,10 @@ async function captureVisibleImage(url) {
       const bytes=new Uint8Array(await blob.arrayBuffer());
       if(!bytes.length || bytes.length>MAX_IMAGE_BYTES) throw Error('Rendered PNG exceeds per-image limit');
       const base64=bytesToBase64(bytes);
-      visualImages.set(key,base64);
-      if(visualImages.size>3) visualImages.delete(visualImages.keys().next().value);
+      if(!scopedTabUrl) {
+        visualImages.set(key,base64);
+        if(visualImages.size>3) visualImages.delete(visualImages.keys().next().value);
+      }
       return {base64,via:'rendered-png'};
     }
     nextCss=end;
@@ -906,8 +950,13 @@ async function execute(job) {
   if (action === 'probe') {
     // Open tabs predating extension installation need content-script injection.
     await waitContent(10000);
-    const first=await checkedIO(send(state.tabId,{type:'FIRST_LOADED_IMAGE',payload:{origins:browserImageOrigins(),reader_selectors:Array.isArray(payload?.reader_selectors)?payload.reader_selectors:[]}}), 'probe visible images');
+    const first=await checkedIO(send(state.tabId,{type:'FIRST_LOADED_IMAGE',payload:{origins:browserImageOrigins(),reader_selectors:Array.isArray(payload?.reader_selectors)?payload.reader_selectors:[],rendered_reader_selector:payload?.rendered_reader_selector}}), 'probe visible images');
     if(!first?.url) throw Error('No decoded CDN image on the selected page; scroll to the first chapter image and retry pairing');
+    if(payload?.rendered_reader_selector) {
+      if(first.rendered_reader_revision!=='scoped-rendered-reader-v1') throw Error('Outdated scoped reader extension; reload');
+      const result=await captureVisibleImage(first.url,payload.rendered_reader_selector);
+      return {url:first.url,status:200,base64:result.base64,via:result.via,rendered_reader_revision:'scoped-rendered-reader-v1'};
+    }
     const already=capturedImages.get(normalizeResourceUrl(first.url));
     const original=already ? {base64:already.base64,via:'captured-during-scroll'} : null;
     // For browser-created blob URLs, original bytes are intentionally not
@@ -920,7 +969,13 @@ async function execute(job) {
   if (action === 'image') {
     const u=new URL(payload.url);
     if (u.protocol !== 'https:') throw Error('Images must use HTTPS');
-    if (!imagePermission(u.href)) throw Error('Image host has no declared permission; update the site adapter');
+    if (!imagePermission(u.href)) {
+      if(!payload?.rendered_reader_selector) throw Error('Image host has no declared permission; update the site adapter');
+      // No CDN fetch, CDP response lookup, optional permission grant or cache lookup.
+      const rendered=await captureVisibleImage(u.href,payload.rendered_reader_selector);
+      return {url:u.href,status:200,headers:{'content-type':'image/png'},base64:rendered.base64,
+        via:rendered.via,rendered_reader_revision:'scoped-rendered-reader-v1'};
+    }
     // Read the actual image response the human-selected tab already received.
     // This avoids a redundant extension-origin CDN request that may return 403.
     const already=capturedImages.get(normalizeResourceUrl(u.href));
@@ -996,7 +1051,12 @@ async function execute(job) {
   }
   if(action==='image_diagnostics') {
     const key=normalizeResourceUrl(payload?.url);
-    if(!imagePermission(key)) throw Error('Image diagnostics must be limited to adapter-permitted URLs');
+    if(!imagePermission(key)) {
+      if(!payload?.rendered_reader_selector || !key.startsWith('https://'))
+        throw Error('Image diagnostics must be limited to adapter-permitted URLs');
+      const dom=await checkedIO(send(state.tabId,{type:'IMAGE_STATUS',payload:{url:key,rendered_reader_selector:payload.rendered_reader_selector}}),'scoped reader image status');
+      return {url:key,network:null,capturedOriginal:false,dom,debuggerReady:!!inspectedReady};
+    }
     let dom=null;
     try {dom=await checkedIO(send(state.tabId,{type:'IMAGE_STATUS',payload:{url:key}}),
       'read-only source image status',3500);} catch {}

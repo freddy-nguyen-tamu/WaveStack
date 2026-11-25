@@ -97,10 +97,14 @@ class BrowserResponse:
 class LocalBridge:
     def __init__(self, source_url, *, reader_selectors=(), image_attributes=(),
                  image_hosts=(), port=BRIDGE_PORT, initial_chapter_url=None,
-                 require_managed_tab=False):
+                 require_managed_tab=False, rendered_image_selector=None, rendered_image_validator=None):
         self.source = urlsplit(source_url)
         self.allowed_site = self.source.hostname.lower()
         self.allowed_cdn = {h.lower() for h in image_hosts}
+        # Optional adapter opt-in; no new host permissions or HTTP access.
+        self.rendered_image_selector = (rendered_image_selector if isinstance(rendered_image_selector, str)
+                                        and 0 < len(rendered_image_selector) <= 180 else None)
+        self.rendered_image_validator = rendered_image_validator
         self.initial_chapter_url = self.validate_chapter(initial_chapter_url or source_url)
         self.require_managed_tab = bool(require_managed_tab)
         self.tab_id = None
@@ -145,8 +149,24 @@ class LocalBridge:
     def validate_image(self, url):
         parsed = urlsplit(url)
         if parsed.scheme != 'https' or parsed.hostname not in ({self.allowed_site} | self.allowed_cdn):
-            raise BrowserBridgeError('Image host not authorized by the site adapter: ' + str(parsed.hostname))
+            if not self.rendered_only_selector(url):
+                raise BrowserBridgeError('Image host not authorized by the site adapter: ' + str(parsed.hostname))
         return url
+
+    def rendered_only_selector(self, url):
+        """Unknown CDN URLs may ONLY use the scoped decoded-reader pixel path."""
+        try:
+            parsed = urlsplit(url)
+            port = parsed.port
+        except (ValueError, TypeError):
+            return None
+        if parsed.hostname in ({self.allowed_site} | self.allowed_cdn):
+            return None
+        if (parsed.scheme == 'https' and not parsed.username and not parsed.password
+                and port is None and self.rendered_image_selector
+                and callable(self.rendered_image_validator) and self.rendered_image_validator(url)):
+            return self.rendered_image_selector
+        return None
 
     def start(self):
         bridge = self
@@ -638,7 +658,12 @@ class BridgePage:
         No DevTools window, page navigation, direct CDN request or credential
         read is required. Source allowlists still apply in the bridge.
         """
-        return self.context.bridge.rpc('image_diagnostics', {'url': str(url)}, timeout=8)
+        bridge = self.context.bridge
+        payload = {'url': str(url)}
+        selector = getattr(bridge, 'rendered_only_selector', lambda _:None)(url)
+        if selector:
+            payload['rendered_reader_selector'] = selector
+        return bridge.rpc('image_diagnostics', payload, timeout=8)
 
     def wait_for_timeout(self, ms):
         time.sleep(max(0, ms) / 1000)
@@ -663,7 +688,14 @@ class BridgeRequest:
 
     def get(self, url, headers=None, timeout=45000):
         self.context.bridge.validate_image(url)
-        result = self.context.bridge.rpc('image', {'url': url})
+        selector = getattr(self.context.bridge, 'rendered_only_selector', lambda _:None)(url)
+        payload = {'url': url}
+        if selector:
+            payload['rendered_reader_selector'] = selector
+        result = self.context.bridge.rpc('image', payload)
+        if selector and (result.get('via') != 'rendered-png' or result.get('url') != url or
+                         result.get('rendered_reader_revision') != 'scoped-rendered-reader-v1'):
+            raise BrowserBridgeError('Scoped rendered-reader transfer failed or extension is outdated; reload Comic Bridge. No unapproved CDN fetch attempted.')
         # A 403 from an image CDN is NOT proof that the chapter needs another
         # Cloudflare challenge. The document is already accessible. Repeating
         # the human chapter check cannot grant access to an extension-origin
@@ -802,6 +834,9 @@ def _quiet_reader_image_wait(reason):
 def _probe_with_one_quiet_image_grace(bridge, reader_selectors):
     """Keep the existing proof, retrying only the empty-decoded-image error."""
     payload = {'reader_selectors': list(reader_selectors)}
+    selector = getattr(bridge, 'rendered_image_selector', None)
+    if isinstance(selector, str) and selector:
+        payload['rendered_reader_selector'] = selector
     try:
         return bridge.rpc('probe', payload, timeout=55)
     except BrowserBridgeError as error:
@@ -830,7 +865,9 @@ def source_extension_context(data_dir: Path, source_url: str, *,
     bridge = LocalBridge(source_url, reader_selectors=reader_selectors,
                          image_attributes=adapter.IMAGE_ATTRIBUTES,
                          image_hosts=getattr(adapter, 'BRIDGE_IMAGE_HOSTS', ()), port=port,
-                         initial_chapter_url=initial_chapter_url, require_managed_tab=True)
+                         initial_chapter_url=initial_chapter_url, require_managed_tab=True,
+                         rendered_image_selector=getattr(adapter, 'BRIDGE_RENDERED_IMAGE_SELECTOR', None),
+                         rendered_image_validator=getattr(adapter, 'accept_rendered_image_url', None))
     bridge.require_startup_refresh = True
     bridge.start()
     # The loopback listener MUST be ready before opening Chrome: a cold-started
@@ -865,6 +902,10 @@ def source_extension_context(data_dir: Path, source_url: str, *,
                     'under chrome://extensions and Load unpacked from the project '
                     'browser_bridge/chrome folder. Leave the comic tab open.') from exc
             raise
+        if bridge.rendered_image_selector:
+            if result.get('rendered_reader_revision') != 'scoped-rendered-reader-v1':
+                raise BrowserBridgeError('OUTDATED COMIC BRIDGE EXTENSION: reload for scoped rendered-reader support before crawling')
+            bridge.validate_image(str(result.get('url') or ''))
         raw = base64.b64decode(result.get('base64',''), validate=True)
         if not raw or len(raw) > 22*1024*1024:
             raise BrowserBridgeError('Browser proof failed: no valid image bytes received')
