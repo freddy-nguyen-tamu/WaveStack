@@ -680,6 +680,7 @@ article li small,
 }
 .player-card__progress {
   width: 100%;
+  margin: 0;
   padding: 0;
   appearance: none;
   border-radius: var(--radius-pill);
@@ -3335,10 +3336,23 @@ button {
   background: var(--frontier-pill);
   text-transform: none;
 }
-button:hover:not(:disabled):not([data-ws-pointer-activated]):not(.song-tile__open),
-button:focus-visible:not(.song-tile__open) {
+button:hover:not(:disabled):not([data-ws-pointer-activated]):not(.song-tile__open):not(.player-card__artwork-button),
+button:focus-visible:not(.song-tile__open):not(.player-card__artwork-button) {
   background: var(--color-accent-strong);
   color: #ffffff;
+}
+/* The large player artwork is an image action, not a filled UI button. */
+.player-card__artwork-button {
+  border: 0;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  color: var(--color-box-fg);
+  text-transform: none;
+}
+.player-card__artwork-button:hover:not(:disabled) .song-artwork,
+.player-card__artwork-button:focus-visible .song-artwork {
+  filter: grayscale(1);
 }
 input,
 select,
@@ -3382,7 +3396,7 @@ html[data-theme="dark"] textarea {
   height: 2rem;
   place-items: center;
   margin-right: 0.48rem;
-  background: url("/icon-192.png") center / contain no-repeat;
+  background: url("/brand-logo.png") center / contain no-repeat;
   content: "";
   font-size: 0.85rem;
   font-weight: 700;
@@ -4054,18 +4068,6 @@ article > label:first-of-type input {
     .player-card__artwork-button {
     display: grid;
     min-height: 0;
-    border: 0;
-    padding: 0;
-    overflow: hidden;
-    background: transparent;
-    color: var(--color-box-fg);
-    text-transform: none;
-  }
-    .player-card__artwork-button:hover,
-  .player-card__artwork-button:focus-visible {
-    background: transparent;
-    color: var(--color-box-fg);
-    transform: translateY(-1px);
   }
     .player-card__artwork {
     display: grid;
@@ -5543,7 +5545,7 @@ button:not(:disabled):active {
     var(--color-box-range-track-strong) 100%
   );
 }
-.player-card__progress::-webkit-slider-thumb,
+input.player-card__progress[type="range"]::-webkit-slider-thumb,
 .mini-player__progress input[type="range"]::-webkit-slider-thumb {
   width: var(--seek-thumb-size);
   height: var(--seek-thumb-size);
@@ -5566,7 +5568,7 @@ button:not(:disabled):active {
   border-radius: 999px;
   background: var(--color-accent-on-dark);
 }
-.player-card__progress::-moz-range-thumb,
+input.player-card__progress[type="range"]::-moz-range-thumb,
 .mini-player__progress input[type="range"]::-moz-range-thumb {
   width: var(--seek-thumb-size);
   height: var(--seek-thumb-size);
