@@ -215,6 +215,15 @@ def publish(engine, db, *, scope):
         verify_kwargs = {'verify_slugs': verify_slugs}
         if shared_frontend_changed:
             verify_kwargs = {'verify_slugs': None, 'verify_image_slugs': {current_slug}}
+        # Shared reader JavaScript is generated separately for every comic.
+        # A site-only frontend change must verify those static routes too,
+        # without requesting old image samples or reconciling archives.
+        site_frontend_changed = (scope == 'site' and (
+            payload.get('frontend_hash') != live.get('frontend_hash') or
+            (state.get('verified_frontend_hash') and
+             state['verified_frontend_hash'] != payload.get('frontend_hash'))))
+        if site_frontend_changed:
+            verify_kwargs = {'verify_slugs': None, 'verify_image_slugs': set()}
         # Shared-route changes may live ONLY in Worker JS and leave the static
         # registry hash unchanged, so a site-only request must always deploy.
         if scope == 'comic' and reader.canonical(live) == reader.canonical(payload):
@@ -242,6 +251,8 @@ def publish(engine, db, *, scope):
         registry['worker_url']=deployed
         if scope == 'comic':
             registry['verified_frontend_hash'] = frontend_hash
+        elif site_frontend_changed:
+            registry['verified_frontend_hash'] = payload['frontend_hash']
         elif (state.get('verified_frontend_hash') and
               state['verified_frontend_hash'] == payload.get('frontend_hash')):
             # Site-only verification does not verify every comic route; retain
@@ -254,6 +265,6 @@ def publish(engine, db, *, scope):
             _checkpoint_current(db,engine,registry,current_slug)
             _target_readmes(engine,owner,token,registry,current_slug)
         print('open-reader: '+scope+' update verified; '
-              + ('all frontend routes checked; ' if shared_frontend_changed else '')
+              + ('all frontend routes checked; ' if shared_frontend_changed or site_frontend_changed else '')
               + 'old comic images not resampled.',flush=True)
         return deployed

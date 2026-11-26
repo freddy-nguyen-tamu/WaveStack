@@ -9,7 +9,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://comix.to/title/65gg-orange-marmalade/*"
+        "https://comix.to/title/jlvrv-annarasumanara/*"
       ],
       "js": [
         "content.js"

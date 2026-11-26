@@ -1083,6 +1083,28 @@ def github_login(db, force=False):
     return actual, token
 
 
+def _github_read_with_retry(request, *args, **kwargs):
+    """Bounded retries for read-only GitHub requests; never replay a write."""
+    for attempt in range(3):
+        try:
+            response = request(*args, **kwargs)
+        except requests.exceptions.SSLError:
+            # Certificate errors are not transient connection failures.
+            raise
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+            if attempt == 2:
+                raise RuntimeError('GitHub read unavailable after 3 attempts; existing checkpoints retained. Retry the normal run later.') from exc
+            reason = type(exc).__name__
+        else:
+            if response.status_code not in (408, 500, 502, 503, 504) or attempt == 2:
+                return response
+            reason = 'HTTP ' + str(response.status_code)
+        delay = 2 ** (attempt + 1)
+        event('GITHUB_READ_RETRY', attempt=attempt + 1, next_attempt=attempt + 2,
+              wait_seconds=delay, reason=reason)
+        time.sleep(delay)
+
+
 def credential_for_selected(db):
     _inherit_shared_github_auth(db)
     owner = get_option(db, "github_owner")
@@ -1103,9 +1125,13 @@ def credential_for_selected(db):
     token = values.get("password")
     if not token:
         raise RuntimeError("Selected account credentials unavailable")
-    r = requests.get(GITHUB_API + "/user", headers={"Authorization": f"Bearer {token}",
+    r = _github_read_with_retry(requests.get, GITHUB_API + "/user", headers={"Authorization": f"Bearer {token}",
                      "Accept": "application/vnd.github+json"}, timeout=20)
-    if r.status_code != 200 or r.json().get("login", "").lower() != owner.lower():
+    if r.status_code != 200:
+        if r.status_code in (401, 403):
+            raise RuntimeError(f"GitHub identity verification denied (HTTP {r.status_code}); refusing push. Check credentials or rate limits.")
+        raise RuntimeError(f"GitHub identity verification unavailable (HTTP {r.status_code}); checkpoints retained; retry normal run later.")
+    if r.json().get("login", "").lower() != owner.lower():
         raise RuntimeError("GitHub login identity mismatch. Run --github-login again; refusing push.")
     return owner, token
 
@@ -1115,7 +1141,10 @@ def github_http(method, url, token, **kwargs):
                "X-GitHub-Api-Version": "2022-11-28"}
     headers.update(kwargs.pop("headers", {}))
     for attempt in range(4):
-        response = requests.request(method, url, headers=headers, timeout=40, **kwargs)
+        if method.upper() in {"GET", "HEAD"}:
+            response = _github_read_with_retry(requests.request, method, url, headers=headers, timeout=40, **kwargs)
+        else:
+            response = requests.request(method, url, headers=headers, timeout=40, **kwargs)
         remaining = response.headers.get("X-RateLimit-Remaining")
         reset_raw = response.headers.get("X-RateLimit-Reset")
         event("GITHUB_API_QUOTA", method=method, status=response.status_code,

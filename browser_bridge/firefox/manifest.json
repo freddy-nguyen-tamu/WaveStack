@@ -14,14 +14,9 @@
     "webRequest",
     "http://127.0.0.1:18765/*",
     "https://comix.to/*",
-    "https://8pl.olivawrites.site/*",
-    "https://8pl.lifebetweenlines.site/*",
-    "https://8pl.quietreflectionsblog.site/*",
-    "https://8pl.ericlog.site/*",
-    "https://8pl.mycreativespace.site/*",
-    "https://8pl.pureandsimpleshop.site/*",
-    "https://8pl.homeandheartshop.site/*",
-    "https://8pl.notesbykevin.site/*"
+    "https://447.quietcreativemind.site/*",
+    "https://447.notesbyamber.site/*",
+    "https://447.simplelivingshop.site/*"
   ],
   "background": {
     "scripts": [
@@ -35,7 +30,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://comix.to/title/65gg-orange-marmalade/*"
+        "https://comix.to/title/jlvrv-annarasumanara/*"
       ],
       "js": [
         "content.js"

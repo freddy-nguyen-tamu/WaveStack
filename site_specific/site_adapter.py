@@ -1,4 +1,4 @@
-"""Orange Marmalade, Comix native reader. Only source-specific code lives here.
+"""Comix native reader (Orange Marmalade / Annarasumanara). Only source-specific code lives here.
 
 Grounded in 2026-11-25 captured chapter-0 DOM and runtime. The capture contains native chapter navigation metadata, but not the entire
 catalog. Discover from ordinary native HTML if available, or follow the site's
@@ -16,20 +16,36 @@ from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 from bs4 import BeautifulSoup
 
+import os
+
+# The environment selects a comic; default is the requested next comic.
+# Each source retains its own existing state directory, URL scope and identity.
+_choice = os.environ.get('COMIC_ARCHIVER_COMIX', 'annarasumanara').strip().lower()
+if _choice not in ('orange-marmalade', 'annarasumanara'):
+    raise RuntimeError('COMIC_ARCHIVER_COMIX must be orange-marmalade or annarasumanara')
 SOURCE_BROWSER_TRANSPORT = 'extension'
-SOURCE_NAME = 'comix-orange-marmalade'
+SOURCE_NAME = 'comix-' + _choice
 STATE_STORAGE_MODE = 'scoped'
-TITLE_ADAPTER_VERSION = 'comix-orange-marmalade-native-20261125-v6'
-SERIES_SLUG_HINT = 'orange-marmalade'
-DEFAULT_START_URL = 'https://comix.to/title/65gg-orange-marmalade/6312339-chapter-0'
+TITLE_ADAPTER_VERSION = 'comix-native-titles-20261125-v3'
+SERIES_SLUG_HINT = _choice
+_SITE = 'https://comix.to'
+if _choice == 'orange-marmalade':
+    _COMIC_TITLE, _MANGA_HID = 'Orange Marmalade', '65gg'
+    _LAST, _START_ID, _NEXT_ID, _LAST_ID = 120, 6312339, 6312417, 7613251
+    BRIDGE_IMAGE_HOSTS = ('8pl.olivawrites.site', '8pl.lifebetweenlines.site',
+                          '8pl.quietreflectionsblog.site', '8pl.ericlog.site',
+                          '8pl.mycreativespace.site', '8pl.pureandsimpleshop.site',
+                          '8pl.homeandheartshop.site', '8pl.notesbykevin.site')
+else:
+    _COMIC_TITLE, _MANGA_HID = 'Annarasumanara', 'jlvrv'
+    _LAST, _START_ID, _NEXT_ID, _LAST_ID = 27, 6314081, 6314155, 11028807
+    BRIDGE_IMAGE_HOSTS = ('447.quietcreativemind.site', '447.notesbyamber.site',
+                          '447.simplelivingshop.site')
+_PATH = '/title/' + _MANGA_HID + '-' + _choice + '/'
+DEFAULT_START_URL = _SITE + _PATH + f'{_START_ID}-chapter-0'
 ALLOWED_HOSTS = ('comix.to',)
-BRIDGE_IMAGE_HOSTS = ('8pl.olivawrites.site', '8pl.lifebetweenlines.site',
-                      '8pl.quietreflectionsblog.site', '8pl.ericlog.site',
-                      '8pl.mycreativespace.site', '8pl.pureandsimpleshop.site',
-                      '8pl.homeandheartshop.site', '8pl.notesbykevin.site')
-# The installed bridge sourceMatches() accepts a single trailing wildcard.
-# Python chapter_identity still checks the exact native chapter route.
-EXTENSION_MATCHES = ('https://comix.to/title/65gg-orange-marmalade/*',)
+EXTENSION_MATCHES = (_SITE + _PATH + '*',)
+_DETAIL_KEY = json.dumps(['manga','detail',_MANGA_HID], separators=(',', ':'))
 TITLE_SELECTORS = ('meta[property="og:title"]', 'title')
 READER_SELECTORS = ('.rpage-main__inner',)
 # CDN names rotate. Unlisted URLs are eligible only for already-decoded
@@ -44,13 +60,10 @@ NEXT_NAV_SELECTORS = ()
 PREV_NAV_SELECTORS = ()
 CHAPTER_MENU_SELECTORS = ()
 
-_SITE = 'https://comix.to'
-_PATH = '/title/65gg-orange-marmalade/'
-_LAST = 120
-_PREFIX = 'comix-orange-marmalade-chapter-'
-_NEXT = _SITE + _PATH + '6312417-chapter-1'
-_LAST_URL = _SITE + _PATH + '7613251-chapter-120'
-_OBSERVED_119_URL = _SITE + _PATH + '10825677-chapter-119'
+_PREFIX = SOURCE_NAME + '-chapter-'
+_NEXT = _SITE + _PATH + f'{_NEXT_ID}-chapter-1'
+_LAST_URL = _SITE + _PATH + f'{_LAST_ID}-chapter-{_LAST}'
+_OBSERVED_119_URL = _SITE + _PATH + '10825677-chapter-119' if _choice == 'orange-marmalade' else None
 _SERIES_URL = _SITE + _PATH.rstrip('/')
 _DISCOVERED_CATALOG = ()
 # Native URLs imported from the user's normal browser UI, not a guessed range.
@@ -94,13 +107,13 @@ def _json_script(soup, name):
 def title_from_html(soup):
     data = _json_script(soup, 'initial-data')
     if data:
-        detail = data.get('queries', {}).get('["manga","detail","65gg"]', {})
-        if detail.get('hid') != '65gg' or detail.get('title') != 'Orange Marmalade':
-            raise RuntimeError('Native metadata does not identify Orange Marmalade')
+        detail = data.get('queries', {}).get(_DETAIL_KEY, {})
+        if detail.get('hid') != _MANGA_HID or detail.get('title') != _COMIC_TITLE:
+            raise RuntimeError('Native metadata does not identify '+_COMIC_TITLE)
         return detail['title']
     if not soup.title and not soup.select_one('meta[property="og:title"]'):
         return None
-    raise RuntimeError('Orange Marmalade native series identity unavailable; check the current reader page')
+    raise RuntimeError(_COMIC_TITLE+' native series identity unavailable; check the current reader page')
 
 
 def chapter_title_from_anchor(anchor, fallback):
@@ -111,13 +124,17 @@ def chapter_title_from_html(soup, fallback):
     # Never use the chapter dropdown's first label. Bind title to actual chapter.
     sync = _json_script(soup, 'syncData')
     if sync:
-        if sync.get('manga_id') != '65gg' or sync.get('name') != 'Orange Marmalade':
+        if sync.get('manga_id') != _MANGA_HID or sync.get('name') != _COMIC_TITLE:
             raise RuntimeError('Current reader belongs to a different comic')
-        expected = re.fullmatch(r'Chapter ([0-9]+(?:\.[0-9]+)?)', str(fallback))
+        expected = re.fullmatch(r'Chapter ([0-9]+(?:\.[0-9]+)?)(?: — .+)?', str(fallback))
         if expected is None or Decimal(str(sync.get('number'))) != Decimal(expected.group(1)):
             raise RuntimeError('Current reader chapter does not match saved native catalog')
+    if sync:
+        number=str(sync['number'])
+        group=_reader_group(soup)
+        _remember_reader_group(number,group)
+        return _cached_title(number,group) or 'Chapter '+number
     return fallback
-
 
 def _validate_catalog(rows):
     by_number = {}
@@ -145,8 +162,8 @@ def _native_links(raw, page_url):
     """Extract actual URLs from native anchors and plain JSON metadata only."""
     soup = BeautifulSoup(raw, 'html.parser')
     data = _json_script(soup, 'initial-data')
-    detail = data.get('queries', {}).get('["manga","detail","65gg"]', {})
-    if detail.get('hid') != '65gg' or detail.get('title') != 'Orange Marmalade':
+    detail = data.get('queries', {}).get(_DETAIL_KEY, {})
+    if detail.get('hid') != _MANGA_HID or detail.get('title') != _COMIC_TITLE:
         return []
     values = [a.get('href') for a in soup.select('a[href]')]
     def walk(value):
@@ -156,12 +173,12 @@ def _native_links(raw, page_url):
         elif isinstance(value, list):
             for item in value:
                 yield from walk(item)
-        elif isinstance(value, str) and ('/title/65gg-orange-marmalade/' in value):
+        elif isinstance(value, str) and (_PATH in value):
             yield value
     # The firstChapterUrl metadata points to a different edition than the
     # user's actual starting reader. Do not mix editions silently.
     queries = {k:v for k,v in data.get('queries', {}).items()
-               if k != '["manga","detail","65gg"]'}
+               if k != _DETAIL_KEY}
     values.extend(walk(queries))
     found = set()
     for value in values:
@@ -178,11 +195,14 @@ def _native_links(raw, page_url):
 
 def _native_next(raw, url):
     soup = BeautifulSoup(raw, 'html.parser')
-    if title_from_html(soup) != 'Orange Marmalade':
+    if title_from_html(soup) != _COMIC_TITLE:
         raise RuntimeError('Native series identity unavailable during chapter discovery')
+    detail = _json_script(soup, 'initial-data').get('queries', {}).get(_DETAIL_KEY, {})
+    if detail.get('latestChapter') is not None and detail['latestChapter'] != _LAST:
+        raise RuntimeError(f'Native available chapter range changed: expected {_LAST}, got {detail["latestChapter"]}')
     meta = _json_script(soup, 'syncData')
     n = Decimal(_chapter_number(url))
-    if (meta.get('manga_id') != '65gg' or meta.get('name') != 'Orange Marmalade'
+    if (meta.get('manga_id') != _MANGA_HID or meta.get('name') != _COMIC_TITLE
             or not re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', str(meta.get('number')))
             or Decimal(str(meta.get('number'))) != n):
         raise RuntimeError('Native next-chapter metadata unavailable for '+url)
@@ -194,14 +214,13 @@ def _native_next(raw, url):
         # but its own series detail explicitly publishes the final chapter URL.
         # Only bridge a one-chapter gap; never jump over missing chapters.
         detail = _json_script(soup, 'initial-data').get('queries', {}).get(
-            '["manga","detail","65gg"]', {})
-        if (n == _LAST - 1 and detail.get('finalChapter') == _LAST
-                and detail.get('latestChapter') == _LAST):
+            _DETAIL_KEY, {})
+        if n == _LAST - 1 and detail.get('latestChapter') == _LAST:
             candidate = urljoin(url, str(detail.get('latestChapterUrl') or ''))
             if candidate == _LAST_URL and Decimal(_chapter_number(candidate)) == _LAST:
-                print('COMIX_NATIVE_FINAL_LINK: chapter 119 has no Next; using series latestChapterUrl for 120', flush=True)
+                print(f'COMIX_NATIVE_FINAL_LINK: chapter {n} has no Next; using series latestChapterUrl for {_LAST}', flush=True)
                 return candidate
-        raise RuntimeError('Native navigation ended before chapter 120; incomplete catalog refused')
+        raise RuntimeError(f'Native navigation ended before chapter {_LAST}; incomplete catalog refused')
     nxt = urljoin(url, str(nxt))
     m = Decimal(_chapter_number(nxt))
     if not n < m <= _LAST:
@@ -229,7 +248,7 @@ def _discover_catalog(raw_html, page_url, fetch):
     # next_chapter_url metadata where available. No guessed numeric route IDs.
     if page_url != DEFAULT_START_URL:
         raise RuntimeError('Full native discovery must start at the selected chapter 0 edition')
-    if title_from_html(BeautifulSoup(raw_html, 'html.parser')) != 'Orange Marmalade':
+    if title_from_html(BeautifulSoup(raw_html, 'html.parser')) != _COMIC_TITLE:
         raise RuntimeError('Live source series identity not established')
     if _native_next(raw_html, page_url) != _NEXT:
         raise RuntimeError('Selected chapter edition no longer matches the supplied native navigation')
@@ -250,7 +269,7 @@ def _discover_catalog(raw_html, page_url, fetch):
             break
         if nxt in rows or len(rows) >= 1000:
             raise RuntimeError('Native navigation loop or chapter safety limit reached')
-        print('COMIX_NATIVE_DISCOVERY: '+_chapter_number(nxt)+' / 120', flush=True)
+        print('COMIX_NATIVE_DISCOVERY: '+_chapter_number(nxt)+f' / {_LAST}', flush=True)
         raw = fetch(nxt)
         rows.append(nxt)
         url = nxt
@@ -274,7 +293,7 @@ def custom_chapters(raw_html, page_url, chapter_class):
     if page_url not in rows:
         raise RuntimeError('Current reader edition not present in native catalog')
     print('COMIX_NATIVE_CATALOG_VERIFIED entries='+str(len(rows)), flush=True)
-    return [chapter_class(chapter_identity(None,u,''), 'Chapter '+_chapter_number(u), u) for u in rows]
+    return [chapter_class(chapter_identity(None,u,''), _cached_title(_chapter_number(u)) or 'Chapter '+_chapter_number(u), u) for u in rows]
 
 
 def _catalog_checkpoint():
@@ -291,7 +310,7 @@ def _validate_prefix(rows):
         raise ValueError('Catalog prefix must be consecutive and unique')
     if len(rows) > 1 and rows[1] != _NEXT:
         raise ValueError('Catalog prefix does not match captured first edition')
-    if len(rows) > _LAST and rows[_LAST] != _LAST_URL:
+    if _choice == 'orange-marmalade' and len(rows) > _LAST and rows[_LAST] != _LAST_URL:
         raise ValueError('Catalog prefix does not match captured final URL')
     return rows
 
@@ -329,16 +348,16 @@ def _read_live_chapter(page, url, visit):
         raw = page.content()
         soup = BeautifulSoup(raw, 'html.parser')
         meta = _json_script(soup, 'syncData')
-        if (page.url == url and meta.get('manga_id') == '65gg' and
+        if (page.url == url and meta.get('manga_id') == _MANGA_HID and
                 str(meta.get('number')) == _chapter_number(url)):
-            if title_from_html(soup) != 'Orange Marmalade':
+            if title_from_html(soup) != _COMIC_TITLE:
                 raise RuntimeError('Native reader series identity mismatch')
             read = _json_script(soup, 'initial-data').get('read', {})
             if read:
                 expected_id = int(urlsplit(url).path.rsplit('/',1)[1].split('-chapter-')[0])
-                if read.get('chapterId') != expected_id or read.get('mangaHid') != '65gg':
+                if read.get('chapterId') != expected_id or read.get('mangaHid') != _MANGA_HID:
                     raise RuntimeError('Native reader edition identity mismatch: '+url)
-            if url == _LAST_URL:
+            if Decimal(_chapter_number(url)) == _LAST:
                 # A metadata link alone is not proof that the final chapter loads.
                 _declared_slots(soup)
             return raw
@@ -378,7 +397,7 @@ def custom_browser_chapters(context, seed_url, seed_html, chapter_class, visit):
                         break
                     if nxt in rows or Decimal(_chapter_number(nxt)) != len(rows):
                         raise RuntimeError('Native navigation is not consecutive; refusing incomplete catalog')
-                    print('COMIX_BROWSER_CATALOG: '+_chapter_number(nxt)+' / 120', flush=True)
+                    print('COMIX_BROWSER_CATALOG: '+_chapter_number(nxt)+f' / {_LAST}', flush=True)
                     raw = _read_live_chapter(page, nxt, visit)
                     rows.append(nxt)
                     if persistent:
@@ -389,7 +408,7 @@ def custom_browser_chapters(context, seed_url, seed_html, chapter_class, visit):
             rows = _validate_catalog(rows)
     _DISCOVERED_CATALOG = rows
     print('COMIX_NATIVE_CATALOG_VERIFIED entries='+str(len(rows)), flush=True)
-    return [chapter_class(chapter_identity(None,u,''), 'Chapter '+_chapter_number(u), u) for u in rows]
+    return [chapter_class(chapter_identity(None,u,''), _cached_title(_chapter_number(u)) or 'Chapter '+_chapter_number(u), u) for u in rows]
 
 
 def _history_prefix(history_path):
@@ -432,6 +451,8 @@ def _history_prefix(history_path):
 
 
 def _recover_catalog_history():
+    if _choice != 'orange-marmalade':
+        raise RuntimeError('History recovery is only configured for the earlier Orange Marmalade run')
     import os
     import sqlite3
     base = Path(os.environ.get('LOCALAPPDATA', ''))
@@ -477,23 +498,297 @@ def title_catalog_url(saved_url):
     return _SERIES_URL
 
 
+
+# Native chapter menu metadata. One paginated UI scan, never a panel crawl.
+_TITLE_MENU = '.rpage-modal--chaplist'
+
+def _title_cache_path():
+    return _catalog_checkpoint().with_name('native_chapter_titles.json')
+
+
+def _menu_rows(soup):
+    menu = soup.select_one(_TITLE_MENU)
+    if menu is None:
+        return []
+    rows = []
+    for button in menu.select('.rpage-chaplist__item'):
+        node = button.select_one('.rpage-chaplist__num')
+        label = ' '.join(node.get_text(' ', strip=True).split()) if node else ''
+        match = re.fullmatch(r'(?:ch(?:apter)?\.?\s*)?([0-9]+(?:\.[0-9]+)?)', label, re.I)
+        if not match:
+            # A native menu may contain specials or nonnumeric rows. These
+            # are not evidence for a numbered archived chapter. Keep scanning;
+            # the complete numbered coverage check below remains mandatory.
+            continue
+        n = format(Decimal(match.group(1)).normalize(), 'f')
+        group = button.select_one('.rpage-chaplist__group')
+        title = button.select_one('.rpage-chaplist__title')
+        rows.append((n, group.get_text(' ', strip=True) if group else '',
+                     ' '.join(title.get_text(' ', strip=True).split()) if title else ''))
+    return rows
+
+
+def _reader_group(soup):
+    n = soup.select_one('.rpage-chap-ending__meta strong')
+    return n.get_text(' ', strip=True) if n else ''
+
+
+def _group_title(rows, number, group):
+    # Never borrow a title from a different translation edition, and never
+    # select arbitrarily between conflicting entries of the same group.
+    if not group:
+        return None
+    choices = {t for n,g,t in rows if n==number and g==group}
+    if len(choices)==1:
+        t = next(iter(choices))
+        if t and len(t)<=210 and not any(ord(c)<32 for c in t):
+            return 'Chapter '+number+' — '+t
+    return None
+
+
+def _load_title_cache():
+    path = _title_cache_path()
+    if not path.exists():
+        return None
+    obj = json.loads(path.read_text(encoding='utf-8'))
+    if obj.get('schema')!=1 or obj.get('source')!=SOURCE_NAME or obj.get('seed')!=DEFAULT_START_URL:
+        raise RuntimeError('Native title cache belongs to another comic')
+    rows = obj.get('rows')
+    if not isinstance(rows,list) or any(not isinstance(r,list) or len(r)!=3 or
+            not all(isinstance(x,str) for x in r) for r in rows):
+        raise RuntimeError('Invalid native title cache rows')
+    if not set(str(i) for i in range(_LAST+1)).issubset({r[0] for r in rows}):
+        raise RuntimeError('Native title cache does not cover the available chapter range')
+    if not isinstance(obj.get('group'),str) or not obj['group'] or not isinstance(obj.get('last_group'),str):
+        raise RuntimeError('Native title cache has no verified translation edition')
+    return obj
+
+
+_READER_GROUPS = None
+
+
+def _read_observed_groups():
+    global _READER_GROUPS
+    if _READER_GROUPS is None:
+        path=_title_cache_path().with_name('native_reader_groups.json')
+        _READER_GROUPS=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+        if not isinstance(_READER_GROUPS,dict) or not all(isinstance(k,str) and isinstance(v,str) for k,v in _READER_GROUPS.items()):
+            raise RuntimeError('Invalid observed translation group cache')
+    return _READER_GROUPS
+
+
+def _remember_reader_group(number, group):
+    # No writes without a completed menu capture (including offline tests).
+    if not _title_cache_path().exists(): return
+    groups=_read_observed_groups()
+    if groups.get(number)==group: return
+    groups[number]=group
+    path=_title_cache_path().with_name('native_reader_groups.json')
+    tmp=path.with_suffix('.tmp'); tmp.write_text(json.dumps(groups,ensure_ascii=False),encoding='utf-8'); tmp.replace(path)
+
+
+def _cached_title(number, group=None):
+    cache = _load_title_cache()
+    if not cache:
+        return None
+    if group is None:
+        group = _read_observed_groups().get(number, cache['last_group'] if number==str(_LAST) else cache['group'])
+    return _group_title(cache['rows'],number,group)
+
+
+def _menu_page_controls(menu, number):
+    """Native numeric buttons are authoritative; arrows may be omitted.
+
+    Return a selector/text pair for the immediately adjacent page, or None
+    only when no later page is advertised and no enabled Next exists.
+    Never jump over a page to finish a title scan.
+    """
+    def enabled(button):
+        return not button.has_attr('disabled') and button.get('aria-disabled') != 'true'
+    buttons = menu.select('nav[aria-label="Pagination"] button.npager__num')
+    later = []
+    for button in buttons:
+        label = button.get_text(strip=True)
+        if label.isdigit() and int(label) > number:
+            later.append((int(label), button))
+    adjacent = [button for n, button in later if n == number+1 and enabled(button)]
+    if len(adjacent) > 1:
+        raise RuntimeError('Native chapter menu contains duplicate next numbered buttons')
+    if adjacent:
+        return _TITLE_MENU+' nav[aria-label="Pagination"] button.npager__num', str(number+1)
+    arrow = menu.select_one('nav[aria-label="Pagination"] button[aria-label="Next page"]')
+    if arrow and enabled(arrow):
+        return _TITLE_MENU+' nav[aria-label="Pagination"] button[aria-label="Next page"]', None
+    if later:
+        raise RuntimeError('Native title menu has later pages but no enabled adjacent control: '+str(number))
+    return None
+
+
+def _menu_row_signature(menu):
+    # Include special rows as well as parsed chapter numbers. A page label
+    # can change before asynchronous chapter rows have actually been replaced.
+    return tuple(' '.join(b.get_text(' ', strip=True).split()) for b in menu.select('.rpage-chaplist__item'))
+
+
+def _capture_native_title_menu(page):
+    import time
+    seed = page.url
+    raw = page.content()
+    soup = BeautifulSoup(raw,'html.parser')
+    if page.url!=DEFAULT_START_URL or title_from_html(soup) != _COMIC_TITLE:
+        raise RuntimeError('Title collection must start at the selected chapter-zero reader')
+    group = _reader_group(soup)
+    if not group:
+        raise RuntimeError('Cannot identify the selected translation group')
+    def click(selector, text=None):
+        receipt=page.context.bridge.rpc('catalog_button', {'url':seed,'selector':selector,'text':text}, timeout=30)
+        if not receipt.get('clicked') or receipt.get('url')!=seed:
+            raise RuntimeError('Native catalog click was not verified')
+    def read_menu(previous=None, expected=None):
+        deadline=time.monotonic()+30
+        stable=None; repeats=0
+        while time.monotonic()<deadline:
+            soup=BeautifulSoup(page.content(),'html.parser')
+            if page.url!=seed:
+                raise RuntimeError('Native catalog navigated away from the selected reader')
+            menu=soup.select_one(_TITLE_MENU)
+            rows=_menu_rows(soup)
+            if menu and menu.select('.rpage-chaplist__item'):
+                active=menu.select_one('.npager__num[aria-current="page"]')
+                number=int(active.get_text(strip=True)) if active else 1
+                sig=(number,_menu_row_signature(menu))
+                if (expected is None or number==expected) and (previous is None or sig[1]!=previous):
+                    if stable==sig: repeats+=1
+                    else: stable=sig; repeats=1
+                    if repeats>=2: return soup,menu,number,rows
+            page.wait_for_timeout(600)
+        raise RuntimeError('Native chapter list did not settle; no partial title cache saved')
+    if not soup.select_one(_TITLE_MENU):
+        click('button.rpage-floatctl__chap[aria-label="Chapter list"]')
+    soup,menu,number,rows=read_menu()
+    lock=menu.select_one('.rpage-chaplist__lock input[type="checkbox"]')
+    if not lock or not (lock.has_attr('checked') or 'is-on' in lock.parent.get('class',[])):
+        raise RuntimeError('Native translation-group lock is not enabled; cannot safely match archived titles')
+    if number!=1:
+        previous = _menu_row_signature(menu)
+        first=menu.select_one('button[aria-label="First page"]')
+        if first and not first.has_attr('disabled'):
+            click(_TITLE_MENU+' button[aria-label="First page"]')
+        else:
+            click(_TITLE_MENU+' .npager__num','1')
+        soup,menu,number,rows=read_menu(previous,1)
+    collected=[]
+    seen=set()
+    for _ in range(200):
+        signature=_menu_row_signature(menu)
+        if number in seen:
+            raise RuntimeError('Native title pagination repeated a page number')
+        seen.add(number); collected.extend(rows)
+        print(f'COMIX_TITLE_MENU_PAGE: {number} rows={len(rows)} total_rows={len(collected)}',flush=True)
+        control=_menu_page_controls(menu,number)
+        if control is None:
+            break
+        click(*control)
+        soup,menu,number,rows=read_menu(signature,number+1)
+    else:
+        raise RuntimeError('Native title pagination exceeded safety limit')
+    missing=set(str(i) for i in range(_LAST+1))-{r[0] for r in collected}
+    if missing:
+        raise RuntimeError('Native title menu missing chapter numbers: '+', '.join(sorted(missing,key=int)))
+    # Close the dialog before acquisition. A different edition can be selected
+    # by the series final-link fallback: verify the actual final reader group.
+    click(_TITLE_MENU+' button[aria-label="Close"]')
+    final_url=_LAST_URL
+    state_db=_catalog_checkpoint().with_name('state.sqlite')
+    if state_db.exists():
+        import sqlite3
+        with sqlite3.connect(state_db.resolve().as_uri()+'?mode=ro',uri=True) as db:
+            row=db.execute('SELECT url FROM chapters WHERE chapter_id=?',(_id(str(_LAST)),)).fetchone()
+            if row:
+                if _chapter_number(row[0])!=str(_LAST): raise RuntimeError('Archived final chapter URL identity mismatch')
+                final_url=row[0]
+    page.goto(final_url)
+    deadline=time.monotonic()+25
+    last_group=''; final_verified=False
+    while time.monotonic()<deadline:
+        soup=BeautifulSoup(page.content(),'html.parser')
+        meta=_json_script(soup,'syncData')
+        if page.url==final_url and str(meta.get('number'))==str(_LAST) and title_from_html(soup)==_COMIC_TITLE:
+            if soup.select_one('.rpage-chap-ending__meta'):
+                last_group=_reader_group(soup)
+                final_verified=True
+                break
+        page.wait_for_timeout(500)
+    if not final_verified:
+        raise RuntimeError('Final chapter reader identity not verified')
+    cache={'schema':1,'source':SOURCE_NAME,'seed':DEFAULT_START_URL,'group':group,
+           'last_group':last_group,'rows':collected}
+    path=_title_cache_path(); path.parent.mkdir(parents=True,exist_ok=True)
+    tmp=path.with_suffix('.tmp'); tmp.write_text(json.dumps(cache,ensure_ascii=False),encoding='utf-8'); tmp.replace(path)
+    titles=captured_native_chapter_titles()
+    print(f'COMIX_TITLE_CATALOG_VERIFIED: {len(titles)} descriptive titles, {_LAST+1-len(titles)} without unambiguous edition-specific titles; group={group}; final_group={last_group}',flush=True)
+    return titles
+
+
+def _capture_titles_command():
+    # A metadata-only session does not execute the startup image-transfer proof,
+    # download image bytes, or open a separate automated browser profile.
+    if _load_title_cache():
+        print('COMIX_TITLE_CATALOG_REUSED: '+str(len(captured_native_chapter_titles()))+' descriptive titles',flush=True)
+        return
+    import os
+    from reusable.browser_bridge import LocalBridge, BridgeContext, ensure_generated_extensions, BRIDGE_PORT
+    from reusable.normal_browser_launch import launch_normal_chrome
+    root=Path(__file__).resolve().parents[1]
+    port=int(os.environ.get('COMIC_ARCHIVER_BRIDGE_PORT') or BRIDGE_PORT)
+    ensure_generated_extensions(root,sys.modules[__name__],port)
+    bridge=LocalBridge(DEFAULT_START_URL,reader_selectors=READER_SELECTORS,
+        image_attributes=IMAGE_ATTRIBUTES,image_hosts=BRIDGE_IMAGE_HOSTS,port=port,
+        initial_chapter_url=DEFAULT_START_URL,require_managed_tab=True,
+        rendered_image_selector=BRIDGE_RENDERED_IMAGE_SELECTOR,
+        rendered_image_validator=accept_rendered_image_url)
+    bridge.require_startup_refresh=True
+    bridge.start()
+    try:
+        launch_normal_chrome(DEFAULT_START_URL)
+        bridge.wait_paired()
+        page=BridgeContext(bridge,READER_SELECTORS,IMAGE_ATTRIBUTES).new_page()
+        import time
+        deadline=time.monotonic()+30
+        while True:
+            soup=BeautifulSoup(page.content(),'html.parser')
+            if page.url==DEFAULT_START_URL and _json_script(soup,'syncData').get('manga_id')==_MANGA_HID and _reader_group(soup):
+                break
+            if time.monotonic()>=deadline:
+                raise RuntimeError('Native reader not ready for title collection; use normal site verification if required')
+            page.wait_for_timeout(500)
+        _capture_native_title_menu(page)
+    finally:
+        bridge.close()
+
 def captured_native_chapter_titles():
-    # Only real captured URLs; do not pretend that all 121 are captured.
-    rows = _DISCOVERED_CATALOG or _CAPTURED_CATALOG or (DEFAULT_START_URL,_NEXT,_LAST_URL)
-    return {_id(_chapter_number(u)): 'Chapter '+_chapter_number(u) for u in rows}
+    cache=_load_title_cache()
+    if not cache:
+        return {}
+    titles={}
+    for i in range(_LAST+1):
+        n=str(i)
+        group=_read_observed_groups().get(n,cache['last_group'] if i==_LAST else cache['group'])
+        label=_group_title(cache['rows'],n,group)
+        if label: titles[_id(n)]=label
+    return titles
 
 
-def native_chapter_titles_from_catalog(raw_html, page_url):
-    # Title maintenance must stay a single metadata request, not a full crawl.
-    rows = _native_links(raw_html,page_url)
-    return {**captured_native_chapter_titles(),
-            **{_id(_chapter_number(u)):'Chapter '+_chapter_number(u) for u in rows}}
+def native_chapter_titles_from_catalog(raw_html,page_url):
+    # Browser-captured complete menu is the authority, not a static title tag.
+    return captured_native_chapter_titles()
 
 
-def accept_catalog_title(chapter_id, label):
-    return (isinstance(chapter_id, str) and chapter_id.startswith(_PREFIX) and
-            bool(re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', chapter_id[len(_PREFIX):])) and
-            label == 'Chapter '+chapter_id[len(_PREFIX):])
+def accept_catalog_title(chapter_id,label):
+    if not isinstance(chapter_id,str) or not chapter_id.startswith(_PREFIX): return False
+    n=chapter_id[len(_PREFIX):]
+    if not re.fullmatch(r'[0-9]+(?:\.[0-9]+)?',n): return False
+    return label=='Chapter '+n or bool(label and label==_cached_title(n))
 
 
 def _declared_slots(soup):
@@ -593,7 +888,7 @@ def custom_page_snapshot(page):
 def _import_catalog(raw):
     payload = json.loads(raw.lstrip('\ufeff'))
     if not isinstance(payload, dict) or payload.get('source') != _SITE+_PATH.rstrip('/'):
-        raise ValueError('Capture must come from the Orange Marmalade native UI')
+        raise ValueError('Capture must come from the '+_COMIC_TITLE+' native UI')
     rows = _validate_catalog(payload.get('links', ()))
     p = Path(__file__).resolve()
     s = p.read_text(encoding='utf-8')
@@ -614,7 +909,7 @@ def adapter_self_test():
     assert _chapter_number(DEFAULT_START_URL)=='0'
     assert _chapter_number(_NEXT)=='1'
     assert chapter_identity(None,_NEXT,'')==_PREFIX+'1'
-    assert not accept_catalog_title(_PREFIX+'1','Chapter 120')
+    assert not accept_catalog_title(_PREFIX+'1',f'Chapter {_LAST}')
     assert accept_rendered_image_url('https://lov.digitalsoulstudio.site/hi/bEqPbYfo')
     assert accept_rendered_image_url('https://future-cdn.example/hi/panel_1')
     assert not accept_rendered_image_url('http://future-cdn.example/hi/panel_1')
@@ -624,13 +919,15 @@ def adapter_self_test():
     except ValueError: pass
     else: raise AssertionError('incomplete catalog accepted')
     if _CAPTURED_CATALOG:
-        assert len(_validate_catalog(_CAPTURED_CATALOG))>=121
+        assert len(_validate_catalog(_CAPTURED_CATALOG))>=_LAST+1
     return {'captured_catalog_entries':len(_CAPTURED_CATALOG),'observed_cdn_hosts':len(BRIDGE_IMAGE_HOSTS)}
 
 
 _ADAPTER_PREFLIGHT_PROOF = adapter_self_test()
 if __name__ == '__main__':
-    if sys.argv[1:] == ['--import-catalog']:
+    if sys.argv[1:] == ['--capture-titles']:
+        _capture_titles_command()
+    elif sys.argv[1:] == ['--import-catalog']:
         _import_catalog(sys.stdin.read())
     elif sys.argv[1:] == ['--recover-catalog-history']:
         _recover_catalog_history()

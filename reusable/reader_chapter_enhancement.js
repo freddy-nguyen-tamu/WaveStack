@@ -1,3 +1,102 @@
+// OPEN_READER_NEXT_PANEL_WARM_V1: one speculative first image, never a whole chapter.
+// Enabled only for the generated sequential reader, after its current queue finishes.
+let nextPanelWarm=null;
+let nextWarmFrame=0;
+let lastHistorySave=0;
+const NEXT_PANEL_WARM_FRACTION=0.70;
+function clearNextPanelWarm(){
+  const old=nextPanelWarm;nextPanelWarm=null;
+  if(old){clearTimeout(old.timer);old.image.onload=null;old.image.onerror=null;}
+}
+function nextWarmIdentity(target){
+  const panel=target?.images?.[0];
+  if(!panel || panel.placeholder===true || typeof panel.url!=='string' || !panel.url)return null;
+  try{
+    const url=new URL(panel.url,location.href);
+    if(!['https:','http:'].includes(url.protocol)||url.username||url.password)return null;
+    return {id:String(target.id),url:url.href,sha:String(panel.sha256||'')};
+  }catch{return null}
+}
+function warmIdentityMatches(warm,target){
+  const identity=nextWarmIdentity(target);
+  return Boolean(warm&&identity&&warm.id===identity.id&&warm.url===identity.url&&warm.sha===identity.sha);
+}
+function scheduleNextPanelWarm(){
+  if(typeof chapterSequentialQueueComplete==='undefined'||!chapterSequentialQueueComplete||
+     !chapter||transitioning||document.hidden||typeof scrollY!=='number'||typeof innerHeight!=='number')return;
+  if(nextWarmFrame)return;
+  nextWarmFrame=requestAnimationFrame(()=>{nextWarmFrame=0;maybeWarmNextPanel()});
+}
+function maybeWarmNextPanel(){
+  if(typeof chapterSequentialQueueComplete==='undefined'||!chapterSequentialQueueComplete||
+     !chapter||transitioning||document.hidden)return;
+  const max=maxY();
+  if(max>0&&scrollY<max*NEXT_PANEL_WARM_FRACTION)return;
+  const target=manifest?.chapters?.[chapterIndex+1];
+  const identity=nextWarmIdentity(target);
+  if(!identity)return;
+  if(warmIdentityMatches(nextPanelWarm,target))return; // one attempt per adjacent identity
+  clearNextPanelWarm();
+  const image=document.createElement('img');
+  image.alt='';image.decoding='async';image.loading='eager';image.fetchPriority='low';
+  const candidate={...identity,image,ready:false,failed:false,timer:0};
+  nextPanelWarm=candidate;
+  const failed=()=>{clearTimeout(candidate.timer);image.onload=null;image.onerror=null;candidate.ready=false;candidate.failed=true;};
+  candidate.timer=setTimeout(failed,30000);
+  image.onerror=failed;
+  image.onload=async()=>{
+    try{
+      if(typeof image.decode!=='function')throw Error('Decode unavailable');
+      await image.decode();
+      if(candidate.failed||nextPanelWarm!==candidate||!image.complete||!(image.naturalWidth>0&&image.naturalHeight>0))return;
+      candidate.ready=true;clearTimeout(candidate.timer);image.onload=null;image.onerror=null;
+    }catch{failed()}
+  };
+  image.src=identity.url;
+}
+function saveWarmHistoryPosition(force=false){
+  if(typeof history==='undefined'||!chapter||!history.state?.orChapterPosition||
+     history.state.orChapterPosition.id!==String(chapter.id))return;
+  const now=performance.now();if(!force&&now-lastHistorySave<300)return;
+  lastHistorySave=now;
+  try{history.replaceState({...history.state,orChapterPosition:{id:String(chapter.id),y:Math.max(0,scrollY)}},'',location.href)}catch{}
+}
+function tryWarmChapter(index){
+  if(typeof chapterSequentialQueueComplete==='undefined'||!chapterSequentialQueueComplete||
+     transitioning||index!==chapterIndex+1||typeof history==='undefined'||
+     window.OpenReaderCanWarmNavigate?.()===false)return false;
+  const target=manifest?.chapters?.[index],warm=nextPanelWarm;
+  if(!warmIdentityMatches(warm,target)||!warm.ready||!warm.image.complete||
+     !(warm.image.naturalWidth>0&&warm.image.naturalHeight>0))return false;
+  const url=new URL(location.href);url.searchParams.set('chapter',String(target.id));
+  url.searchParams.delete('resume');
+  try{
+    window.OpenReaderSaveProgress?.();
+    const priorUrl=new URL(location.href);priorUrl.searchParams.set('chapter',String(chapter.id));
+    history.replaceState({...history.state,orChapterPosition:{id:String(chapter.id),y:Math.max(0,scrollY)}},'',priorUrl.href);
+    history.scrollRestoration='manual';
+    history.pushState({orChapterPosition:{id:String(target.id),y:0}},'',url.href);
+    history.scrollRestoration='manual';
+  }catch{return false}
+  transitioning=true;completionStart=0;heldUp=false;heldDown=false;previous=0;remainder=0;
+  if(panelOpen)togglePanel(false);
+  settings.lastY=0;settings.lastChapter=target.id;write();
+  // render() runs synchronously through insertion of the decoded panel.
+  render(warm).catch(error=>{console.error('OPEN_READER_WARM_NAVIGATION_FAILED',error);location.reload();});
+  return true;
+}
+window.addEventListener('scroll',()=>{scheduleNextPanelWarm();saveWarmHistoryPosition();},{passive:true});
+window.addEventListener('pagehide',()=>saveWarmHistoryPosition(true));
+window.addEventListener('popstate',()=>{
+  if(typeof chapterSequentialQueueComplete==='undefined'||!chapter)return;
+  const requested=new URL(location.href).searchParams.get('chapter');
+  if(String(requested||'')!==String(chapter.id)){
+    // Back/Forward retain real history entries and the saved per-entry position.
+    // Use the existing cold renderer to avoid resurrecting an obsolete queue.
+    transitioning=true;location.reload();
+  }
+});
+
 // This module is appended to the *staged* reader app.js so it can reuse its
 // original togglePanel(), nextChapter(), and updateAuto() safely, not duplicate them.
 {
@@ -96,8 +195,10 @@
     try {
       const u=new URL(a.href,location.href);
       if(u.origin===location.origin && u.pathname===location.pathname){
-        sessionStorage.setItem('open-reader:skip-entry-flip',u.pathname);
         const next=u.searchParams.get('chapter');
+        const ix=manifest?.chapters?.findIndex(ch=>String(ch.id)===next);
+        if(tryWarmChapter(ix)){e.preventDefault();return;}
+        sessionStorage.setItem('open-reader:skip-entry-flip',u.pathname);
         if(next)window.OpenReaderTrackChapter?.(next,0);
       }
     } catch {}
@@ -117,6 +218,7 @@
       return;
     }
     if(target && !transitioning && !(auto && !allLoaded())){
+      if(tryWarmChapter(chapterIndex+direction))return;
       sessionStorage.setItem('open-reader:skip-entry-flip',location.pathname);
       window.OpenReaderTrackChapter?.(target.id,0);
     }
@@ -191,6 +293,8 @@
   // fetched. Do not cause an adjacent chapter request or scroll jump.
   const repairedInFlight=new Set();
   let repairCheckBusy=false,repairRerun=false;
+  // Never swap the active chapter while a prior repair is mutating it.
+  window.OpenReaderCanWarmNavigate=()=>!repairCheckBusy&&!repairedInFlight.size;
   async function refreshCurrentChapterRepairs(){
     if(document.hidden || !chapter || !known.length)return;
     if(repairCheckBusy){repairRerun=true;return;}

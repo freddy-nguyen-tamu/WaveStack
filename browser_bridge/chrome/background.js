@@ -794,6 +794,36 @@ async function execute(job) {
   // Stop BEFORE another scroll if loaded-response inspection was lost.
   // The visual path is independent of debugger state.  Never stall a chapter
   // trying to reattach a debugger that Chrome already rejected.
+  // Provider-neutral metadata UI operation. Selectors come from the local adapter.
+  // Exactly one visible, enabled button, on the already managed document.
+  // One shot only: a lost acknowledgement is never a reason to click again.
+  if (action === 'catalog_button') {
+    const tabId=state.tabId;
+    const before=await checkedIO(tabsGet(tabId),'catalog document',5000);
+    if (!sourceMatches(before.url) || before.status==='loading' ||
+        canonicalPage(before.url)!==canonicalPage(payload.url)) throw Error('Catalog document changed');
+    const selector=payload.selector, text=payload.text;
+    if (typeof selector!=='string' || !selector.length || selector.length>240 ||
+        (text!==null && text!==undefined && (typeof text!=='string' || text.length>100)))
+      throw Error('Invalid catalog control selector');
+    if (!chrome.scripting?.executeScript) throw Error('Catalog button requires Chrome/Edge');
+    const result=await checkedIO(chrome.scripting.executeScript({target:{tabId},
+      func:(selector,text,expected)=>{
+        if(location.href!==expected) throw Error('Catalog document changed');
+        const visible=el=>el instanceof HTMLButtonElement && el.type==='button' &&
+          !el.disabled && el.getAttribute('aria-disabled')!=='true' &&
+          el.getClientRects().length>0 && getComputedStyle(el).visibility==='visible';
+        const buttons=[...document.querySelectorAll(selector)].filter(el=>visible(el) &&
+          (text==null || el.textContent.trim()===text));
+        if(buttons.length!==1) throw Error('Expected exactly one enabled catalog button; found '+buttons.length);
+        buttons[0].click(); return {clicked:true,url:location.href};
+      },args:[selector,text,before.url]}),'catalog button click',10000);
+    const receipt=result?.[0]?.result;
+    const after=await checkedIO(tabsGet(tabId),'catalog document after click',5000);
+    if(!receipt?.clicked || state.tabId!==tabId || canonicalPage(after.url)!==canonicalPage(before.url))
+      throw Error('Catalog button outcome unverified');
+    return receipt;
+  }
   if (action === 'navigate') {
     const desired=new URL(payload.url);
     const current=new URL((await tabsGet(state.tabId)).url);

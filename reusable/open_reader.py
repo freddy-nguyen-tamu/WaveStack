@@ -867,6 +867,8 @@ def stage_worker_assets(root, registry, stage, *, partial_records=None):
             raise RuntimeError('Reader frame guard changed; refusing sequential loading patch')
         native_app = native_app.replace(frame_old,
            'if(document.hidden||!chapter||transitioning||panelOpen)return;', 1)
+        # The ordered queue alone loads current panels; one decoded next-panel
+        # prefetch is allowed after the current queue is complete.
         # No scroll event or auto-scroll handler is allowed to load later panels
         # out of order. Preserve the native triggerNearby() for compatibility,
         # but disable it only in this staged chapter's sequential mode.
@@ -901,7 +903,7 @@ def stage_worker_assets(root, registry, stage, *, partial_records=None):
                       "  triggerNearby();")
         new_loader = r"""  // OPEN_READER_BOUNDED_WINDOW_V1: up to three current-chapter panels
   // download/decode concurrently, but ALL panels reveal in manifest order.
-  // No scrollbar trigger, neighbor chapter, or speculative entire-chapter fetch.
+  // Current-chapter queue only. The separate next-panel warm path is bounded to one.
   const pages=$('#pages');
   const loading=document.createElement('section');
   loading.className='or-chapter-load-screen';
@@ -913,7 +915,22 @@ def stage_worker_assets(root, registry, stage, *, partial_records=None):
   const message=document.createElement('span');
   message.className='or-chapter-loading-message';
   loading.append(spinner,message);
-  pages.replaceChildren(loading);
+  // Mount the already decoded element itself, not a new img with the same URL.
+  // This happens synchronously before any await or loading-only paint.
+  let firstOrdinal=0;
+  if(warm){
+    const entry=known[0],figure=entry.el.parentElement;
+    const image=warm.image;
+    image.width=entry.el.width;image.height=entry.el.height;
+    image.dataset.loaded='yes';image.onload=null;image.onerror=null;
+    figure.replaceChildren(image);
+    known[0]={...entry,el:image,status:'loaded'};
+    pages.replaceChildren(figure,loading);
+    firstOrdinal=1;
+    window.scrollTo({top:0,left:0,behavior:'instant'});
+    transitioning=false;
+    window.dispatchEvent(new CustomEvent('open-reader:warm-chapter',{detail:{chapterId:chapter.id}}));
+  }else pages.replaceChildren(loading);
   // The extra lookup is only for a partial chapter, and runs alongside panel 1.
   // A same-origin upload notification can invalidate it while the queue runs.
   const requestRepairManifest=()=>{
@@ -995,7 +1012,7 @@ def stage_worker_assets(root, registry, stage, *, partial_records=None):
   }
   const WINDOW_SIZE=3;
   const outstanding=new Map();
-  let nextToStart=0;
+  let nextToStart=firstOrdinal;
   const fillWindow=()=>{
     while(nextToStart<known.length && outstanding.size<WINDOW_SIZE){
       const ordinal=nextToStart++;
@@ -1004,6 +1021,7 @@ def stage_worker_assets(root, registry, stage, *, partial_records=None):
   };
   fillWindow();
   for(let ordinal=0;ordinal<known.length;ordinal++){
+    if(ordinal<firstOrdinal)continue;
     message.textContent=`Loading panel ${ordinal+1} / ${known.length}`;
     let prepared=await outstanding.get(ordinal);
     outstanding.delete(ordinal);
@@ -1016,7 +1034,13 @@ def stage_worker_assets(root, registry, stage, *, partial_records=None):
   }
   loading.remove();
   window.OpenReaderRefreshQueuedRepairs=null;
-  chapterSequentialQueueComplete=true;"""
+  chapterSequentialQueueComplete=true;
+  // Restore a same-document history entry only after its full geometry exists.
+  const position=typeof history!=='undefined'?history.state?.orChapterPosition:null;
+  if(!warm && position?.id===String(chapter.id) && Number(position.y)>0){
+    window.scrollTo({top:Math.min(maxY(),Number(position.y)),left:0,behavior:'instant'});
+  }
+  scheduleNextPanelWarm();"""
         if native_app.count(old_loader) != 1:
             raise RuntimeError('Native initial loader changed; refusing sequential loading patch')
         native_app=native_app.replace(old_loader,new_loader,1)
@@ -1050,6 +1074,19 @@ def stage_worker_assets(root, registry, stage, *, partial_records=None):
         if native_app.count(original_fail)!=1:
             raise RuntimeError('Native image retry logic changed; refusing unsafe stage modification')
         native_app=native_app.replace(original_fail,replacement_fail,1)
+        render_head = "async function render(){\n  const response=await fetch('./manifest.json',{cache:'no-cache'});\n  if(!response.ok)throw new Error('Manifest unavailable: HTTP '+response.status);\n  manifest=await response.json();"
+        render_warm = """async function render(warm=null){
+  const params=new URL(location.href).searchParams;
+  if(!warm){
+    const response=await fetch('./manifest.json',{cache:'no-cache'});
+    if(!response.ok)throw new Error('Manifest unavailable: HTTP '+response.status);
+    manifest=await response.json();
+  }
+  chapterSequentialQueueComplete=false;
+  clearNextPanelWarm();"""
+        if native_app.count(render_head)!=1:
+            raise RuntimeError('Reader initialization changed; refusing unsafe warm navigation injection')
+        native_app=native_app.replace(render_head,render_warm,1)
         nav_addon = (Path(root) / 'reusable' / 'reader_chapter_enhancement.js').read_text(encoding='utf-8')
         if 'open-reader:skip-entry-flip' in native_app:
             raise RuntimeError('Existing reader app contains the supplemental navigation logic; refusing duplicates')

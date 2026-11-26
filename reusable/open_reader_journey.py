@@ -28,7 +28,8 @@ TRACK_JS = r'''/* Open Reader first-party, same-origin visit signals. No cookies
   let chapterSent = false, activeChapter = '';
   window.addEventListener('open-reader:chapter-ready',e=>{
     const id=e.detail?.chapterId;
-    if(chapterSent || typeof id!=='string' || !id)return;
+    if(typeof id!=='string' || !id || (chapterSent&&activeChapter===id))return;
+    if(chapterSent)record('page_view'); // same-document chapter navigation
     chapterSent=true; activeChapter=id;
     record('chapter_read',id);
   });

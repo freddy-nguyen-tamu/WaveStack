@@ -45,6 +45,12 @@
    }else save(true);
  },55);
  setTimeout(()=>{if(!initialized)clearInterval(timer)},20000);
+ // A decoded-panel transition retains the same document and its listeners.
+ window.addEventListener('open-reader:warm-chapter',event=>{
+   const id=event.detail?.chapterId;
+   if(typeof id!=='string'||!id)return;
+   active=id;initialized=true;leaving=false;clearInterval(timer);save(true);
+ });
  window.addEventListener('scroll',()=>save(),{passive:true});
  document.addEventListener('visibilitychange',()=>{if(document.hidden)save(true)});
  window.addEventListener('pagehide',()=>save(true));
