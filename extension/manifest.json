@@ -9,7 +9,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://comix.to/title/xkwzm-your-eternal-lies/*"
+        "https://mangadex.org/chapter/*"
       ],
       "js": [
         "content.js"
