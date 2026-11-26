@@ -3396,7 +3396,7 @@ html[data-theme="dark"] textarea {
   height: 2rem;
   place-items: center;
   margin-right: 0.48rem;
-  background: url("/brand-logo.png") center / contain no-repeat;
+  background: url("/brand-logo.png?v=4") center / contain no-repeat;
   content: "";
   font-size: 0.85rem;
   font-weight: 700;
