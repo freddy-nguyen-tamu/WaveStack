@@ -14,7 +14,11 @@
   ],
   "host_permissions": [
     "http://127.0.0.1:18765/*",
-    "https://toonz.to/*"
+    "https://comix.to/*",
+    "https://lov.brianjournal.site/*",
+    "https://lov.designwithheart.site/*",
+    "https://lov.gentlelivingnotes.site/*",
+    "https://lov.littlecraftshop.site/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -25,7 +29,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://toonz.to/manga/taiyou-no-ie/*"
+        "https://comix.to/title/xkwzm-your-eternal-lies/*"
       ],
       "js": [
         "content.js"
