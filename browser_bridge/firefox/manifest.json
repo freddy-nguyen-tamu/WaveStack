@@ -13,10 +13,7 @@
     "storage",
     "webRequest",
     "http://127.0.0.1:18765/*",
-    "https://comix.to/*",
-    "https://447.quietcreativemind.site/*",
-    "https://447.notesbyamber.site/*",
-    "https://447.simplelivingshop.site/*"
+    "https://toonz.to/*"
   ],
   "background": {
     "scripts": [
@@ -30,7 +27,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://comix.to/title/jlvrv-annarasumanara/*"
+        "https://toonz.to/manga/taiyou-no-ie/*"
       ],
       "js": [
         "content.js"
