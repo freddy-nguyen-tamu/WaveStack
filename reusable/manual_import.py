@@ -4,9 +4,28 @@ import shutil
 import hashlib
 import json
 
-SOURCE_FILES = ('reusable/manual_import.py', 'reusable/manual_import.html',
-                'reusable/manual_import.css', 'reusable/manual_import.js',
+PDF_VERSION = '4.10.38'
+SOURCE_FILES = ('reusable/manual_import.py', 'reusable/manual_import_browser.html',
+                'reusable/manual_import.css', 'reusable/manual_import_browser.js', 'reusable/manual_direct_upload.js',
                 'reusable/worker_addon/manual_import_worker.mjs')
+
+
+def pdf_assets(root):
+    p = Path(root) / '.archiver_tools' / 'open-reader-import' / 'node_modules' / 'pdfjs-dist'
+    if not p.is_dir():
+        return []
+    package = json.loads((p/'package.json').read_text(encoding='utf-8'))
+    if package.get('version') != PDF_VERSION:
+        raise RuntimeError('Unexpected PDF.js version; rerun the Add Comic installer')
+    files = [(p/'build'/name, name) for name in ('pdf.mjs','pdf.worker.mjs')]
+    for sub in ('cmaps','standard_fonts','wasm'):
+        folder=p/sub
+        if folder.is_dir():
+            files.extend((f, f.relative_to(p).as_posix()) for f in sorted(folder.rglob('*')) if f.is_file())
+    if not all(f.is_file() for f,_ in files):
+        raise RuntimeError('PDF.js dependency incomplete; rerun the Add Comic installer')
+    if (p/'LICENSE').is_file(): files.append((p/'LICENSE','LICENSE.txt'))
+    return files
 
 
 def enabled(root):
@@ -20,6 +39,8 @@ def hash_inputs(root):
         p=Path(root)/name
         if not p.is_file(): raise RuntimeError('Missing Add Comic integration: '+name)
         out[name]=hashlib.sha256(p.read_bytes()).hexdigest()
+    for f,rel in pdf_assets(root):
+        out['manual-pdf/'+rel]=hashlib.sha256(f.read_bytes()).hexdigest()
     return out
 
 
@@ -27,8 +48,13 @@ def stage_assets(root, stage):
     root,stage=Path(root),Path(stage)
     if not enabled(root): return
     target=stage/'add-comic';target.mkdir(exist_ok=True)
-    for src,dst in [('manual_import.html','add-comic/index.html'),('manual_import.js','manual-import.js'),('manual_import.css','manual-import.css')]:
+    for src,dst in [('manual_import_browser.html','add-comic/index.html'),('manual_import_browser.js','manual-import.js'),('manual_direct_upload.js','manual-direct-upload.js'),('manual_import.css','manual-import.css')]:
         shutil.copy2(root/'reusable'/src,stage/dst)
+    vendor=pdf_assets(root)
+    for f,rel in vendor:
+        dst=stage/'manual-pdf'/rel;dst.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(f,dst)
+    if not vendor:
+        print('WARNING: Add Comic image imports are enabled; PDF.js is missing. Run the patch installer to enable PDF imports.',flush=True)
     # Add a link to the existing homepage after Journey has added its links.
     # Do not modify its static library.json or registry.json: deployment verification
     # and older archive reconciliation continue to compare their exact bytes.

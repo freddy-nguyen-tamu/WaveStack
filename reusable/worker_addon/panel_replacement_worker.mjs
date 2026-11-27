@@ -1,5 +1,5 @@
 import { manualRoute } from './manual_import_worker.mjs';
-import { journeyRoute, journeyConfigured, purgeJourneyEvents } from './journey_worker.mjs';
+import { journeyRoute, journeyConfigured, archiveJourneyEvents } from './journey_worker.mjs';
 /* Cloudflare Worker entrypoint for the EXISTING shared-reader assets.
  * Required bindings: env.ASSETS (Workers static assets), env.PANEL_REPLACEMENTS
  * (R2 bucket), secrets READER_ADMIN_PASSWORD and READER_SESSION_HMAC_KEY.
@@ -258,9 +258,8 @@ function pemBytes(pem){
   const raw=pem.replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\s/g,'');
   return Uint8Array.from(atob(raw),x=>x.charCodeAt(0));
 }
-async function githubToken(env) {
+async function mintGithubToken(env, scope={}) {
   if(!githubConfigured(env))throw new Error('GitHub App secrets not configured');
-  if(githubInstallation && githubInstallation.expires>Date.now()+120000)return githubInstallation.value;
   const key=await crypto.subtle.importKey('pkcs8',pemBytes(env.GITHUB_APP_PRIVATE_KEY),
     {name:'RSASSA-PKCS1-v1_5',hash:'SHA-256'},false,['sign']);
   const now=Math.floor(Date.now()/1000);
@@ -272,25 +271,83 @@ async function githubToken(env) {
   const r=await fetch(`https://api.github.com/app/installations/${env.GITHUB_APP_INSTALLATION_ID}/access_tokens`,{
     method:'POST',headers:{Accept:'application/vnd.github+json', Authorization:'Bearer '+jwt,
       'X-GitHub-Api-Version':'2026-03-10','User-Agent':'open-reader-streaming'},
-    body:'{}'
+    body:JSON.stringify(scope)
   });
   if(!r.ok){const e=new Error('GitHub App installation rejected credential: '+r.status);e.githubFailure=await githubFailure(r);throw e;}
   const data=await r.json();
   if(typeof data.token!=='string' || !data.expires_at)throw new Error('Invalid installation token response');
+  return data;
+}
+async function githubToken(env) {
+  if(githubInstallation && githubInstallation.expires>Date.now()+120000)return githubInstallation.value;
+  const data=await mintGithubToken(env);
   githubInstallation={value:data.token,expires:Date.parse(data.expires_at)};
   return githubInstallation.value;
 }
+// Only the server can provision repositories. Browser credentials are limited
+// to one newly reserved private import repository; never mint for archive repos.
+export async function browserImportToken(env,repo,marker) {
+  if(!/^import-[a-f0-9]{32}-vol-[0-9]{3}$/.test(repo)||!/^open-reader-browser:[a-f0-9-]{36}$/.test(marker))throw Error('Invalid import repository identity');
+  const owner=String(env.GITHUB_OWNER||'');if(!/^[A-Za-z0-9-]{1,39}$/.test(owner))throw Error('Invalid owner');
+  const headers={Authorization:'Bearer '+await githubToken(env),Accept:'application/vnd.github+json','Content-Type':'application/json','X-GitHub-Api-Version':'2026-03-10','User-Agent':'open-reader-streaming'};
+  const url='https://api.github.com/repos/'+owner+'/'+repo;
+  async function checked(r){if(r.ok)return r;const f=await githubFailure(r);const e=Error('GitHub repository operation HTTP '+r.status);e.githubFailure=f;throw e;}
+  let r=await fetch(url,{headers});
+  if(r.status===404){
+    const created=await fetch('https://api.github.com/user/repos',{method:'POST',headers,body:JSON.stringify({name:repo,description:marker,private:true,auto_init:true,has_issues:false,has_projects:false,has_wiki:false})});
+    if(![201,422].includes(created.status))await checked(created);
+    // Invalidate the pre-creation installation token before using new storage.
+    githubInstallation=null;headers.Authorization='Bearer '+await githubToken(env);
+    r=await fetch(url,{headers});
+  }
+  await checked(r);const info=await r.json();
+  if(info.private!==true||info.name!==repo||info.owner?.login?.toLowerCase()!==owner.toLowerCase()||info.description!==marker||!Number.isSafeInteger(info.id))throw Error('Private import repository identity mismatch; refusing browser access');
+  const data=await mintGithubToken(env,{repository_ids:[info.id],permissions:{contents:'write'}});
+  if(!Array.isArray(data.repositories)||data.repositories.length!==1||data.repositories[0].id!==info.id||data.permissions?.contents!=='write'||Object.entries(data.permissions||{}).some(([k,v])=>!['contents','metadata'].includes(k)&&v!=='none'))throw Error('GitHub did not confirm repository-scoped write access');
+  return {token:data.token,expires_at:data.expires_at,owner,repo};
+}
+// Dedicated private history repository. No browser token, no automatic repo
+// creation, no expansion of image-upload path allowlists. Check visibility
+// before every archival session (and every history retrieval).
+export async function journeyArchiveRemote(env){
+ const owner=String(env.GITHUB_OWNER||''),repo='open-reader-journey-history';
+ if(!/^[A-Za-z0-9-]{1,39}$/.test(owner)||!githubConfigured(env))throw Error('Journey archive GitHub configuration unavailable');
+ const root=`https://api.github.com/repos/${owner}/${repo}`;
+ const checked=async (url,method='GET',body=null,accept='application/vnd.github+json')=>fetch(url,{method,headers:{Authorization:'Bearer '+await githubToken(env),Accept:accept,'X-GitHub-Api-Version':'2026-03-10','User-Agent':'open-reader-journey',...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});
+ const response=await checked(root);
+ if(!response.ok)throw Error('Journey history repository unavailable (HTTP '+response.status+')');
+ const info=await response.json();
+ if(info.private!==true||info.name!==repo||info.owner?.login?.toLowerCase()!==owner.toLowerCase()||info.archived===true||!info.default_branch)throw Error('Journey history repository must be private, initialized and writable');
+ const branch=info.default_branch;
+ function contents(path){if(!/^events\/\d{4}\/\d{2}\/\d{4}-\d{2}-\d{2}\/[a-f0-9]{64}\.json$/.test(path))throw Error('Invalid Journey history path');return root+'/contents/'+path;}
+ return {
+  async read(path){const r=await checked(contents(path)+'?ref='+encodeURIComponent(branch),'GET',null,'application/vnd.github.raw+json');if(r.status===404)return null;if(!r.ok)throw Error('Journey history read HTTP '+r.status);
+   let bytes=new Uint8Array(await r.arrayBuffer());if(bytes.length>1500000)throw Error('Journey history response too large');
+   // GitHub may return Contents metadata instead of raw bytes.
+   if(/application\/json/i.test(r.headers.get('Content-Type')||'')){let m;try{m=JSON.parse(new TextDecoder().decode(bytes))}catch{}if(m?.type==='file'&&m.encoding==='base64'&&typeof m.content==='string'){bytes=Uint8Array.from(atob(m.content.replace(/\s/g,'')),x=>x.charCodeAt(0));}}
+   return bytes;
+  },
+  async write(path,bytes){let parts=[];for(let i=0;i<bytes.length;i+=8192)parts.push(String.fromCharCode(...bytes.subarray(i,i+8192)));
+   const r=await checked(contents(path),'PUT',{message:'Archive verified Open Reader visitor batch',content:btoa(parts.join('')),branch});if(!r.ok)throw Error('Journey history write HTTP '+r.status);
+  }
+ };
+}
+
 async function gh(env, method, repo, path, {accept='application/vnd.github+json', data}={}) {
   if(!/^[A-Za-z0-9-]{1,39}$/.test(String(env.GITHUB_OWNER||'')))throw new Error('Bad GitHub account config');
   if(repo!=='open-reader' && !REPO_RE.test(repo))throw new Error('Unrecognized archive repository');
   if(!path.split('/').every(p=>/^[A-Za-z0-9_.-]+$/.test(p) && p!=='.' && p!=='..'))throw new Error('Unsafe archive path');
   const url=`https://api.github.com/repos/${env.GITHUB_OWNER}/${repo}/contents/`+
     path.split('/').map(encodeURIComponent).join('/');
-  const token=await githubToken(env);
-  return fetch(url,{method,headers:{'Authorization':'Bearer '+token,'Accept':accept,
+  const request=async()=>fetch(url,{method,headers:{'Authorization':'Bearer '+await githubToken(env),'Accept':accept,
     'X-GitHub-Api-Version':'2026-03-10','User-Agent':'open-reader-streaming',
     ...(data?{'Content-Type':'application/json'}:{})},
     ...(data?{body:JSON.stringify(data)}:{})});
+  let response=await request();
+  // A different Worker isolate may still hold a token minted before the
+  // import volume was created. Refresh only once, only on reads, never on throttles.
+  if(method==='GET'&&/^import-[a-f0-9]{32}-vol-[0-9]{3}$/.test(repo)&&[401,403,404].includes(response.status)&&!(await githubFailure(response.clone())).throttled){githubInstallation=null;response=await request();}
+  return response;
 }
 async function githubFailure(response) {
   const remaining=response.headers.get('X-RateLimit-Remaining'),retry=response.headers.get('Retry-After'),reset=response.headers.get('X-RateLimit-Reset');
@@ -551,9 +608,9 @@ export default {
     // All public routes, including static assets and image streams, require the
     // same site session. Credentials never enter any public file or JS bundle.
     if(!await validSession(req,env))return unauthenticated(req);
-    const manual=await manualRoute(req,env,{gh,githubFile,shaHex,boundedBody,githubConfigured});
+    const manual=await manualRoute(req,env,{gh,githubFile,shaHex,boundedBody,githubConfigured,browserImportToken});
     if(manual)return renewIfNeeded(req,env,manual);
-    const journey = await journeyRoute(req,env,(r,e)=>validSession(r,e));
+    const journey = await journeyRoute(req,env,(r,e)=>validSession(r,e),journeyArchiveRemote);
     if(journey)return renewIfNeeded(req,env,journey);
     if(path==='/api/reader-health' && req.method==='GET')return json({ok:true,script:'open-reader-panel-replacement-v1',
       storage_configured:!!env.PANEL_REPLACEMENTS,github_streaming_configured:githubConfigured(env),journey_storage_configured:journeyConfigured(env)});
@@ -579,5 +636,5 @@ export default {
     if(req.method==='GET' && (path==='/' || path.endsWith('/') || path.endsWith('.html')))return renewIfNeeded(req,env,await htmlResponse(req,env));
     return env.ASSETS.fetch(req);
   },
-  async scheduled(_event,env,_ctx){await purgeJourneyEvents(env);}
+  async scheduled(event,env,_ctx){try{const out=await archiveJourneyEvents(env,journeyArchiveRemote,event?.scheduledTime??Date.now());console.log("JOURNEY_ARCHIVE",out.archived,out.reason);}catch(e){const detail=String(e?.message||e);const safe=/^(?:Journey (?:history|archive)|GitHub App installation rejected credential:)/.test(detail)?detail.slice(0,180):"database or network error";console.error("JOURNEY_ARCHIVE_PAUSED",safe);throw Error("Journey archive paused; unverified events remain in D1");}}
 };

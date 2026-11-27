@@ -13,8 +13,13 @@ async function ready(db){
  if(!db)throw new Invalid('Import catalog requires the existing Journey D1 binding.',503);
  if(!dbReady.has(db))dbReady.set(db,(async()=>{
   await db.exec("CREATE TABLE IF NOT EXISTS manual_comics_v1 (slug TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL, revision INTEGER NOT NULL, metadata TEXT NOT NULL, chapters TEXT NOT NULL, updated_at TEXT NOT NULL);");
-  await db.exec("CREATE TABLE IF NOT EXISTS manual_local_pages_v1 (slug TEXT NOT NULL, sha TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, size INTEGER NOT NULL, repo TEXT NOT NULL, PRIMARY KEY(slug,sha));");
+  await db.exec("CREATE TABLE IF NOT EXISTS manual_local_pages_v1 (slug TEXT NOT NULL, sha TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, size INTEGER NOT NULL, repo TEXT NOT NULL, format TEXT NOT NULL DEFAULT 'png', PRIMARY KEY(slug,sha));");
+  await db.exec("CREATE TABLE IF NOT EXISTS manual_browser_volumes_v1 (slug TEXT NOT NULL, revision INTEGER NOT NULL, batch TEXT NOT NULL, volume INTEGER NOT NULL, marker TEXT NOT NULL, PRIMARY KEY(slug,batch), UNIQUE(slug,volume));");
   await db.exec("CREATE TABLE IF NOT EXISTS manual_pages_v1 (slug TEXT NOT NULL, sha TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, size INTEGER NOT NULL, PRIMARY KEY(slug,sha));");
+  // Existing rows all used PNG. Add a column without rebuilding any tables.
+  const columns=async()=>((await db.prepare('PRAGMA table_info(manual_local_pages_v1)').all()).results||[]);
+  if(!(await columns()).some(c=>c.name==='format')){try{await db.exec("ALTER TABLE manual_local_pages_v1 ADD COLUMN format TEXT NOT NULL DEFAULT 'png'");}catch(e){if(!(await columns()).some(c=>c.name==='format'))throw e;}}
+  await db.exec("CREATE TABLE IF NOT EXISTS manual_index_receipts_v1 (slug TEXT NOT NULL, revision INTEGER NOT NULL, volume INTEGER NOT NULL, digest TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(slug,revision,volume,digest));");
  })().catch(e=>{dbReady.delete(db);throw e;}));
  await dbReady.get(db);return db;
 }
@@ -53,10 +58,11 @@ async function pages(db,slug){
 async function pageLocation(db,slug,sha){
  const old=await db.prepare('SELECT sha,width,height,size FROM manual_pages_v1 WHERE slug=? AND sha=?').bind(slug,sha).first();
  if(old)return {...old,repo:'open-reader',path:filePath(slug,sha)};
- const p=await db.prepare('SELECT sha,width,height,size,repo FROM manual_local_pages_v1 WHERE slug=? AND sha=?').bind(slug,sha).first();
+ const p=await db.prepare('SELECT sha,width,height,size,repo,format FROM manual_local_pages_v1 WHERE slug=? AND sha=?').bind(slug,sha).first();
  if(!p)return null;
  if(!new RegExp('^'+slug+'-vol-[0-9]{3}$').test(p.repo))throw new Invalid('Invalid imported volume',503);
- return {...p,path:'pages/'+sha+'.png'};
+ if(!['png','jpg'].includes(p.format))throw new Invalid('Invalid imported page format',503);
+ return {...p,path:'pages/'+sha+'.'+p.format};
 }
 const decode=r=>({slug:r.slug,revision:r.revision,publication:r.status,metadata:JSON.parse(r.metadata),chapters:JSON.parse(r.chapters)});
 function validateChapters(chapters,verified){
@@ -85,7 +91,7 @@ export async function manualRoute(req,env,deps){
  const image=path.match(/^\/api\/manual-image\/(import-[a-f0-9]{32})\/([a-f0-9]{64})$/);
  const comic=path.match(/^\/comics\/(import-[a-f0-9]{32})\/(.*)$/);
  const lib=path==='/api/manual-library';
- const local=path.match(/^\/api\/manual-comics\/(import-[a-f0-9]{32})\/local-(init|index)$/);
+ const local=path.match(/^\/api\/manual-comics\/(import-[a-f0-9]{32})\/local-(init|index|browser-token|recover)$/);
  if(!api&&!image&&!comic&&!lib&&!local)return null;
  try{
   if(!['GET','HEAD'].includes(method)&&req.headers.get('Origin')!==u.origin)throw new Invalid('Same-origin required',403);
@@ -117,37 +123,90 @@ export async function manualRoute(req,env,deps){
     if(!r){
      const existing=await env.ASSETS.fetch(new Request(new URL(`/comics/${slug}/manifest.json`,u)));
      if(existing.ok)throw new Invalid('Slug collision',409);
-     await db.prepare("INSERT OR IGNORE INTO manual_comics_v1(slug,title,status,revision,metadata,chapters,updated_at) VALUES (?,?,'draft',0,?,'[]',?)").bind(slug,m.title,JSON.stringify(m),new Date().toISOString()).run();r=await row(db,slug);
+     // Browser re-selection must not silently create another draft for the same title.
+     // Local companion keeps its existing contract. The guard is atomic in D1.
+     if(body.browser===true){
+      await db.prepare("INSERT OR IGNORE INTO manual_comics_v1(slug,title,status,revision,metadata,chapters,updated_at) SELECT ?,?,'draft',0,?,'[]',? WHERE NOT EXISTS(SELECT 1 FROM manual_comics_v1 WHERE status='draft' AND title=? COLLATE NOCASE)").bind(slug,m.title,JSON.stringify(m),new Date().toISOString(),m.title).run();
+      r=await row(db,slug);
+      if(!r){const prior=await db.prepare("SELECT slug FROM manual_comics_v1 WHERE status='draft' AND title=? COLLATE NOCASE ORDER BY updated_at DESC LIMIT 1").bind(m.title).first();if(prior)return json({error:'An unpublished draft with this title already exists. Open it in Manage imported comics and recover its uploaded pages, or choose a different title for a distinct comic.',draft:prior.slug},409);throw new Invalid('Draft creation did not complete',409);}
+     }else{await db.prepare("INSERT OR IGNORE INTO manual_comics_v1(slug,title,status,revision,metadata,chapters,updated_at) VALUES (?,?,'draft',0,?,'[]',?)").bind(slug,m.title,JSON.stringify(m),new Date().toISOString()).run();r=await row(db,slug);}
     }
     if(!r||r.status==='deleted')throw new Invalid('Deleted or unavailable import',409);
     return json(decode(r));
    }
    if(!r||r.status==='deleted')throw new Invalid('Import not found or deleted',404);
    if(!Number.isInteger(body.revision)||body.revision!==r.revision)throw new Invalid('Import revision changed',409);
+   if(local[2]==='browser-token'){
+    if(!deps.browserImportToken)throw new Invalid('Browser storage is unavailable',503);
+    if(typeof body.batch!=='string'||!CID.test(body.batch))throw new Invalid('Invalid upload batch');
+    let reserved=await db.prepare('SELECT * FROM manual_browser_volumes_v1 WHERE slug=? AND batch=?').bind(slug,body.batch).first();
+    if(!reserved){
+     // Reserve from the high end so older local imports can keep their low-numbered volumes.
+     const existing=(await db.prepare('SELECT volume FROM manual_browser_volumes_v1 WHERE slug=?').bind(slug).all()).results||[];
+     const indexed=(await db.prepare('SELECT DISTINCT repo FROM manual_local_pages_v1 WHERE slug=?').bind(slug).all()).results||[];
+     const used=new Set([...existing.map(x=>x.volume),...indexed.map(x=>Number(x.repo.slice(-3)))]);
+     let volume=999;while(volume>0&&used.has(volume))volume--;
+     if(!volume)throw new Invalid('No unused import volumes remain',409);
+     await db.prepare('INSERT OR IGNORE INTO manual_browser_volumes_v1(slug,revision,batch,volume,marker) VALUES (?,?,?,?,?)').bind(slug,r.revision,body.batch,volume,'open-reader-browser:'+crypto.randomUUID()).run();
+     reserved=await db.prepare('SELECT * FROM manual_browser_volumes_v1 WHERE slug=? AND batch=?').bind(slug,body.batch).first();
+    }
+    if(!reserved||reserved.revision!==r.revision)throw new Invalid('Import volume reservation changed; reopen import',409);
+    const repo=slug+'-vol-'+String(reserved.volume).padStart(3,'0');
+    try{return json({...await deps.browserImportToken(env,repo,reserved.marker),volume:reserved.volume});}
+    catch(e){const f=e.githubFailure;if(f?.throttled)return new Response(JSON.stringify({error:'GitHub rate limited; waiting'}),{status:429,headers:{'Content-Type':'application/json','Cache-Control':'no-store','Retry-After':String(Math.max(60,Number(f.retry)||0,(Number(f.reset)||0)-Math.floor(Date.now()/1000)+3))}});
+     console.error('BROWSER_IMPORT_PROVISION',String(e.message));throw new Invalid('Cannot provision private import volume. Site owner: approve GitHub App Repository creation (write) and Contents (write), with access to new repositories. '+String(e.message),503);}
+   }
+   if(local[2]==='recover'){
+    if(r.status!=='draft')throw new Invalid('Only unpublished drafts can be recovered',409);
+    if(!Number.isInteger(body.volume)||body.volume<1||body.volume>999)throw new Invalid('Invalid recovery volume');
+    const reserved=await db.prepare('SELECT volume FROM manual_browser_volumes_v1 WHERE slug=? AND revision=? AND volume=?').bind(slug,r.revision,body.volume).first();
+    if(!reserved)throw new Invalid('No reserved browser volume for this draft',404);
+    const repo=slug+'-vol-'+String(body.volume).padStart(3,'0');
+    const listing=await deps.gh(env,'GET',repo,'indexes');
+    if(listing.status===404){
+     // The last batch may have stopped before writing its index. Inventory only
+     // content-addressed page names and sizes; no binary bytes enter the Worker.
+     const pageList=await deps.gh(env,'GET',repo,'pages');
+     if(pageList.status===404)return json({indexes:[],missing:true,paths:[],size:0});
+     if(!pageList.ok)throw new Invalid('GitHub page inventory HTTP '+pageList.status,pageList.status===403?403:502);
+     const entries=await pageList.json();if(!Array.isArray(entries)||entries.length>=1000)throw new Invalid('Page inventory truncated; keep the original files and contact the site administrator',409);
+     const valid=entries.filter(x=>x.type==='file'&&/^[a-f0-9]{64}\.(png|jpg)$/.test(x.name)&&Number.isSafeInteger(x.size)&&x.size>0&&x.size<=MAX_BYTES);
+     return json({indexes:[],paths:valid.map(x=>x.name),size:valid.reduce((n,x)=>n+x.size,0)});
+    }
+    if(!listing.ok){const message=await listing.text();if(listing.status===429||listing.status===403&&(listing.headers.get('X-RateLimit-Remaining')==='0'||listing.headers.has('Retry-After')||/rate limit/i.test(message)))return new Response(JSON.stringify({error:'GitHub recovery rate limited'}),{status:429,headers:{'Content-Type':'application/json','Retry-After':listing.headers.get('Retry-After')||'60'}});throw new Invalid('GitHub recovery listing HTTP '+listing.status,listing.status===403?403:502);}
+    const entries=await listing.json();if(!Array.isArray(entries)||entries.length>=1000)throw new Invalid('Invalid or truncated GitHub index directory',409);
+    return json({indexes:entries.filter(x=>x.type==='file'&&/^[a-f0-9]{64}\.json$/.test(x.name)).map(x=>x.name.slice(0,-5)).sort()});
+   }
    if(!Number.isInteger(body.volume)||body.volume<1||body.volume>999||!SHA.test(body.index||''))throw new Invalid('Invalid volume index');
    const repo=slug+'-vol-'+String(body.volume).padStart(3,'0');
+   const receipt=await db.prepare('SELECT count FROM manual_index_receipts_v1 WHERE slug=? AND revision=? AND volume=? AND digest=?').bind(slug,r.revision,body.volume,body.index).first();
+   if(receipt&&!body.recover)return json({ok:true,count:receipt.count});
    const file=await deps.githubFile(env,repo,'indexes/'+body.index+'.json');
    if(file.throttled||file.status===429){
     const n=Number(file.retry), date=Date.parse(file.retry||''), reset=Number(file.reset)*1000;
     const seconds=Math.ceil(Math.max(60,Number.isFinite(n)?n:0,Number.isFinite(date)?(date-Date.now())/1000:0,Number.isFinite(reset)?(reset-Date.now())/1000+3:0));
     return new Response(JSON.stringify({error:'GitHub index read rate limited; wait and retry'}),{status:429,headers:{'Content-Type':'application/json','Cache-Control':'no-store','Retry-After':String(seconds)}});
    }
-   if(file.status!==200)throw new Invalid('GitHub index unavailable (HTTP '+file.status+'). Grant the existing reader GitHub App access to this private volume, then resume.',502);
+   if(file.status!==200)throw new Invalid('GitHub index unavailable (HTTP '+file.status+'). Check reader App access to this private volume and retry the existing draft.',[401,403,404].includes(file.status)?409:502);
    if(!file.body||file.body.length>128*1024||await deps.shaHex(file.body)!==body.index)throw new Invalid('Index checksum mismatch',502);
    let idx;try{idx=JSON.parse(new TextDecoder().decode(file.body));}catch{throw new Invalid('Invalid volume index');}
    if(idx.slug!==slug||idx.volume!==body.volume||!Array.isArray(idx.pages)||!idx.pages.length||idx.pages.length>100)throw new Invalid('Invalid volume index identity');
    const unique=new Set();
-   for(const p of idx.pages){if(!SHA.test(p?.sha||'')||unique.has(p.sha)||![p.width,p.height,p.size].every(Number.isSafeInteger)||p.width<1||p.height<1||p.width>20000||p.height>20000||p.width*p.height>MAX_PIXELS||p.size<45||p.size>MAX_BYTES)throw new Invalid('Invalid indexed page');unique.add(p.sha);}
-   const previous=await pages(db,slug);const known=new Set(previous.map(p=>p.sha));
-   if(previous.length+idx.pages.filter(p=>!known.has(p.sha)).length>LIMIT*3)throw new Invalid('Too many staged pages',413);
-   // 15 rows x 6 parameters, within D1's 100 bound parameter limit. Each
-   // statement checks the revision/tombstone again. Replaying is idempotent.
-   for(let i=0;i<idx.pages.length;i+=15){const part=idx.pages.slice(i,i+15);const vals=part.flatMap(p=>[slug,p.sha,p.width,p.height,p.size,repo]);
-    const selects=part.map(()=> 'SELECT ?,?,?,?,?,?').join(' UNION ALL ');
-    await db.prepare('INSERT OR IGNORE INTO manual_local_pages_v1(slug,sha,width,height,size,repo) SELECT * FROM ('+selects+') WHERE EXISTS(SELECT 1 FROM manual_comics_v1 WHERE slug=? AND revision=? AND status!=\'deleted\')').bind(...vals,slug,r.revision).run();
+   for(const p of idx.pages){if(!SHA.test(p?.sha||'')||unique.has(p.sha)||![p.width,p.height,p.size].every(Number.isSafeInteger)||p.width<1||p.height<1||p.width>20000||p.height>20000||p.width*p.height>MAX_PIXELS||p.size<45||p.size>MAX_BYTES||!['png','jpg'].includes(p.format??'png'))throw new Invalid('Invalid indexed page');unique.add(p.sha);}
+   // New encodings are only enabled in the explicitly reserved browser volume.
+   if(idx.pages.some(p=>p.format==='jpg')&&!await db.prepare('SELECT volume FROM manual_browser_volumes_v1 WHERE slug=? AND revision=? AND volume=?').bind(slug,r.revision,body.volume).first())throw new Invalid('JPEG index requires a reserved browser volume',409);
+   // Use a single JSON parameter rather than a generated UNION of dozens of
+   // SELECTs. SQLite/D1 JSON functions are already used by the catalog.
+   const compact=JSON.stringify(idx.pages.map(p=>({...p,format:p.format??'png'})));
+   const total=await db.prepare("SELECT COUNT(*) AS n FROM (SELECT sha FROM manual_pages_v1 WHERE slug=? UNION SELECT sha FROM manual_local_pages_v1 WHERE slug=? UNION SELECT json_extract(value,'$.sha') FROM json_each(?))").bind(slug,slug,compact).first();
+   if(Number(total.n)>LIMIT*3)throw new Invalid('Too many staged pages',413);
+   if(!receipt){
+    const insert=db.prepare("INSERT OR IGNORE INTO manual_local_pages_v1(slug,sha,width,height,size,repo,format) SELECT ?,json_extract(value,'$.sha'),json_extract(value,'$.width'),json_extract(value,'$.height'),json_extract(value,'$.size'),?,json_extract(value,'$.format') FROM json_each(?) WHERE EXISTS(SELECT 1 FROM manual_comics_v1 WHERE slug=? AND revision=? AND status!='deleted')").bind(slug,repo,compact,slug,r.revision);
+    const mark=db.prepare("INSERT OR IGNORE INTO manual_index_receipts_v1(slug,revision,volume,digest,count) SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM manual_comics_v1 WHERE slug=? AND revision=? AND status!='deleted')").bind(slug,r.revision,body.volume,body.index,idx.pages.length,slug,r.revision);
+    try{const results=await db.batch([insert,mark]);if(results?.some(x=>x.success===false))throw Error('D1 returned an unsuccessful batch');}catch(e){console.error('MANUAL_INDEX_D1',String(e?.message||e));throw new Invalid('D1 page-index transaction failed. Uploaded files are retained. Check Worker logs for MANUAL_INDEX_D1.',503);}
    }
    const current=await row(db,slug);if(!current||current.status==='deleted'||current.revision!==r.revision)throw new Invalid('Import changed during index registration',409);
-   return json({ok:true,count:idx.pages.length});
+   return json({ok:true,count:idx.pages.length,...(body.recover?{pages:idx.pages}: {})});
   }
   const slug=(api||image||comic)?.[1];
   if(!slug)throw new Invalid('Method not allowed',405);
@@ -187,7 +246,10 @@ export async function manualRoute(req,env,deps){
    if(!p)throw new Invalid('Page not found',404);
    const f=await deps.githubFile(env,p.repo,p.path);
    if(f.status!==200||f.body.length!==p.size||await deps.shaHex(f.body)!==sha)throw new Invalid('GitHub page missing or checksum mismatch',502);
-   return new Response(f.body,{headers:{'Content-Type':'image/png','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','ETag':'"'+sha+'"'}});
+   const format=p.format||'png';
+   if(format==='jpg'&&!(f.body[0]===255&&f.body[1]===216&&f.body[2]===255&&f.body[f.body.length-2]===255&&f.body[f.body.length-1]===217))throw new Invalid('Invalid JPEG page',502);
+   if(format==='png'&&![137,80,78,71,13,10,26,10].every((v,i)=>f.body[i]===v))throw new Invalid('Invalid PNG page',502);
+   return new Response(f.body,{headers:{'Content-Type':format==='jpg'?'image/jpeg':'image/png','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','ETag':'"'+sha+'"'}});
   }
   if(pageRoute&&method==='POST'){
    if(!deps.githubConfigured(env))throw new Invalid('GitHub streaming not configured',503);
@@ -210,7 +272,7 @@ export async function manualRoute(req,env,deps){
    return json(stored,201);
   }
   if(pageRoute)throw new Invalid('Method not allowed',405);
-  if(method==='GET')return json({...decode(r),pages:await pages(db,slug)});
+  if(method==='GET'){const volumes=r.status==='draft'?(await db.prepare('SELECT volume,batch FROM manual_browser_volumes_v1 WHERE slug=? AND revision=? ORDER BY volume DESC').bind(slug,r.revision).all()).results||[]:[];return json({...decode(r),pages:await pages(db,slug),volumes});}
   if(method==='PUT'||method==='DELETE'){
    const body=await payload(req);
    if(!Number.isInteger(body.revision)||body.revision!==r.revision)throw new Invalid('Comic changed in another tab. Reopen it before saving.',409);

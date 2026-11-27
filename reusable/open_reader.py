@@ -476,6 +476,7 @@ def _reader_hash(root):
         files[relative] = sha(file.read_bytes())
     # Source-agnostic statistics implementation affects deployed frontend hash.
     for relative in ('reusable/open_reader_journey.py',
+                     'reusable/open_reader_journey_ui.py',
                      'reusable/worker_addon/journey_worker.mjs'):
         file=Path(__file__).parent.parent/relative
         if file.is_file(): files[relative]=sha(file.read_bytes())

@@ -40,7 +40,8 @@ const post=(payload,origin=ORIGIN)=>({method:'POST',headers:{Origin:origin,'Cont
 let response=await call('/api/journey/track',post(event('12345678-aaaa-bbbb-cccc-123456789abc','chapter_read')), {city:'College Station',region:'Texas',country:'US',timezone:'America/Chicago',colo:'DFW'});
 assert.equal(response.status,202);
 assert.equal(db.batches.length,1);
-assert.equal(db.batches[0].length,3);
+assert.equal(db.batches[0].length,2);
+assert.ok(db.batches[0].every(q=>!/^DELETE/i.test(q.query)));
 assert.ok(db.batches[0][0].query.includes('INSERT INTO journey_events'));
 assert.equal(db.batches[0][0].args[6],'203.0.113.19');
 assert.equal(db.batches[0][0].args[7],'College Station');
@@ -60,9 +61,9 @@ const login=await call('/api/admin/login',{method:'POST',headers:{Origin:ORIGIN,
 assert.equal(login.status,200);
 const cookie=login.headers.get('Set-Cookie').split(';')[0];
 response=await call('/api/journey/stats',{headers:{Cookie:cookie}});assert.equal(response.status,200);
-const summary=await response.json();assert.equal(summary.retention_days,30);
+const summary=await response.json();assert.equal(summary.retention_days,null);
 assert.equal(summary.recent.length,0);
-assert.equal(db.queries.length,6);
+assert.equal(db.queries.length,7);
 assert.equal(db.maxActive,1,'D1 summary queries must not execute concurrently');
 assert.equal(db.execCalls,5,'D1 schema must initialize as five independent DDL calls');
 assert.ok(db.schemaSql.some(s=>s.includes('journey_events')));
