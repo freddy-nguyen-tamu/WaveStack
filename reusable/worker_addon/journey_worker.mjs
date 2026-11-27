@@ -1,3 +1,4 @@
+import { isManualSlug, manualChapterPublished } from './manual_import_worker.mjs';
 /* Provider-independent Open Reader visit statistics.
  * Persistent D1 records; IP details visible only to the existing reader admin.
  * Every page_view is a document navigation; every chapter_read is a confirmed
@@ -53,6 +54,7 @@ const validIP = value => typeof value==='string' && value.length<=45 &&
 const bad = (s,n=400) => new Response(JSON.stringify({ok:false,error:s}),{status:n,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
 const result = (data,n=200) => new Response(JSON.stringify(data),{status:n,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'private,no-store','X-Content-Type-Options':'nosniff'}});
 async function chapterIsPublished(req,env,slug,chapter){
+ if(isManualSlug(slug))return manualChapterPublished(env,slug,chapter);
  const url=new URL('/comics/'+slug+'/manifest.json',req.url);
  const r=await env.ASSETS.fetch(new Request(url,{method:'GET'}));
  if(!r.ok)return false;

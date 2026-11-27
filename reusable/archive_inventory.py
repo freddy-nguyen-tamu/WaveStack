@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 
 from .progress import Progress, stop_progress
+from .github_cooldown import git_throttled, backoff, wait
+from itertools import count
 
 
 class ArchiveInventoryError(RuntimeError):
@@ -38,17 +40,21 @@ _TRANSFER_RATE = re.compile(
 
 def _git(work: Path, env: dict, *args: str, binary: bool = False,
          progress_label: str | None = None) -> bytes | str:
-    if not progress_label:
-        proc = subprocess.run(['git', *args], cwd=work, env=env,
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    else:
-        command = ['git', *args]
-        if args and args[0] == 'fetch' and '--progress' not in args:
-            # Git doesn't show transfer progress through a pipe by default.
-            command.insert(2, '--progress')
-        child_env = dict(env)
-        child_env.setdefault('GIT_PROGRESS_DELAY', '0')
-        proc = _git_with_live_progress(command, work, child_env, progress_label)
+    for attempt in count():
+        if not progress_label:
+            proc = subprocess.run(['git', *args], cwd=work, env=env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        else:
+            command = ['git', *args]
+            if args and args[0] == 'fetch' and '--progress' not in args:
+                # Git doesn't show transfer progress through a pipe by default.
+                command.insert(2, '--progress')
+            child_env = dict(env)
+            child_env.setdefault('GIT_PROGRESS_DELAY', '0')
+            proc = _git_with_live_progress(command, work, child_env, progress_label)
+        if not (proc.returncode and args and args[0] in ('fetch','ls-remote','show') and git_throttled(proc.stderr)):
+            break
+        wait(backoff(attempt),'GitHub archive inventory rate limit')
     if proc.returncode:
         reason = proc.stderr.decode('utf-8', 'replace')[-1200:]
         raise ArchiveInventoryError(f"Git archive inspection failed ({args[0]}): {reason}")
@@ -259,3 +265,4 @@ def read_remote_chapters(owner: str, repo: str, env: dict, trusted_manifests: di
             bar.update(len(chapters), detail=f'{ident} checked')
         bar.complete('all remote manifests checked')
         return chapters
+

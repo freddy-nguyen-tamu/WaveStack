@@ -1,3 +1,4 @@
+import { manualRoute } from './manual_import_worker.mjs';
 import { journeyRoute, journeyConfigured, purgeJourneyEvents } from './journey_worker.mjs';
 /* Cloudflare Worker entrypoint for the EXISTING shared-reader assets.
  * Required bindings: env.ASSETS (Workers static assets), env.PANEL_REPLACEMENTS
@@ -273,7 +274,7 @@ async function githubToken(env) {
       'X-GitHub-Api-Version':'2026-03-10','User-Agent':'open-reader-streaming'},
     body:'{}'
   });
-  if(!r.ok)throw new Error('GitHub App installation rejected credential: '+r.status);
+  if(!r.ok){const e=new Error('GitHub App installation rejected credential: '+r.status);e.githubFailure=await githubFailure(r);throw e;}
   const data=await r.json();
   if(typeof data.token!=='string' || !data.expires_at)throw new Error('Invalid installation token response');
   githubInstallation={value:data.token,expires:Date.parse(data.expires_at)};
@@ -291,9 +292,16 @@ async function gh(env, method, repo, path, {accept='application/vnd.github+json'
     ...(data?{'Content-Type':'application/json'}:{})},
     ...(data?{body:JSON.stringify(data)}:{})});
 }
+async function githubFailure(response) {
+  const remaining=response.headers.get('X-RateLimit-Remaining'),retry=response.headers.get('Retry-After'),reset=response.headers.get('X-RateLimit-Reset');
+  const throttled=response.status===429||(response.status===403&&(remaining==='0'||retry||/secondary rate limit|api rate limit exceeded|abuse detection/i.test(await response.text())));
+  return {status:response.status,throttled:!!throttled,retry,reset:remaining==='0'?reset:null};
+}
 async function githubFile(env, repo, path) {
-  const response=await gh(env,'GET',repo,path,{accept:'application/vnd.github.raw+json'});
-  if(!response.ok)return {status:response.status};
+  let response;
+  try{response=await gh(env,'GET',repo,path,{accept:'application/vnd.github.raw+json'});}
+  catch(e){if(e.githubFailure?.throttled)return e.githubFailure;throw e;}
+  if(!response.ok)return githubFailure(response);
   let body=new Uint8Array(await response.arrayBuffer());
   // GitHub Contents can return JSON metadata even when a raw-image media
   // type was requested. Decode only a bounded, validated file response.
@@ -543,6 +551,8 @@ export default {
     // All public routes, including static assets and image streams, require the
     // same site session. Credentials never enter any public file or JS bundle.
     if(!await validSession(req,env))return unauthenticated(req);
+    const manual=await manualRoute(req,env,{gh,githubFile,shaHex,boundedBody,githubConfigured});
+    if(manual)return renewIfNeeded(req,env,manual);
     const journey = await journeyRoute(req,env,(r,e)=>validSession(r,e));
     if(journey)return renewIfNeeded(req,env,journey);
     if(path==='/api/reader-health' && req.method==='GET')return json({ok:true,script:'open-reader-panel-replacement-v1',

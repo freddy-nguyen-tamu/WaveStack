@@ -318,6 +318,8 @@ def _volume_manifest_candidates(engine, owner, token, repos, page_projects, exis
         if not matched:
             continue
         slug = matched.group(1)
+        if re.fullmatch(r'import-[a-f0-9]{32}',slug):
+            continue  # local imports use their own D1 catalog; never recover tombstones or drafts
         if slug in existing:  # current local DB, GitHub reader or legacy Pages is richer
             continue
         host = page_projects.get(repo)
@@ -477,6 +479,8 @@ def _reader_hash(root):
                      'reusable/worker_addon/journey_worker.mjs'):
         file=Path(__file__).parent.parent/relative
         if file.is_file(): files[relative]=sha(file.read_bytes())
+    from .manual_import import hash_inputs
+    files.update(hash_inputs(root))
     return sha(canonical(files))
 
 
@@ -803,8 +807,12 @@ def stage_worker_assets(root, registry, stage, *, partial_records=None):
         ('reader_chapter_enhancement.css', 'reader-chapter-enhancement.css'),
     ):
         shutil.copy2(Path(root) / 'reusable' / source_name, stage / staged_name)
-    for slug, comic in sorted(registry['comics'].items()):
-        dest = stage / 'comics' / slug
+    from . import manual_import
+    render_comics = sorted(registry['comics'].items())
+    if manual_import.enabled(root):
+        render_comics.append(('__manual_template__', {'title':'Imported comic template','chapters':[]}))
+    for slug, comic in render_comics:
+        dest = stage / 'manual-reader-template' if slug == '__manual_template__' else stage / 'comics' / slug
         dest.mkdir(parents=True, exist_ok=True)
         for file in (Path(root) / 'reader').iterdir():
             if file.is_file():
@@ -1110,6 +1118,7 @@ def stage_worker_assets(root, registry, stage, *, partial_records=None):
     from .open_reader_journey import augment_assets as stage_journey
     journey = stage_journey(stage)
     print(f'open-reader: Your Journey tracking on {journey["tracked_html_routes"]} HTML routes', flush=True)
+    manual_import.stage_assets(root, stage)
     return payload
 
 

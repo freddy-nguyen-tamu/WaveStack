@@ -103,6 +103,8 @@ def augment_assets(stage: Path) -> dict:
         folder=stage/route;folder.mkdir(parents=True,exist_ok=True)
         (folder/'index.html').write_text(html,encoding='utf-8')
     appfiles=list((stage/'comics').glob('*/app.js')) if (stage/'comics').exists() else []
+    template_app=stage/'manual-reader-template'/'app.js'
+    if template_app.is_file(): appfiles.append(template_app)
     hook='  chapter=manifest.chapters[chapterIndex];'
     signal="  window.dispatchEvent(new CustomEvent('open-reader:chapter-ready',{detail:{chapterId:chapter.id}}));"
     for app in appfiles:

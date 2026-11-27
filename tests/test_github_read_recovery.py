@@ -36,7 +36,7 @@ class GithubReadRecovery(unittest.TestCase):
                 engine.credential_for_selected(object())
             self.assertEqual(get.call_count,2)
     def test_auth_denied_not_retried(self):
-        for status in (401,403,429):
+        for status in (401,403):
             with self.subTest(status=status),patch.object(engine.requests,'get',return_value=response(status)) as get:
                 with self.assertRaisesRegex(RuntimeError,'HTTP '+str(status)):
                     engine.credential_for_selected(object())

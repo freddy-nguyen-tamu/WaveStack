@@ -33,6 +33,8 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import parse_qs, urljoin, urlsplit, urlunsplit
 
 import requests
+from reusable.github_cooldown import response_delay, wait as github_wait, git_run, git_throttled, backoff
+from itertools import count
 from bs4 import BeautifulSoup
 from PIL import Image
 
@@ -947,7 +949,7 @@ def _shared_github_auth_metadata():
             pass
     if root_db.is_file():
         try:
-            with sqlite3.connect(str(root_db), timeout=5) as old:
+            with contextlib.closing(sqlite3.connect(str(root_db), timeout=5)) as old:
                 rows = dict(old.execute(
                     "SELECT key,value FROM options "
                     "WHERE key IN ('github_owner','github_credential_namespace')"
@@ -1016,7 +1018,7 @@ def isolated_git_environment():
 
 
 def git(args, *, cwd=None, check=True, stdin=None, text_output=True):
-    p = subprocess.run(["git", *args], input=stdin, cwd=cwd, env=isolated_git_environment(),
+    p = git_run(["git", *args], input=stdin, cwd=cwd, env=isolated_git_environment(),
                        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if check and p.returncode:
         # Git errors can contain remote URLs; no tokens are ever placed in URLs by us.
@@ -1051,7 +1053,7 @@ def github_login(db, force=False):
     print("No manually created token, saved HTML file, or Git configuration changes are needed.")
     # Username intentionally omitted so the browser account choice comes first.
     prompt = "protocol=https\nhost=github.com\n\n"
-    proc = subprocess.run(["git", "credential", "fill"], input=prompt,
+    proc = git_run(["git", "credential", "fill"], input=prompt,
                           text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     if proc.returncode:
         raise RuntimeError("GitHub browser sign-in was not completed. Retry the setup or --github-login. "
@@ -1060,7 +1062,7 @@ def github_login(db, force=False):
     token = secret.get("password")
     if not token:
         raise RuntimeError("Git Credential Manager did not return a usable authentication result")
-    response = requests.get(GITHUB_API + "/user", headers={
+    response = _github_read_with_retry(requests.get, GITHUB_API + "/user", headers={
         "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28"}, timeout=20)
     if response.status_code != 200:
@@ -1085,24 +1087,31 @@ def github_login(db, force=False):
 
 def _github_read_with_retry(request, *args, **kwargs):
     """Bounded retries for read-only GitHub requests; never replay a write."""
-    for attempt in range(3):
+    attempt = 0
+    rate_attempt = 0
+    while True:
         try:
             response = request(*args, **kwargs)
         except requests.exceptions.SSLError:
-            # Certificate errors are not transient connection failures.
             raise
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
             if attempt == 2:
                 raise RuntimeError('GitHub read unavailable after 3 attempts; existing checkpoints retained. Retry the normal run later.') from exc
             reason = type(exc).__name__
         else:
+            delay = response_delay(response, rate_attempt)
+            if delay is not None:
+                event('WAIT_GITHUB_API', wait_seconds=delay, reason='explicit_rate_limit')
+                github_wait(delay, 'GitHub API read rate limit', sleep=time.sleep)
+                rate_attempt += 1
+                continue
             if response.status_code not in (408, 500, 502, 503, 504) or attempt == 2:
                 return response
             reason = 'HTTP ' + str(response.status_code)
         delay = 2 ** (attempt + 1)
-        event('GITHUB_READ_RETRY', attempt=attempt + 1, next_attempt=attempt + 2,
-              wait_seconds=delay, reason=reason)
+        event('GITHUB_READ_RETRY', attempt=attempt + 1, next_attempt=attempt + 2, wait_seconds=delay, reason=reason)
         time.sleep(delay)
+        attempt += 1
 
 
 def credential_for_selected(db):
@@ -1115,7 +1124,7 @@ def credential_for_selected(db):
     if not namespace:
         raise RuntimeError('Saved GitHub namespace missing. Run python run.py --github-login once; no implicit OAuth attempted.')
     env["GCM_NAMESPACE"] = namespace
-    p = subprocess.run(["git", "credential", "fill"], input=f"protocol=https\nhost=github.com\nusername={owner}\n\n",
+    p = git_run(["git", "credential", "fill"], input=f"protocol=https\nhost=github.com\nusername={owner}\n\n",
                        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     if p.returncode:
         raise RuntimeError('Saved GitHub credential lookup failed for the selected namespace. '
@@ -1140,39 +1149,21 @@ def github_http(method, url, token, **kwargs):
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
                "X-GitHub-Api-Version": "2022-11-28"}
     headers.update(kwargs.pop("headers", {}))
-    for attempt in range(4):
-        if method.upper() in {"GET", "HEAD"}:
+    for attempt in count():
+        if method.upper() in {'GET', 'HEAD'}:
             response = _github_read_with_retry(requests.request, method, url, headers=headers, timeout=40, **kwargs)
         else:
+            # Retry only an explicitly rejected rate-limited write. Never replay
+            # a connection loss, 5xx, or an ordinary permission denial here.
             response = requests.request(method, url, headers=headers, timeout=40, **kwargs)
-        remaining = response.headers.get("X-RateLimit-Remaining")
-        reset_raw = response.headers.get("X-RateLimit-Reset")
-        event("GITHUB_API_QUOTA", method=method, status=response.status_code,
-              remaining=remaining or "UNKNOWN", reset_unix=reset_raw or "UNKNOWN")
-        if response.status_code not in (403, 429):
+        remaining = response.headers.get('X-RateLimit-Remaining')
+        event('GITHUB_API_QUOTA', method=method, status=response.status_code,
+              remaining=remaining or 'UNKNOWN', reset_unix=response.headers.get('X-RateLimit-Reset') or 'UNKNOWN')
+        delay = response_delay(response, attempt)
+        if delay is None:
             return response
-        # Permission errors are not rate errors. Never retry permanent 403 blindly.
-        secondary = "secondary rate limit" in response.text.lower()
-        primary = remaining == "0"
-        if not (secondary or primary or response.status_code == 429):
-            return response
-        retry = response.headers.get("Retry-After")
-        if retry and retry.isdecimal():
-            delay = float(retry)
-        elif primary and reset_raw and reset_raw.isdecimal():
-            delay = max(60., int(reset_raw) - time.time() + 2)
-        else:
-            delay = max(60., 60. * (2 ** attempt))
-        wake = datetime.fromtimestamp(time.time() + delay, timezone.utc).isoformat(timespec="seconds")
-        event("WAIT_GITHUB_API", wait_seconds=round(delay, 2), resume_at_utc=wake,
-              reason="primary" if primary else "secondary_or_429")
-        if delay > 1800:
-            raise RuntimeError(f"GitHub API rate limit pause; retry after {wake} UTC. Run --resume --authorized")
-        if method.upper() not in {"GET", "HEAD"}:
-            # A write may have succeeded even if its response was ambiguous.
-            raise RuntimeError(f"GitHub write was rate-limited; safely retry manually after {wake} UTC")
-        time.sleep(delay)
-    raise RuntimeError("GitHub API request remains rate-limited after bounded retries")
+        event('WAIT_GITHUB_API', wait_seconds=delay, reason='explicit_rate_limit')
+        github_wait(delay, 'GitHub API write rate limit', sleep=time.sleep)
 
 
 def ensure_remote_repo(name, db, token):
@@ -1233,7 +1224,7 @@ def _verify_remote_chapter_tree(remote: str, env: dict, commit: str,
         check = Path(vv)
 
         def verify_git(*args):
-            proc = subprocess.run(['git', *args], cwd=check, env=env,
+            proc = git_run(['git', *args], cwd=check, env=env,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if proc.returncode:
                 raise RuntimeError('GitHub remote tree verification failed: '
@@ -1286,7 +1277,7 @@ def stage_one_chapter(db, repo, chapter, files, manifest, token):
     env['GCM_NAMESPACE'] = get_option(db, 'github_credential_namespace') or 'comic-archiver-unauthorized'
 
     def g(*args, cwd):
-        p = subprocess.run(['git', *args], cwd=cwd, env=env, text=True,
+        p = git_run(['git', *args], cwd=cwd, env=env, text=True,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if p.returncode:
             raise RuntimeError(f'git {args[0]} failed: {p.stderr[-900:]}')
@@ -1298,7 +1289,7 @@ def stage_one_chapter(db, repo, chapter, files, manifest, token):
         work = Path(tmp)
         g('init', '-q', '-b', 'main', cwd=work)
         g('remote', 'add', 'origin', remote, cwd=work)
-        latest = subprocess.run(['git', 'fetch', '--depth=1', '--filter=blob:none', 'origin', 'main'],
+        latest = git_run(['git', 'fetch', '--depth=1', '--filter=blob:none', 'origin', 'main'],
                                 cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if latest.returncode and 'couldn\'t find remote ref' not in latest.stderr and 'could not find remote ref' not in latest.stderr:
             raise RuntimeError('Could not fetch existing repository safely: ' + latest.stderr[-900:])
@@ -1332,7 +1323,7 @@ def stage_one_chapter(db, repo, chapter, files, manifest, token):
         input_paths = [str(file) for file in files]
         if any('\n' in path or '\r' in path for path in input_paths):
             raise RuntimeError('Unsafe newline in image path')
-        proc = subprocess.run(['git', 'hash-object', '-w', '--stdin-paths'], cwd=work,
+        proc = git_run(['git', 'hash-object', '-w', '--stdin-paths'], cwd=work,
                               env=env, input='\n'.join(input_paths) + '\n', text=True,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if proc.returncode:
@@ -1346,7 +1337,7 @@ def stage_one_chapter(db, repo, chapter, files, manifest, token):
         # Fetch the old README only once (the existing remote repo is filtered).
         prior_readme = ''
         if parent:
-            old = subprocess.run(['git', 'show', f'{parent}:README.md'], cwd=work, env=env,
+            old = git_run(['git', 'show', f'{parent}:README.md'], cwd=work, env=env,
                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             if old.returncode == 0:
                 prior_readme = old.stdout.decode('utf-8', errors='replace')
@@ -1370,7 +1361,7 @@ def stage_one_chapter(db, repo, chapter, files, manifest, token):
         # One atomic index update instead of a process per image.
         records = b''.join((f'100644 {obj}\t{path}'.encode('utf-8') + b'\0')
                            for path, obj in expected_blobs.items())
-        staged = subprocess.run(['git', 'update-index', '-z', '--index-info'], cwd=work, env=env,
+        staged = git_run(['git', 'update-index', '-z', '--index-info'], cwd=work, env=env,
                                 input=records, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if staged.returncode:
             raise RuntimeError('Git batch index update failed: ' + staged.stderr.decode('utf-8', 'replace')[-900:])
@@ -1485,7 +1476,7 @@ def update_volume_readme(db, repo: str, reader_url: str, volume_url: str, *, rem
     with tempfile.TemporaryDirectory(prefix='comic-volume-readme-') as dirname:
         wd=Path(dirname)
         def g(*args, check=True):
-            proc=subprocess.run(['git',*args],cwd=wd,env=env,capture_output=True)
+            proc=git_run(['git',*args],cwd=wd,env=env,capture_output=True)
             if proc.returncode and check:
                 raise RuntimeError('Volume README Git failure: '+proc.stderr.decode('utf-8','replace')[-600:])
             return proc
@@ -1517,7 +1508,7 @@ def update_volume_readme(db, repo: str, reader_url: str, volume_url: str, *, rem
         with tempfile.TemporaryDirectory(prefix='comic-readme-check-') as verifydir:
             check=Path(verifydir)
             def gv(*args):
-                proc=subprocess.run(['git',*args],cwd=check,env=env,capture_output=True)
+                proc=git_run(['git',*args],cwd=check,env=env,capture_output=True)
                 if proc.returncode:
                     raise RuntimeError('Could not independently verify remote README')
                 return proc.stdout
@@ -1542,7 +1533,7 @@ def archive_reader_source(db, slug, site_dir, token, reader_url=None):
     with tempfile.TemporaryDirectory(prefix="comic-reader-source-") as tmp:
         tmp = Path(tmp)
         def run(*args, binary=False, check=True):
-            proc = subprocess.run(["git", *args], cwd=tmp, env=env, stdout=subprocess.PIPE,
+            proc = git_run(["git", *args], cwd=tmp, env=env, stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE)
             if proc.returncode and check:
                 raise RuntimeError("Reader Git operation failed: " + proc.stderr.decode(errors="replace")[-800:])
@@ -1551,7 +1542,7 @@ def archive_reader_source(db, slug, site_dir, token, reader_url=None):
         run("remote", "add", "origin", remote)
         # Reader source is small: download blobs in ONE fetch to avoid a
         # network round trip for every README/source file during verification.
-        fetched = subprocess.run(["git", "fetch", "--depth=1", "origin", "main"],
+        fetched = git_run(["git", "fetch", "--depth=1", "origin", "main"],
                                  cwd=tmp, env=env, capture_output=True)
         if fetched.returncode and b"remote ref" not in fetched.stderr:
             raise RuntimeError("Cannot fetch reader repository before updating")
@@ -1608,7 +1599,7 @@ def archive_reader_source(db, slug, site_dir, token, reader_url=None):
         with tempfile.TemporaryDirectory(prefix="comic-reader-verify-") as vv:
             v = Path(vv)
             def vrun(*args):
-                p = subprocess.run(["git", *args], cwd=v, env=env, capture_output=True)
+                p = git_run(["git", *args], cwd=v, env=env, capture_output=True)
                 if p.returncode:
                     raise RuntimeError("Reader source remote verification failed")
                 return p.stdout
@@ -2247,7 +2238,7 @@ def cloudflare_account_env():
     return env
 
 
-def _run_monitored_command(cmd, *, cwd, env, label, show_provider_lines=False, provider_name="Wrangler"):
+def _run_monitored_command_once(cmd, *, cwd, env, label, show_provider_lines=False, provider_name="Wrangler"):
     """Read both output streams while printing a heartbeat even if Wrangler is silent.
 
     On Windows subprocess.run(text=True) uses the console encoding (often cp1252),
@@ -2343,6 +2334,14 @@ def _run_monitored_command(cmd, *, cwd, env, label, show_provider_lines=False, p
         return bytes(data).decode('utf-8-sig', errors='replace')
     return subprocess.CompletedProcess(cmd, code, decode(captures['stdout']),
                                        decode(captures['stderr']))
+
+
+def _run_monitored_command(cmd, *, cwd, env, label, show_provider_lines=False, provider_name="Wrangler"):
+    for attempt in count():
+        p = _run_monitored_command_once(cmd,cwd=cwd,env=env,label=label,show_provider_lines=show_provider_lines,provider_name=provider_name)
+        if not (provider_name=='Git' and len(cmd)>1 and cmd[1] in ('fetch','ls-remote','clone') and p.returncode and git_throttled(p.stderr)):
+            return p
+        github_wait(backoff(attempt),'GitHub monitored transfer rate limit',sleep=time.sleep)
 
 
 def npx_wrangler(args, cwd=ROOT, check=True, progress_label=None):
@@ -2610,7 +2609,7 @@ def _fetch_verified_files(db, rows, target, owner, *, remote_url=None):
         env = isolated_git_environment()
         env['GCM_NAMESPACE'] = get_option(db, 'github_credential_namespace') or 'comic-archiver-unauthorized'
         def git(*params):
-            proc = subprocess.run(['git', *params], cwd=src, env=env,
+            proc = git_run(['git', *params], cwd=src, env=env,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if proc.returncode:
                 raise RuntimeError('Git rebuild failure: ' +

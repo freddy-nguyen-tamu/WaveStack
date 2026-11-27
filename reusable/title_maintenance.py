@@ -17,6 +17,8 @@ import tempfile
 from pathlib import Path
 
 from .progress import Progress, stop_progress
+from .github_cooldown import git_throttled, wait, backoff, git_run
+from itertools import count
 
 
 TITLE_FIELDS = frozenset({'chapter_title', 'title_source', 'label'})
@@ -44,7 +46,13 @@ def manifest_missing_title(manifest: dict) -> bool:
     return not candidate_title(manifest.get('chapter_title'))
 
 
-def _exec_git(work: Path, env: dict, *args: str, raw: bool = False,
+def _git_action(args):
+    i=0
+    while i+1<len(args) and args[i]=='-c':i+=2
+    return args[i] if i<len(args) else ''
+
+
+def _exec_git_once(work: Path, env: dict, *args: str, raw: bool = False,
               allow_failure: bool = False, data: bytes | None = None,
               progress=None, timeout: float = 300) -> bytes | str | None:
     # Bound every call, and show elapsed time even when Git emits no output.
@@ -78,11 +86,27 @@ def _exec_git(work: Path, env: dict, *args: str, raw: bool = False,
             if stream is not None:
                 stream.close()
     if proc.returncode:
-        if allow_failure:
+        if allow_failure and not (_git_action(args) in ('push','fetch','ls-remote') and git_throttled(err)):
             return None
         detail = err.decode('utf-8', errors='replace')[-1100:]
         raise RuntimeError(f'Git title metadata operation {args[0]} failed: {detail}')
     return out if raw else out.decode('utf-8', errors='replace').strip()
+
+
+def _exec_git(work: Path, env: dict, *args: str, raw: bool=False,
+              allow_failure: bool=False, data: bytes|None=None, progress=None, timeout: float=300):
+    for attempt in count():
+        try:
+            return _exec_git_once(work,env,*args,raw=raw,allow_failure=allow_failure,data=data,progress=progress,timeout=timeout)
+        except RuntimeError as exc:
+            if _git_action(args) not in ('push','fetch','ls-remote') or not git_throttled(str(exc)):raise
+            if _git_action(args)=='push' and (len(args)!=3 or not re.fullmatch(r'[0-9a-f]{40,64}:refs/heads/main',args[2])):raise
+            wait(backoff(attempt),'GitHub title metadata rate limit')
+            if _git_action(args)=='push':
+                commit,ref=args[2].split(':',1)
+                p=git_run(['git','ls-remote',args[1],ref],cwd=work,env=env,capture_output=True,timeout=120)
+                if p.returncode:raise
+                if p.stdout.decode('utf-8','replace').split()[:1]==[commit]:return b'' if raw else ''
 
 
 def _manifest_tree(git, commit, paths):
