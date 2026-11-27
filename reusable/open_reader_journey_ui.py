@@ -73,18 +73,18 @@ footer{color:var(--or-muted)!important}
 </style></head>
 <body><header><a href="/">← Open Reader</a><h1>Your Journey</h1><p>Visits in chronological IP periods · private administrator view</p></header>
 <main><div class="metrics"><div class="metric"><strong id="pagecount">–</strong><span>Page visits</span></div><div class="metric"><strong id="readcount">–</strong><span>Chapter opens</span></div><div class="metric"><strong id="periodcount">–</strong><span>IP periods loaded</span></div><div class="metric"><strong id="citycount">–</strong><span>Locations (chapter opens)</span></div></div>
-<section><div id="timeline-toolbar"><div><strong>Chronological visitor tree</strong><p>Downward timeline · each uninterrupted IP run is one colored segment · click anywhere on a segment</p></div><div><button id="refresh" type="button">Refresh</button> <button id="full" type="button">View full tree page</button> <button id="logout" type="button">Sign out</button></div></div>
-<div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin:0 0 12px"><label for="archive-select">History source</label><select id="archive-select" style="font:inherit;max-width:100%;padding:10px;border:1px solid var(--or-border);border-radius:6px;background:#fff"><option value="">Recent visits (D1)</option></select><button id="archive-load" type="button">Load archived batches</button><span id="archive-status" role="status" style="font-size:13px;color:var(--or-muted)"></span></div><div id="timeline-shell"><div id="fullscreen-tools"><button id="exit-full" type="button">Exit full screen</button></div><div id="timeline-scroll"><svg id="timeline-svg" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Chronological IP-period tree"></svg></div><div class="fullscreen-tip">Scaled to show the current tree page · Esc or Back to exit</div></div>
+<section><div id="timeline-toolbar"><div><strong>Chronological visitor tree</strong><p>Downward timeline · each uninterrupted IP run is one colored segment · click anywhere on a segment; archival batch boundaries may split an IP run</p></div><div><button id="refresh" type="button">Refresh</button> <button id="full" type="button">View full tree page</button> <button id="logout" type="button">Sign out</button></div></div>
+<div id="timeline-shell"><div id="fullscreen-tools"><button id="exit-full" type="button">Exit full screen</button></div><div id="timeline-scroll"><svg id="timeline-svg" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Chronological IP-period tree"></svg></div><div class="fullscreen-tip">Scaled to show the current tree page · Esc or Back to exit</div></div>
 <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-top:12px"><button id="newer" type="button" disabled>Newer periods</button><button id="older" type="button" disabled>Older periods</button></div>
 <div id="info" role="status" aria-live="polite">Loading your timeline…</div><div id="empty" hidden>No visitor periods recorded yet.</div></section>
 <dialog id="modal" aria-label="Visitor period details"><div class="modalheader"><div><h2 id="detailtitle">Visitor period</h2><small id="detailmeta"></small></div><button id="close" type="button" aria-label="Close details">Close ×</button></div><div class="modalbody"><div id="map" aria-label="Draggable approximate location map"></div><div id="map-message"></div><div id="action-scroll"><table id="actions"><thead><tr><th>Time</th><th>Event</th><th>Route / chapter</th><th>Approximate location</th></tr></thead><tbody id="actionbody"></tbody></table></div><button id="loadmore" type="button">Load more actions</button></div></dialog>
-<footer style="color:#61748a;padding:15px 5px;font-size:.82rem">Recent detailed records move nightly to a private GitHub archive after verified transfer. Select an archived batch to view its timeline; an IP period spanning batches is shown in separate segments. Lifetime totals remain available. Approximate location is based on Cloudflare's network geolocation, not GPS. Map tiles © OpenStreetMap contributors.</footer></main>
+<footer style="color:#61748a;padding:15px 5px;font-size:.82rem">The timeline includes recent and historical visits automatically. Older records are retrieved on demand from the private archive. Lifetime totals remain available. Approximate location is based on Cloudflare's network geolocation, not GPS. Map tiles © OpenStreetMap contributors.</footer></main>
 <script>
 (()=>{'use strict';
 const $=id=>document.getElementById(id),NS='http://www.w3.org/2000/svg';
 const shell=$('timeline-shell'),svg=$('timeline-svg'),modal=$('modal');
-let archiveId="",archiveOffset=0,archiveDone=false;
-let periods=[],active=null,periodOffset=0,olderOffset=null,snapshot=null,fetching=false,nextEvents=null,map=null,mapMarkers=null,allGeo=[],fullscreenBack=false,actionGeneration=0,actionBusy=false;
+let timelinePages=[],timelinePage=-1;
+let periods=[],active=null,fetching=false,nextEvents=null,map=null,mapMarkers=null,allGeo=[],fullscreenBack=false,actionGeneration=0,actionBusy=false;
 const nice=t=>{const d=new Date(t);return Number.isFinite(d.valueOf())?d.toLocaleString(undefined,{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'}):'Unknown'};
 const num=n=>Number(n||0).toLocaleString();
 function color(ip,id){let x=2166136261;for(const c of ip+'|'+id){x^=c.charCodeAt(0);x=Math.imul(x,16777619)}return 'hsl('+((x>>>0)%360)+' 68% 43%)'}
@@ -97,7 +97,7 @@ function draw(){
  svg.append(sEl('text',{x:20,y:29,'font-size':15,fill:'#565959','font-weight':700},'EARLIEST ON THIS PAGE ↓  |  IP period sequence'));
  let previous=125;
  periods.forEach((p,i)=>{
-  const y=54+i*unit,col=color(p.ip,p.period_id),x=lane(p.ip,p.period_id);
+  const y=54+i*unit,col=color(p.ip,p.start_at),x=lane(p.ip,i);
   // A colored branch connects every period to its predecessor.
   if(i)svg.append(sEl('path',{d:`M ${previous} ${y-32} V ${y-12} H ${x} V ${y+14}`,fill:'none',stroke:col,'stroke-width':5,'stroke-linejoin':'round',opacity:.74}));
   const g=sEl('g',{class:'period',role:'button',tabindex:'0','aria-label':`${p.ip}-${nice(p.start_at)} to ${nice(p.end_at)}; ${p.actions} actions`});
@@ -107,30 +107,64 @@ function draw(){
   g.append(sEl('line',{x1:x,y1:y+36,x2:710,y2:y+36,stroke:col,'stroke-width':3,'stroke-dasharray':'10 8'}));
   g.append(sEl('text',{x:725,y:y+25,'font-size':18,'font-weight':750,fill:'#0f1111'},`${p.ip} · ${num(p.actions)} actions`));
   g.append(sEl('text',{x:725,y:y+53,'font-size':13,fill:'#565959'},`${nice(p.start_at)}  →  ${nice(p.end_at)}`));
-  g.append(sEl('text',{x:725,y:y+73,'font-size':12,fill:'#565959'},`Period ${p.period_id} · ${p.city||'Unknown'}, ${p.country||'Unknown'}`));
+  g.append(sEl('text',{x:725,y:y+73,'font-size':12,fill:'#565959'},`Period · ${p.city||'Unknown'}, ${p.country||'Unknown'}`));
   g.addEventListener('click',()=>openPeriod(p));g.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openPeriod(p)}});
   svg.append(g);previous=x;
  });
  if(document.fullscreenElement===shell){svg.style.width='100%';svg.style.height='100%';svg.setAttribute('preserveAspectRatio','xMidYMid meet')}
  $('periodcount').textContent=num(periods.length);
 }
-async function read(url){const r=await fetch(url,{credentials:'same-origin',cache:'no-store'});if(r.status===401){location.replace('/login/?next='+encodeURIComponent(location.pathname));throw Error('Sign-in required')}const d=await r.json();if(!r.ok)throw Error(d.error||'Request failed');return d}
-function updatePaging(){ $('newer').disabled=fetching||periodOffset===0;$('older').disabled=fetching||olderOffset===null; }
-async function loadPeriods(offset=0,renew=false){if(fetching)return;fetching=true;updatePaging();try{
-  $('info').textContent='Loading chronological IP runs…';
-  if(renew){const stats=await read('/api/journey/stats');$('pagecount').textContent=num(stats.totals.page_view);$('readcount').textContent=num(stats.totals.chapter_read);$('citycount').textContent=num(stats.location_count??stats.cities?.length);}
-  const query='/api/journey/periods?offset='+offset+(!renew&&snapshot!==null?'&snapshot='+snapshot:'')+(archiveId?'&archive='+archiveId:'');
-  const data=await read(query);
-  if(!Array.isArray(data.periods)||!Number.isSafeInteger(data.snapshot)||data.snapshot<0||
-    (data.next_offset!==null&&(!Number.isSafeInteger(data.next_offset)||data.next_offset<=offset)))throw Error('Invalid history pagination response');
-  snapshot=data.snapshot;periodOffset=offset;olderOffset=data.next_offset;
-  periods=data.periods.sort((a,b)=>a.period_id-b.period_id);draw();$('empty').hidden=periods.length!==0;
-  shell.scrollTop=0;$('info').textContent=periods.length?`Showing ${num(periods.length)} IP periods, oldest first within this page. ${num(offset)} newer periods. Use Older periods to browse this batch; select archived batches for older visits.`:(archiveId?'No visits in this archived batch.':'No pending visits. Select an archived batch to view history.');
+async function read(url){const r=await fetch(url,{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(35000)});if(r.status===401){location.replace('/login/?next='+encodeURIComponent(location.pathname));throw Error('Sign-in required')}const d=await r.json();if(!r.ok)throw Error(d.error||'Request failed');return d}
+// A bounded, lazy cursor over the recent DB and immutable GitHub batches.
+// Each entry carries its source + snapshot for the existing period details API.
+function newTimelineCursor(){return {recent:true,recentOffset:0,recentSnapshot:null,archiveOffset:0,archiveSnapshot:null,archives:[],archiveOffsetWithin:0,archiveDone:false,buffer:[]};}
+function timelineMore(c){return c.buffer.length>0||c.recent||c.archives.length>0||!c.archiveDone;}
+async function nextTimelinePage(cursor,readPage){
+ const c=structuredClone(cursor),out=[];let reads=0;
+ // At most one recent request and two archive-content requests per view.
+ // Do not scan the entire archive just to build the newest timeline page.
+ while(out.length<250&&timelineMore(c)){
+  if(c.buffer.length){out.push(...c.buffer.splice(0,250-out.length));continue;}
+  if(reads>=3&&out.length)break;
+  if(c.recent){
+   const d=await readPage('/api/journey/periods?unified=1&offset='+c.recentOffset+(c.recentSnapshot!==null?'&snapshot='+c.recentSnapshot:'')+(c.archiveSnapshot!==null?'&epoch='+c.archiveSnapshot:''));reads++;
+   validateTimelinePage(d,c.recentOffset);if(!Number.isSafeInteger(d.archive_epoch)||d.archive_epoch<0)throw Error('Invalid history epoch');c.archiveSnapshot=d.archive_epoch;c.recentSnapshot=d.snapshot;
+   c.buffer=d.periods.map(p=>({...p,sourceArchive:'',sourceSnapshot:d.snapshot,sourceEpoch:d.archive_epoch}));
+   c.recent=d.next_offset!==null;c.recentOffset=d.next_offset??0;
+   continue;
+  }
+  if(!c.archives.length){
+   if(c.archiveDone)break;
+   const d=await readPage('/api/journey/archives?offset='+c.archiveOffset+(c.archiveSnapshot!==null?'&snapshot='+c.archiveSnapshot:''));
+   if(!Array.isArray(d.batches)||!Number.isSafeInteger(d.snapshot)||d.snapshot<0||d.batches.some(b=>!/^[a-f0-9]{64}$/.test(b.digest))||(d.next_offset!==null&&(!Number.isSafeInteger(d.next_offset)||d.next_offset<=c.archiveOffset)))throw Error('Invalid history index');
+   c.archiveSnapshot=d.snapshot;c.archives=d.batches.map(b=>b.digest);c.archiveDone=d.next_offset===null;c.archiveOffset=d.next_offset??0;
+   if(!c.archives.length)break;
+  }
+  const archive=c.archives[0];
+  try{
+   const d=await readPage('/api/journey/periods?archive='+archive+'&offset='+c.archiveOffsetWithin);reads++;
+   validateTimelinePage(d,c.archiveOffsetWithin);
+   c.buffer=d.periods.map(p=>({...p,sourceArchive:archive,sourceSnapshot:d.snapshot}));
+   if(d.next_offset===null){c.archives.shift();c.archiveOffsetWithin=0;}else c.archiveOffsetWithin=d.next_offset;
+  }catch(e){if(out.length)return {cursor:c,periods:out,warning:String(e.message||e)};throw e;}
+ }
+ return {cursor:c,periods:out,warning:''};
+}
+function validateTimelinePage(d,offset){if(!Array.isArray(d.periods)||!Number.isSafeInteger(d.snapshot)||d.snapshot<0||(d.next_offset!==null&&(!Number.isSafeInteger(d.next_offset)||d.next_offset<=offset)))throw Error('Invalid history pagination response');}
+function updatePaging(){ $('newer').disabled=fetching||timelinePage<=0;$('older').disabled=fetching||timelinePage<0||(!timelinePages[timelinePage+1]&&!timelineMore(timelinePages[timelinePage].cursor)); }
+async function loadTimeline(index=0,renew=false){if(fetching||index<0)return;fetching=true;updatePaging();try{
+ $('info').textContent='Loading chronological IP runs…';
+ if(renew){const stats=await read('/api/journey/stats');$('pagecount').textContent=num(stats.totals.page_view);$('readcount').textContent=num(stats.totals.chapter_read);$('citycount').textContent=num(stats.location_count??stats.cities?.length);}
+ let frame=renew?null:timelinePages[index];
+ if(!frame){const cursor=index===0?newTimelineCursor():timelinePages[index-1].cursor;frame=await nextTimelinePage(cursor,read);}
+ if(renew)timelinePages=[];
+ timelinePages[index]=frame;timelinePage=index;
+ // API pages are newest first; reverse for the established downward timeline.
+ periods=frame.periods.slice().reverse();draw();$('empty').hidden=periods.length!==0||!!frame.warning;
+ shell.scrollTop=0;$('info').textContent=(periods.length?`Showing ${num(periods.length)} IP periods, oldest first within this page. Page ${index+1}. Use Older periods for earlier visits.`:'No visitor periods recorded yet.')+(frame.warning?' Older history temporarily unavailable: '+frame.warning+' — use Older periods to retry.':'');
  }catch(e){$('info').textContent=e.message}finally{fetching=false;updatePaging()}}
-function refresh(){archiveOffset=0;archiveDone=false;$('archive-load').disabled=false;$('archive-load').textContent='Load archived batches';$('archive-status').textContent='';return loadPeriods(0,true)}
-$('archive-load').onclick=async()=>{if(archiveDone)return;$('archive-load').disabled=true;try{const d=await read('/api/journey/archives?offset='+archiveOffset);for(const b of d.batches){if(!/^[a-f0-9]{64}$/.test(b.digest)||Array.from($('archive-select').options).some(o=>o.value===b.digest))continue;const o=document.createElement('option');o.value=b.digest;o.textContent=nice(b.start_at)+' – '+nice(b.end_at)+' · '+num(b.event_count)+' visits';$('archive-select').append(o)}archiveDone=d.next_offset===null;archiveOffset=d.next_offset??archiveOffset;$('archive-status').textContent=archiveDone?'All archived batches listed':'More archived batches available';$('archive-load').textContent=archiveDone?'All batches listed':'Load older batches';}catch(e){$('archive-status').textContent=e.message}finally{$('archive-load').disabled=archiveDone}};
-$('archive-select').onchange=()=>{if(fetching){$('archive-select').value=archiveId;return}archiveId=$('archive-select').value;snapshot=null;periodOffset=0;olderOffset=null;periods=[];draw();loadPeriods(0,true)};
-$('newer').onclick=()=>loadPeriods(Math.max(0,periodOffset-250));$('older').onclick=()=>{if(olderOffset!==null)loadPeriods(olderOffset)};
+function refresh(){return loadTimeline(0,true)}
+$('newer').onclick=()=>loadTimeline(timelinePage-1);$('older').onclick=()=>{if(timelinePage>=0)loadTimeline(timelinePage+1)};
 function row(e){const tr=document.createElement('tr');for(const value of [nice(e.created_at),e.kind,(e.slug?e.slug+(e.chapter?' / '+e.chapter:''):e.path),[e.city,e.region,e.country].filter(v=>v&&v!=='Unknown').join(', ')||'Unknown']){const td=document.createElement('td');td.textContent=value;tr.append(td)}$('actionbody').append(tr)}
 async function leaflet(){if(window.L)return window.L;return new Promise((resolve,reject)=>{
  const link=document.createElement('link');link.rel='stylesheet';link.href='https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css';document.head.append(link);
@@ -147,13 +181,13 @@ async function mapDraw(){if(!allGeo.length){$('map-message').textContent='No geo
  $('map-message').textContent='Drag the map to explore. Pins show approximate network-derived locations; they are not GPS.';
  }catch(e){$('map-message').textContent=e.message+'; event locations remain listed.'}}
 async function loadActions(){if(!active||actionBusy||nextEvents===null)return;const selected=active,gen=actionGeneration,offset=nextEvents;actionBusy=true;$('loadmore').disabled=true;try{
- const d=await read('/api/journey/period-events?period='+selected.period_id+'&offset='+offset+'&snapshot='+selected.snapshot+(selected.archive?'&archive='+selected.archive:''));if(gen!==actionGeneration||selected!==active)return;
+ const d=await read('/api/journey/period-events?period='+selected.period_id+'&offset='+offset+'&snapshot='+selected.snapshot+(selected.archive?'&archive='+selected.archive:'&unified=1&epoch='+selected.sourceEpoch));if(gen!==actionGeneration||selected!==active)return;
  if(!Array.isArray(d.events)||(d.next_offset!==null&&(!Number.isSafeInteger(d.next_offset)||d.next_offset<=offset)))throw Error('Invalid action pagination response');
  d.events.forEach(e=>{row(e);if(e.latitude!==null&&e.latitude!==undefined&&e.longitude!==null&&e.longitude!==undefined)allGeo.push(e)});
  nextEvents=d.next_offset;$('loadmore').style.display=nextEvents===null?'none':'inline-block';await mapDraw();
  }catch(e){if(gen===actionGeneration){$('map-message').textContent=e.message;$('loadmore').style.display='inline-block'}}finally{if(gen===actionGeneration){actionBusy=false;$('loadmore').disabled=false}}}
-function openPeriod(p){actionGeneration++;actionBusy=false;active={...p,snapshot,archive:archiveId};nextEvents=0;allGeo=[];$('loadmore').style.display='none';$('actionbody').replaceChildren();$('detailtitle').textContent=`${p.ip}-${nice(p.start_at)} → ${nice(p.end_at)}`;
- $('detailmeta').textContent=`${num(p.actions)} actions · period ${p.period_id}`;$('map').hidden=true;$('map-message').textContent='Loading period locations…';modal.showModal();loadActions()}
+function openPeriod(p){actionGeneration++;actionBusy=false;active={...p,snapshot:p.sourceSnapshot,archive:p.sourceArchive};nextEvents=0;allGeo=[];$('loadmore').style.display='none';$('actionbody').replaceChildren();$('detailtitle').textContent=`${p.ip}-${nice(p.start_at)} → ${nice(p.end_at)}`;
+ $('detailmeta').textContent=`${num(p.actions)} actions`;$('map').hidden=true;$('map-message').textContent='Loading period locations…';modal.showModal();loadActions()}
 modal.addEventListener('close',()=>{actionGeneration++;actionBusy=false;active=null;nextEvents=null});$('close').onclick=()=>modal.close();$('loadmore').onclick=()=>{if(nextEvents!==null)loadActions()};$('refresh').onclick=refresh;
 $('logout').onclick=async()=>{await fetch('/api/admin/logout',{method:'POST',credentials:'same-origin',headers:{Origin:location.origin}});location.replace('/login/')};
 async function enterFullscreen(){if(!shell.requestFullscreen){$('info').textContent='Fullscreen unavailable in this browser';return}try{await shell.requestFullscreen();history.pushState({journeyFullscreen:true},'',location.pathname+location.search+'#timeline-fullscreen');fullscreenBack=true;draw()}catch(e){$('info').textContent=e.message}}

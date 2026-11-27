@@ -57,7 +57,7 @@ class Completion(TestCase):
         self.readme=(f'# Existing text\n\n<!-- open-reader:begin -->\n\nShared comic library: [open-reader]({URL}/)\n\nRead this series: [{SLUG}]({URL}/comics/{SLUG}/)\n\n<!-- open-reader:end -->\n').encode()
         self.files={'/registry.json':r.canonical(self.live), '/source-issues.json':r.canonical({'schema':'comicarchiver.source_issue_feed.v1','cases':[],'resolved_ids':[]}),
                     '/comics/'+SLUG+'/manifest.json':r.canonical({'chapters':self.comic['chapters']}),
-                    '/':b'home','/upload-catalog.json':b'{}','/comics/'+SLUG+'/settings':b'settings'}
+                    '/':b'home','/library.json':b'{"comics":[]}','/upload-catalog.json':b'{}','/comics/'+SLUG+'/settings':b'settings'}
         self.gets=[];self.posts=[];self.github_calls=[]
         a._CACHE.clear(); self.addCleanup(a._CACHE.clear)
         self.stack.enter_context(mock.patch.object(a,'_load',side_effect=lambda origin:a._CACHE.get(origin)))
@@ -71,6 +71,13 @@ class Completion(TestCase):
         self.stack.enter_context(mock.patch.object(e,'event'))
         self.stack.enter_context(mock.patch.object(r,'_reader_hash',return_value=FRONTEND))
         self.stack.enter_context(mock.patch.object(r,'stage_worker_assets',side_effect=self.stage))
+        self.stack.enter_context(mock.patch.object(f,'_worker_signature',return_value='fixture-worker'))
+        # Known successful deployment. No-op checks now sample only indexes and
+        # the selected comic manifest, not unrelated unchanged static assets.
+        staged=self.root/'previous-stage'; staged.mkdir()
+        self.stage(self.root,self.registry,staged)
+        e.atomic_json(f._receipt_path(self.root),{'url':URL,'registry':r.sha(r.canonical(self.live)),
+                      'assets':f._asset_inventory(staged),'worker':'fixture-worker'})
         self.stack.enter_context(mock.patch('reusable.partial_chapter_publish.publish_partial_checkpoints',return_value={}))
         self.stack.enter_context(mock.patch.object(r,'_assert_no_unowned_existing_worker'))
         self.deploy=self.stack.enter_context(mock.patch.object(r,'_deploy',side_effect=AssertionError('must not deploy unchanged assets')))
@@ -199,7 +206,7 @@ class Completion(TestCase):
 
     def test_asset_timeout_does_not_redeploy(self):
         def get(url,**kw):
-            if url.endswith('/settings'):raise requests.Timeout('fixture timeout')
+            if url.endswith('/library.json'):raise requests.Timeout('fixture timeout')
             return self.http_get(url,**kw)
         with mock.patch.object(a.requests,'get',side_effect=get):
             with self.assertRaisesRegex(RuntimeError,'Timeout'):e.deploy_run(self.db,update_scope='comic')
@@ -207,7 +214,7 @@ class Completion(TestCase):
 
     def test_proven_static_mismatch_allows_stale_recovery(self):
         def get(url,**kw):
-            if url==URL+'/' and kw.get('headers',{}).get('Cookie'):return reply(200,raw=b'old')
+            if url==URL+'/library.json' and kw.get('headers',{}).get('Cookie'):return reply(200,raw=b'old')
             return self.http_get(url,**kw)
         with mock.patch.object(a.requests,'get',side_effect=get):
             with self.assertRaisesRegex(AssertionError,'must not deploy'):e.deploy_run(self.db,update_scope='comic')

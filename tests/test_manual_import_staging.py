@@ -25,7 +25,9 @@ class ImportStaging(unittest.TestCase):
                 if p.is_file() and p.relative_to(prior).as_posix() not in ('index.html','registry.json'):
                     self.assertEqual(p.read_bytes(),(new/p.relative_to(prior)).read_bytes(),str(p))
             self.assertEqual(json.loads((new/'registry.json').read_text())['comics'],reg['comics'])
-            self.assertEqual((new/'manual-reader-template/app.js').read_bytes(),(new/'comics/old/app.js').read_bytes())
+            self.assertTrue((new/'manual-reader-template/app.js').read_text().startswith((new/'comics/old/app.js').read_text()))
+            self.assertIn('OPEN_READER_MANUAL_IMAGE_FAILED',(new/'manual-reader-template/app.js').read_text())
+            self.assertNotIn('OPEN_READER_MANUAL_IMAGE_FAILED',(new/'comics/old/app.js').read_text())
             self.assertEqual((new/'manual-reader-template/style.css').read_bytes(),(new/'comics/old/style.css').read_bytes())
             self.assertIn('href="/comic-landing.css"',(new/'add-comic/index.html').read_text())
             self.assertIn('href="/add-comic/"',(new/'index.html').read_text())

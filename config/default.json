@@ -1,6 +1,6 @@
 {
   "github_repo_target_mib": 700,
-  "max_push_mib": 512,
+  "max_push_mib": 1984,
   "pushes_per_minute": 4,
   "github_max_file_bytes": 100000000,
   "cloudflare_file_target": 18000,

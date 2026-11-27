@@ -75,3 +75,21 @@ def git_run(cmd, **kwargs):
                 # Exact commit already reached remote. Do not replay.
                 return subprocess.CompletedProcess(cmd,0,'' if isinstance(p.stdout,str) else b'', '' if isinstance(p.stderr,str) else b'')
             # Non-force Git rejects concurrent incompatible changes.
+
+
+class GitBatchTooLarge(RuntimeError):
+    """Explicit server rejection of aggregate push size, not a permission error."""
+
+def git_size_rejected(message):
+    if isinstance(message, bytes): message=message.decode('utf-8','replace')
+    return bool(re.search(r'pack exceeds maximum allowed size|push (?:is )?too large|push size limit|maximum push size|(?:http|returned error|status(?: code)?)[ :]+413\b|request entity too large|payload too large',str(message or ''),re.I))
+
+def cloudflare_retry_delay(message, attempt=0, now=None):
+    """Recognize only explicit quotas; permanent storage/asset limits do not wait."""
+    msg=str(message or '').lower(); now=time.time() if now is None else now
+    if re.search(r'daily (?:row |request |read |write )*(?:limit|quota)|(?:daily|per day).{0,40}(?:rows read|rows written|requests).{0,40}(?:limit|exceed)',msg):
+        return max(backoff(attempt),86400-now%86400+5)
+    if re.search(r'\b(?:http|status(?: code)?|returned error)[ :]+429\b|too many requests|rate limit(?:ed| exceeded| reached)',msg):
+        retry=re.search(r'retry-after[\s:="\']+(\d+)',msg)
+        return max(backoff(attempt),int(retry[1]) if retry else 300)
+    return None

@@ -136,6 +136,101 @@ def repair_verified_readmes(engine, db):
     print('README REPAIR COMPLETE: documentation only; no archive, asset or deployment changes.', flush=True)
 
 
+def _asset_inventory(stage):
+    return {p.relative_to(stage).as_posix(): reader.sha(p.read_bytes())
+            for p in sorted(stage.rglob('*')) if p.is_file()}
+
+
+def _receipt_path(root):
+    return Path(root) / '.archiver_state' / 'open_reader_deployed_assets.json'
+
+
+def _previous_inventory(root, url, live):
+    # This is a deployment inventory, NOT a claim that every URL was sampled.
+    try:
+        old = json.loads(_receipt_path(root).read_text(encoding='utf-8'))
+        if (old.get('url') == url and old.get('registry') == reader.sha(reader.canonical(live))
+                and isinstance(old.get('assets'), dict)):
+            return old
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return None
+
+
+def _worker_signature(root, stage):
+    # Include the actual Worker modules and normalized deployment settings, not
+    # just the registry frontend marker (which historically missed some modules).
+    with tempfile.TemporaryDirectory(prefix='open-reader-config-signature-') as td:
+        cfg = json.loads(reader._worker_config(stage, td, root=root).read_text(encoding='utf-8'))
+    cfg['main'] = 'reusable/worker_addon/panel_replacement_worker.mjs'
+    cfg['assets']['directory'] = '<staged-assets>'
+    modules = {p.relative_to(root).as_posix():reader.sha(p.read_bytes())
+               for p in (Path(root)/'reusable/worker_addon').rglob('*') if p.is_file()}
+    return reader.sha(reader.canonical({'config':cfg,'modules':modules}))
+
+
+def _verification_plan(assets, previous, scope, slug):
+    old = previous['assets'] if previous else {}
+    changed = {p for p,digest in assets.items() if old.get(p) != digest}
+    # Unknown first baseline: check shared entry points and main dependencies,
+    # not hundreds of unchanged PDF font/map files or unrelated comic pages.
+    if not previous:
+        changed = {p for p in changed if not p.startswith(('manual-pdf/cmaps/',
+                    'manual-pdf/standard_fonts/','manual-pdf/wasm/'))}
+    selected = {p for p in changed if not p.startswith('comics/')}
+    if scope == 'comic':
+        selected.update(p for p in changed if p.startswith('comics/'+slug+'/'))
+        selected.add('comics/'+slug+'/manifest.json')
+    elif previous:
+        # If a shared reader template actually changed, smoke-check one affected
+        # comic (not all copies). Route-specific changes to Add Comic/Journey
+        # do not generate any comic requests at all.
+        affected = sorted({p.split('/')[1] for p in changed if p.startswith('comics/')})
+        if affected:
+            selected.update(p for p in changed if p.startswith('comics/'+affected[0]+'/'))
+    selected.update(('registry.json', 'library.json'))
+    return selected.intersection(assets)
+
+
+def _preserve_live_partials(root, url, registry, excluded=None):
+    # Shared-only updates reuse the published manifest's original, verified
+    # partial panel pointers. No old GitHub image reads or reuploads.
+    from .reader_issue_feed import build_issue_feed
+    groups = {}
+    for case in build_issue_feed(Path(root)).get('cases', []):
+        slug, chapter = str(case.get('work_slug','')), str(case.get('episode_id',''))
+        if case.get('status') != 'source_server_unavailable' or slug == excluded or slug not in registry['comics']:
+            continue
+        if not re.fullmatch(r'[a-z0-9-]+',slug) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,160}',chapter):
+            continue
+        groups.setdefault(slug,set()).add(chapter)
+    records = {}
+    for slug, wanted in groups.items():
+        live = reader._public_json(url+'/comics/'+slug+'/manifest.json')
+        if not isinstance(live,dict) or not isinstance(live.get('chapters'),list):
+            raise RuntimeError('Unable to preserve existing partial chapters for '+slug)
+        for ch in live['chapters']:
+            chapter = str(ch.get('id',''))
+            if chapter not in wanted or ch.get('partial') is not True:
+                continue
+            images = ch.get('images')
+            if not isinstance(images,list) or not 0 < len(images) <= 2000:
+                raise RuntimeError('Invalid published partial chapter '+slug+'/'+chapter)
+            row = {'total':len(images),'count_confirmed':bool(ch.get('panel_count_confirmed')),'images':{}}
+            for ordinal,im in enumerate(images,1):
+                if im.get('placeholder') is True or im.get('recovered') is True:
+                    continue  # Dynamic overrides are reapplied by the Worker.
+                gh = im.get('github') or {}
+                path = str(gh.get('path',''))
+                match = re.fullmatch(re.escape(f'partial/{slug}/{chapter}/{ordinal:04d}-')+r'([a-f0-9]{64})\.(?:jpg|png|webp|gif)',path)
+                if gh.get('repo') != 'open-reader' or not match or not all(isinstance(im.get(k),int) and im[k]>0 for k in ('width','height')):
+                    raise RuntimeError('Cannot safely preserve partial panel '+slug+'/'+chapter+'/'+str(ordinal))
+                digest=match.group(1)
+                row['images'][ordinal]={'url':github_streaming.route(slug,chapter,ordinal,digest),'sha256':digest,'width':im['width'],'height':im['height'],'github':{'repo':'open-reader','path':path}}
+            records[(slug,chapter)]=row
+    return records
+
+
 def publish(engine, db, *, scope):
     if scope not in ('comic', 'site'):
         raise ValueError('Focused publishing supports comic or site only')
@@ -159,23 +254,12 @@ def publish(engine, db, *, scope):
     if pending - ({current_slug} if current_slug else set()):
         raise RuntimeError('Other comics exist only in local registry; choose full sync to avoid dropping them: '
                            + ', '.join(sorted(pending)))
-    shared_frontend_changed = False
     if scope == 'comic':
         comic = current_comic(engine, db)
         current_slug = comic['slug']
         if current_slug not in registry['comics'] and len(set(state['comics']) - set(registry['comics'])) > 1:
             raise RuntimeError('Other unpublished comics require full sync first')
         reader.combine(registry, {current_slug: comic})
-        # Shared changes affect every generated reader route. Expand STATIC
-        # verification, not historical repository discovery or image sampling.
-        # Preserve all other live comic manifests and retain the private registry
-        # consistency checks below.
-        frontend_hash = reader._reader_hash(engine.ROOT)
-        shared_frontend_changed = (frontend_hash != live.get('frontend_hash')
-                                   or frontend_hash != state.get('verified_frontend_hash'))
-        if shared_frontend_changed:
-            print('open-reader: shared frontend changed; verifying all frontend routes '
-                  'with current-comic image samples only. Other comics preserved.', flush=True)
     owner, token = engine.credential_for_selected(db)
     if not owner or not token:
         raise RuntimeError('Authenticated GitHub account is required to protect the private registry')
@@ -205,35 +289,32 @@ def publish(engine, db, *, scope):
         stage = Path(tmp)
         partial_records = None
         if streaming:
-            # Retain any independently verified incomplete-chapter placeholders
-            # in ALL existing comics, even when unrelated comics are not sampled.
-            from .partial_chapter_publish import publish_partial_checkpoints
-            partial_records = publish_partial_checkpoints(engine.ROOT,engine,owner,token)
+            partial_records = _preserve_live_partials(engine.ROOT,url,registry,excluded=current_slug if scope == 'comic' else None)
+            if scope == 'comic':
+                from .partial_chapter_publish import publish_partial_checkpoints
+                partial_records.update(publish_partial_checkpoints(engine.ROOT,engine,owner,token,only_slug=current_slug))
         payload = reader.stage_worker_assets(engine.ROOT, registry, stage,
                                              partial_records=partial_records)
-        verify_slugs = {current_slug} if scope == 'comic' else set()
-        verify_kwargs = {'verify_slugs': verify_slugs}
-        if shared_frontend_changed:
-            verify_kwargs = {'verify_slugs': None, 'verify_image_slugs': {current_slug}}
-        # Shared reader JavaScript is generated separately for every comic.
-        # A site-only frontend change must verify those static routes too,
-        # without requesting old image samples or reconciling archives.
-        site_frontend_changed = (scope == 'site' and (
-            payload.get('frontend_hash') != live.get('frontend_hash') or
-            (state.get('verified_frontend_hash') and
-             state['verified_frontend_hash'] != payload.get('frontend_hash'))))
-        if site_frontend_changed:
-            verify_kwargs = {'verify_slugs': None, 'verify_image_slugs': set()}
-        # Shared-route changes may live ONLY in Worker JS and leave the static
-        # registry hash unchanged, so a site-only request must always deploy.
-        if scope == 'comic' and reader.canonical(live) == reader.canonical(payload):
+        assets = _asset_inventory(stage)
+        previous = _previous_inventory(engine.ROOT, url, live)
+        signature = _worker_signature(engine.ROOT, stage)
+        paths = _verification_plan(assets, previous, scope, current_slug)
+        verify_kwargs = {'verify_paths':paths,
+                         'verify_image_slugs':{current_slug} if scope == 'comic' else set()}
+        # On first adoption, do not treat an old live hash as proof that a
+        # Worker-only change was deployed. A site change needs a known receipt.
+        same = (reader.canonical(live) == reader.canonical(payload) and previous is not None
+                and previous.get('assets') == assets and previous.get('worker') == signature)
+        print(f'open-reader: targeted verification: {len(paths)} of {len(assets)} static assets; scope={scope}.',flush=True)
+        if not previous:
+            print('open-reader: establishing asset inventory; historical comics are not audited.',flush=True)
+        if same:
             try:
                 reader._verify_published(url,stage,registry, **verify_kwargs)
             except reader.PublishedAssetsStale:
                 print('open-reader: targeted assets stale; redeploying.',flush=True)
             else:
-                if scope == 'comic':
-                    registry['verified_frontend_hash'] = frontend_hash
+                registry['verified_frontend_hash'] = payload['frontend_hash']
                 reader.save_state(engine,registry)
                 reader._checkpoint_shared_registry(engine,db,owner,token,registry,
                                                    known_sha,{reader.WORKER_NAME})
@@ -249,22 +330,18 @@ def publish(engine, db, *, scope):
         deployed = reader._deploy(engine,stage,registry)
         reader._verify_published(deployed,stage,registry, **verify_kwargs)
         registry['worker_url']=deployed
-        if scope == 'comic':
-            registry['verified_frontend_hash'] = frontend_hash
-        elif site_frontend_changed:
-            registry['verified_frontend_hash'] = payload['frontend_hash']
-        elif (state.get('verified_frontend_hash') and
-              state['verified_frontend_hash'] == payload.get('frontend_hash')):
-            # Site-only verification does not verify every comic route; retain
-            # an existing matching fingerprint but never claim a new one.
-            registry['verified_frontend_hash'] = state['verified_frontend_hash']
+        registry['verified_frontend_hash'] = payload['frontend_hash']
         reader.save_state(engine,registry)
         reader._checkpoint_shared_registry(engine,db,owner,token,registry,
                                            known_sha,{reader.WORKER_NAME})
+        # Record the complete staged inventory only after successful deployment
+        # and registry verification. This lets subsequent runs compare bytes
+        # locally, without requesting unchanged assets from Cloudflare.
+        engine.atomic_json(_receipt_path(engine.ROOT), {'url':deployed,
+                           'registry':reader.sha(reader.canonical(payload)),
+                           'assets':assets,'worker':signature})
         if scope == 'comic':
             _checkpoint_current(db,engine,registry,current_slug)
             _target_readmes(engine,owner,token,registry,current_slug)
-        print('open-reader: '+scope+' update verified; '
-              + ('all frontend routes checked; ' if shared_frontend_changed or site_frontend_changed else '')
-              + 'old comic images not resampled.',flush=True)
+        print('open-reader: '+scope+' update verified; unchanged routes not audited.',flush=True)
         return deployed

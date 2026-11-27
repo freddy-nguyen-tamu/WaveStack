@@ -20,6 +20,7 @@ from urllib.parse import quote
 from PIL import Image
 
 from reusable import github_streaming
+from reusable.github_cooldown import GitBatchTooLarge, git_size_rejected
 from reusable.reader_issue_feed import build_issue_feed
 
 SAFE_ID = re.compile(r'^[A-Za-z0-9_.-]{1,160}$')
@@ -142,6 +143,96 @@ def _github_put_verified(engine, owner, token, path, raw):
 
 
 
+def _github_batch_verified(engine, owner, token, files):
+    """One non-forced native Git commit per bounded set of immutable panels.
+
+    The original per-file API remains only for legacy test/embedding engines
+    without a native Git transport. The normal engine always uses native Git.
+    """
+    if not files:
+        return
+    if not callable(getattr(engine, 'git_run', None)):
+        for path, raw in files:
+            _github_put_verified(engine, owner, token, path, raw)
+        return
+    import tempfile
+    import subprocess
+    remote = f'https://github.com/{owner}/open-reader.git'
+    env = engine.isolated_git_environment()
+    # The caller already authenticated and verified private ownership. Inject
+    # only in this child's environment; never put credentials in argv or URLs.
+    auth = base64.b64encode(('x-access-token:'+token).encode()).decode('ascii')
+    env.update({'GIT_CONFIG_COUNT':'2','GIT_CONFIG_KEY_0':'http.https://github.com/.extraheader',
+                'GIT_CONFIG_VALUE_0':'Authorization: Basic '+auth,
+                'GIT_CONFIG_KEY_1':'credential.helper','GIT_CONFIG_VALUE_1':'',
+                'GIT_AUTHOR_NAME':owner,'GIT_COMMITTER_NAME':owner,
+                'GIT_AUTHOR_EMAIL':owner+'@users.noreply.github.com','GIT_COMMITTER_EMAIL':owner+'@users.noreply.github.com'})
+    for key in list(env):
+        if key.startswith(('GIT_TRACE','GIT_CURL_VERBOSE')):env.pop(key,None)
+    for key in ('GIT_DIR','GIT_WORK_TREE','GIT_INDEX_FILE','GIT_OBJECT_DIRECTORY','GIT_ALTERNATE_OBJECT_DIRECTORIES'):
+        env.pop(key,None)
+    def upload(group):
+        with tempfile.TemporaryDirectory(prefix='comic-partial-batch-') as tmp:
+            work=Path(tmp)
+            def g(*args, input=None, cwd=work):
+                p=engine.git_run(['git',*args],cwd=cwd,env=env,input=input,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+                if p.returncode:
+                    if args[0]=='push' and git_size_rejected(p.stderr):
+                        raise GitBatchTooLarge('Private GitHub partial batch exceeds accepted push size')
+                    # No stderr echo; credentials may be included by external Git tracing.
+                    raise RuntimeError('Private partial Git batch failed at '+args[0]+'; local checkpoints retained')
+                return p.stdout
+            def tree(tip, cwd=work):
+                out={}
+                for record in g('ls-tree','-r','-z',tip,'--','partial',cwd=cwd).split(b'\0'):
+                    if not record:continue
+                    meta,path=record.split(b'\t',1);mode,kind,oid=meta.split()
+                    out[path.decode('utf-8')]=(mode,kind,oid.decode('ascii'))
+                return out
+            g('init','-q','-b','main');g('remote','add','origin',remote)
+            g('fetch','--depth=1','--filter=blob:none','origin','main');head=g('rev-parse','FETCH_HEAD').decode().strip()
+            old=tree(head);expected={path:_git_blob_sha(raw) for path,raw in group};pending=[]
+            for path,raw in group:
+                existing=old.get(path)
+                if existing and existing!=(b'100644',b'blob',expected[path]):
+                    raise RuntimeError('Private GitHub partial path conflicts with different content: '+path)
+                if not existing:pending.append((path,raw))
+            if not pending:return
+            g('read-tree',head);paths=[]
+            for i,(path,raw) in enumerate(pending):
+                local=work/('panel-'+str(i));local.write_bytes(raw);paths.append(str(local))
+            if any('\r' in p or '\n' in p for p in paths):raise RuntimeError('Unsafe staging path')
+            oids=g('hash-object','-w','--stdin-paths',input=('\n'.join(paths)+'\n').encode()).decode().splitlines()
+            if oids!=[expected[p] for p,_ in pending]:raise RuntimeError('Partial batch local object hash mismatch')
+            g('update-index','-z','--index-info',input=b''.join(('100644 '+expected[p]+'\t'+p).encode()+b'\0' for p,_ in pending))
+            newtree=g('write-tree','--missing-ok').decode().strip();commit=g('commit-tree',newtree,'-p',head,'-m','Archive verified incomplete-chapter panel batch').decode().strip()
+            try:g('push','origin',commit+':refs/heads/main')
+            except RuntimeError:
+                if g('ls-remote','origin','refs/heads/main').decode().split()[:1]!=[commit]:raise
+            verify=work/'verify';verify.mkdir();g('init','-q',cwd=verify);g('remote','add','origin',remote,cwd=verify);g('fetch','--depth=1','--filter=blob:none','origin','main',cwd=verify)
+            tip=g('rev-parse','FETCH_HEAD',cwd=verify).decode().strip()
+            if tip!=commit:raise RuntimeError('Partial batch remote commit changed; retain local data')
+            remote_tree=tree(tip,cwd=verify)
+            if any(remote_tree.get(p)!=(b'100644',b'blob',oid) for p,oid in expected.items()):raise RuntimeError('Partial batch remote object verification failed')
+            print(f'open-reader: verified {len(pending)} partial panels in one Git push',flush=True)
+    def adaptive_upload(group):
+        try: upload(group)
+        except GitBatchTooLarge:
+            if len(group)==1: raise
+            mid=len(group)//2
+            print(f'open-reader: scaling down rejected partial batch ({len(group)} panels)',flush=True)
+            adaptive_upload(group[:mid]);adaptive_upload(group[mid:])
+    batch=[];size=0
+    budget=engine.github_push_payload_budget()
+    for path,raw in files:
+        if len(raw)>min(budget,engine.CONFIG['github_max_file_bytes'],100*1024**2):
+            raise RuntimeError('Partial panel exceeds GitHub file/push budget; checkpoints retained')
+        if batch and size+len(raw)>budget:
+            adaptive_upload(batch);batch=[];size=0
+        batch.append((path,raw));size+=len(raw)
+    if batch:adaptive_upload(batch)
+
+
 # Keep this remote recovery generic: a verified incomplete panel must survive
 # deletion/rotation of its LOCAL checkpoint. The private GitHub copy is immutable.
 _REMOTE_PARTIAL_NAME = re.compile(r'^([0-9]{4,})-([a-f0-9]{64})\.(jpg|png|webp|gif)$')
@@ -229,7 +320,7 @@ def _recover_remote_partial(engine, owner, token, slug, chapter, missing, local_
     return recovered
 
 
-def publish_partial_checkpoints(root, engine, owner, token):
+def publish_partial_checkpoints(root, engine, owner, token, *, only_slug=None):
     """Return only panels independently verified on private GitHub.
 
     A pre-existing missing-image issue is required; no synthetic orphan chapters.
@@ -240,6 +331,8 @@ def publish_partial_checkpoints(root, engine, owner, token):
     feed = build_issue_feed(Path(root))
     groups = {}
     for case in feed.get('cases', []):
+        if only_slug is not None and case.get('work_slug') != only_slug:
+            continue
         if (case.get('status') != 'source_server_unavailable' or
                 not SAFE_SLUG.fullmatch(str(case.get('work_slug',''))) or
                 not SAFE_ID.fullmatch(str(case.get('episode_id','')))):
@@ -273,14 +366,16 @@ def publish_partial_checkpoints(root, engine, owner, token):
         if row['count_confirmed'] and any(n > row['total'] for n in remote):
             raise RuntimeError('Remote partial panel exceeds confirmed source catalog: ' + chapter)
         row['total']=max([row['total'],*remote.keys()])
+        batch=[]
         for ordinal,item in sorted(saved.items()):
             name=f'{ordinal:04d}-{item["sha256"]}.{item["ext"]}'
             path=f'partial/{slug}/{chapter}/{name}'
-            _github_put_verified(engine,owner,token,path,item['bytes'])
+            batch.append((path,item['bytes']))
             row['images'][ordinal]={
                 'url':github_streaming.route(slug,chapter,ordinal,item['sha256']),
                 'width':item['width'],'height':item['height'],'sha256':item['sha256'],
                 'github':{'repo':'open-reader','path':path}}
+        _github_batch_verified(engine,owner,token,batch)
         print(f'open-reader: partial chapter {slug}/{chapter}: '
               f'{len(row["images"])} checkpoint images verified on GitHub '
               f'({len(remote)} recovered remotely); {row["total"]} known positions; '

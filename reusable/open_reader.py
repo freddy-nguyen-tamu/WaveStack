@@ -1215,8 +1215,8 @@ class PublishedAssetsStale(RuntimeError):
 
 
 def _verify_published(worker_url, staged, registry, *, verify_slugs=None,
-                      verify_image_slugs=None):
-    """Validate all deployed assets, allowing *only* registered panel overlays.
+                      verify_image_slugs=None, verify_paths=None):
+    """Validate selected deployed assets (all by default), allowing *only* registered panel overlays.
 
     /source-issues.json is computed dynamically with R2 replacement states.
     /comics/slug/manifest.json may rewrite an exact source-missing panel to its
@@ -1358,6 +1358,8 @@ def _verify_published(worker_url, staged, registry, *, verify_slugs=None,
 
     for source in sorted(p for p in stage.rglob('*') if p.is_file()):
         relative = source.relative_to(stage).as_posix()
+        if verify_paths is not None and relative not in verify_paths:
+            continue
         # For a focused update, verify only the chosen comic and common routes.
         # Skipped files remain in the complete deployment asset manifest.
         if verify_slugs is not None and relative.startswith('comics/'):

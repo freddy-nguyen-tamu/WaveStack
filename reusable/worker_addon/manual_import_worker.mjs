@@ -8,6 +8,12 @@ const LIMIT = 2000, MAX_BYTES = 12*1024*1024, MAX_PIXELS = 24_000_000;
 const encoder = new TextEncoder();
 const json = (value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});
 class Invalid extends Error {constructor(message,status=400){super(message);this.status=status;}}
+function providerFailure(e){
+ const msg=String(e?.message||e);
+ if(/daily (?:row |request |read |write )*(?:limit|quota)|(?:daily|per day).{0,40}(?:rows read|rows written|requests).{0,40}(?:limit|exceed)|D1_ERROR:.*(?:exceeded.*(?:daily|rows read|rows written)|daily.*limit)/i.test(msg))return new Response(JSON.stringify({error:'Cloudflare daily quota reached; waiting until midnight UTC'}),{status:429,headers:{'Content-Type':'application/json','Cache-Control':'no-store','Retry-After':String(Math.ceil((86400000-Date.now()%86400000)/1000)+5)}});
+ if(/too many (?:subrequests|sql variables|bound parameters)|exceeded (?:cpu|memory|resource) limit|error\s*1102/i.test(msg))return json({error:'Batch exceeds Worker resource limit; reduce batch size'},413);
+ return null;
+}
 let dbReady = new WeakMap();
 async function ready(db){
  if(!db)throw new Invalid('Import catalog requires the existing Journey D1 binding.',503);
@@ -19,6 +25,7 @@ async function ready(db){
   // Existing rows all used PNG. Add a column without rebuilding any tables.
   const columns=async()=>((await db.prepare('PRAGMA table_info(manual_local_pages_v1)').all()).results||[]);
   if(!(await columns()).some(c=>c.name==='format')){try{await db.exec("ALTER TABLE manual_local_pages_v1 ADD COLUMN format TEXT NOT NULL DEFAULT 'png'");}catch(e){if(!(await columns()).some(c=>c.name==='format'))throw e;}}
+  await db.exec("CREATE TABLE IF NOT EXISTS manual_pack_pages_v1 (slug TEXT NOT NULL, sha TEXT NOT NULL, pack TEXT NOT NULL, offset INTEGER NOT NULL, pack_size INTEGER NOT NULL, PRIMARY KEY(slug,sha));");
   await db.exec("CREATE TABLE IF NOT EXISTS manual_index_receipts_v1 (slug TEXT NOT NULL, revision INTEGER NOT NULL, volume INTEGER NOT NULL, digest TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(slug,revision,volume,digest));");
  })().catch(e=>{dbReady.delete(db);throw e;}));
  await dbReady.get(db);return db;
@@ -55,14 +62,97 @@ async function pages(db,slug){
  const local=(await db.prepare('SELECT sha,width,height,size FROM manual_local_pages_v1 WHERE slug=?').bind(slug).all()).results||[];
  return [...new Map([...local,...old].map(p=>[p.sha,p])).values()];
 }
-async function pageLocation(db,slug,sha){
- const old=await db.prepare('SELECT sha,width,height,size FROM manual_pages_v1 WHERE slug=? AND sha=?').bind(slug,sha).first();
- if(old)return {...old,repo:'open-reader',path:filePath(slug,sha)};
- const p=await db.prepare('SELECT sha,width,height,size,repo,format FROM manual_local_pages_v1 WHERE slug=? AND sha=?').bind(slug,sha).first();
+// The published image hot path is independent of schema initialization. A
+// successfully published comic necessarily has these tables. Legacy PNGs and
+// browser JPEGs are resolved with the same priority as the original manifest.
+async function publishedPage(db,slug,sha){
+ await ready(db);
+ const p=await db.prepare(`SELECT p.sha,p.width,p.height,p.size,p.repo,p.format,pack.pack,pack.offset,pack.pack_size FROM (
+  SELECT sha,width,height,size,'open-reader' AS repo,'png' AS format,0 AS priority FROM manual_pages_v1 WHERE slug=? AND sha=?
+  UNION ALL SELECT sha,width,height,size,repo,format,1 AS priority FROM manual_local_pages_v1 WHERE slug=? AND sha=?
+ ) p LEFT JOIN manual_pack_pages_v1 pack ON pack.slug=? AND pack.sha=p.sha AND p.priority=1 WHERE EXISTS (SELECT 1 FROM manual_comics_v1 c,json_each(c.chapters) ch,json_each(ch.value,'$.pages') pg WHERE c.slug=? AND c.status='published' AND pg.value=?) ORDER BY p.priority LIMIT 1`).bind(slug,sha,slug,sha,slug,slug,sha).first();
+ return locationFor(p,slug,sha);
+}
+function locationFor(p,slug,sha){
  if(!p)return null;
+ if(p.repo==='open-reader')return {...p,path:filePath(slug,sha)};
  if(!new RegExp('^'+slug+'-vol-[0-9]{3}$').test(p.repo))throw new Invalid('Invalid imported volume',503);
  if(!['png','jpg'].includes(p.format))throw new Invalid('Invalid imported page format',503);
+ if(p.pack){if(!SHA.test(p.pack)||!Number.isSafeInteger(p.offset)||!Number.isSafeInteger(p.pack_size)||p.offset<0||p.pack_size>MAX_BYTES||p.offset+p.size>p.pack_size)throw new Invalid('Invalid packed image location',503);return {...p,path:'packs/'+p.pack+'.bin'};}
  return {...p,path:'pages/'+sha+'.'+p.format};
+}
+async function pageLocation(db,slug,sha){
+ const old=await db.prepare('SELECT sha,width,height,size FROM manual_pages_v1 WHERE slug=? AND sha=?').bind(slug,sha).first();
+ if(old)return locationFor({...old,repo:'open-reader',format:'png'},slug,sha);
+ return locationFor(await db.prepare('SELECT p.sha,p.width,p.height,p.size,p.repo,p.format,b.pack,b.offset,b.pack_size FROM manual_local_pages_v1 p LEFT JOIN manual_pack_pages_v1 b ON b.slug=p.slug AND b.sha=p.sha WHERE p.slug=? AND p.sha=?').bind(slug,sha).first(),slug,sha);
+}
+// Pack bytes never escape this authenticated per-page endpoint. Share concurrent
+// fetches and cache verified immutable containers, not unverified upstream data.
+const packFlights=new Map();
+let recentPack=null;
+async function packedFile(req,env,deps,p){
+ const key=new Request(new URL('/api/manual-pack-cache/'+p.repo+'/'+p.pack+'?size='+p.pack_size,req.url));
+ const cache=deps.ctx?.waitUntil?globalThis.caches?.default:null;
+ const identity=key.url+':'+String(env.GITHUB_OWNER)+':'+String(env.GITHUB_APP_INSTALLATION_ID);
+ if(recentPack?.identity===identity&&recentPack.until>Date.now())return recentPack.value;
+ if(packFlights.has(identity))return packFlights.get(identity);
+ const task=(async()=>{
+  if(cache){try{const hit=await cache.match(key);if(hit&&hit.headers.get('ETag')==='"'+p.pack+'"'){const body=new Uint8Array(await hit.arrayBuffer());if(body.length===p.pack_size)return {status:200,body};}}catch{}}
+  // One scoped inventory for a volume, reused by subsequent containers. This
+  // is the same App/default branch that registration checks.
+  let f=await deps.githubFile(env,p.repo,p.path);
+  if(f.status===404&&deps.importVolumeInventory){const inv=await deps.importVolumeInventory(env,p.repo);if(inv.status!==200)return inv;if(inv.files.get(p.path)!==p.pack_size)return {status:404};f=await deps.githubFile(env,p.repo,p.path,{ref:inv.branch,readToken:inv.readToken});}
+  if(f.status!==200)return f;
+  if(f.body?.length!==p.pack_size||await deps.shaHex(f.body)!==p.pack)throw new Invalid('GitHub batch checksum mismatch',502);
+  if(cache){const stored=new Response(f.body,{headers:{'Content-Type':'application/octet-stream','Cache-Control':'public,max-age=31536000,immutable','ETag':'"'+p.pack+'"'}});deps.ctx.waitUntil(cache.put(key,stored).catch(()=>{}));}
+  return f;
+ })();packFlights.set(identity,task);try{const value=await task;if(value.status===200)recentPack={identity,until:Date.now()+60000,value};return value;}finally{if(packFlights.get(identity)===task)packFlights.delete(identity);}
+}
+async function serveManualPage(req,env,deps,p,sha,cacheable){
+ if(!p)throw new Invalid('Page is not published or not indexed',404);
+ const format=p.format||'png',mime=format==='jpg'?'image/jpeg':'image/png';
+ const headers={'Content-Type':mime,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','ETag':'"'+sha+'"'};
+ // Cache only verified bytes, after the Worker session gate AND current D1
+ // publication membership check. Never cache an error or a draft preview.
+ const cache=cacheable&&deps.ctx?.waitUntil?globalThis.caches?.default:null;
+ const key=new Request(new URL('/api/manual-image-cache/'+p.repo+'/'+sha+'.'+format+'?size='+p.size,req.url));
+ if(cache){try{const hit=await cache.match(key);if(hit&&hit.headers.get('ETag')===headers.ETag&&hit.headers.get('Content-Type')===mime&&hit.headers.get('X-Manual-Verified-Size')===String(p.size))return new Response(req.method==='HEAD'?null:hit.body,{headers});}catch(e){console.warn('MANUAL_IMAGE_CACHE_READ',String(e?.message||e));}}
+ let f;
+ try{f=p.pack?await packedFile(req,env,deps,p):await deps.githubFile(env,p.repo,p.path);if(p.pack&&f.status===200)f={...f,body:f.body.subarray(p.offset,p.offset+p.size)};}catch(e){console.error('MANUAL_IMAGE_UPSTREAM',p.repo,sha.slice(0,12),String(e?.message||e));throw new Invalid('GitHub image fetch failed; check Worker MANUAL_IMAGE_UPSTREAM logs',502);}
+ if(f?.throttled||f?.status===429){const now=Date.now(),n=Number(f.retry),date=Date.parse(f.retry||''),reset=Number(f.reset)*1000;const seconds=Math.ceil(Math.max(60,Number.isFinite(n)?n:0,Number.isFinite(date)?(date-now)/1000:0,Number.isFinite(reset)?(reset-now)/1000+3:0));return new Response(JSON.stringify({error:'GitHub image read rate limited'}),{status:429,headers:{'Content-Type':'application/json','Cache-Control':'no-store','Retry-After':String(seconds)}});}
+ if(f?.status===404&&!p.pack&&p.repo!=='open-reader'&&deps.importVolumeInventory){
+  // Only consider volumes already reserved for THIS import. Never search
+  // unrelated comics or issue public URLs. Exact filename/size + SHA readback
+  // is required before a fallback can be returned to the reader.
+  const slug=p.repo.slice(0,-8), db=env.JOURNEY_DB;
+  const reserved=(await db.prepare('SELECT volume FROM manual_browser_volumes_v1 WHERE slug=? ORDER BY volume DESC LIMIT 8').bind(slug).all()).results||[];
+  const candidates=[...new Set([p.repo,...reserved.map(x=>slug+'-vol-'+String(x.volume).padStart(3,'0'))])].slice(0,9);
+  let primary='unknown', recovered=null;
+  for(const repo of candidates){
+   const inventory=await deps.importVolumeInventory(env,repo);
+   if(repo===p.repo)primary=inventory.status===200?'private repository accessible; expected page '+(inventory.files.get(p.path)===p.size?'exists':'missing or wrong size'):(inventory.stage||'GitHub')+' HTTP '+inventory.status;
+   if(inventory.throttled||inventory.status===429){f=inventory;break;}
+   if(inventory.status!==200)continue;
+   // Accept a differently named extension only if the final bytes still
+   // match the original digest AND its expected image signature below.
+   for(const path of [p.path,'pages/'+sha+'.'+(format==='jpg'?'png':'jpg')]){
+    if(inventory.files.get(path)!==p.size)continue;
+    const found=await deps.githubFile(env,repo,path,{ref:inventory.branch,readToken:inventory.readToken});
+    if(found.throttled||found.status===429){f=found;break;}
+    if(found.status===200&&found.body?.length===p.size&&await deps.shaHex(found.body)===sha){recovered=found;break;}
+   }
+   if(recovered||f.throttled||f.status===429)break;
+  }
+  if(recovered)f=recovered;
+  else if(!f.throttled&&f.status!==429)throw new Invalid('GitHub page unavailable: '+p.repo+'/'+p.path+'; '+primary+'. No matching verified copy in checked volumes of this comic.',502);
+ }
+ if(f?.throttled||f?.status===429)return new Response(JSON.stringify({error:'GitHub image read rate limited'}),{status:429,headers:{'Content-Type':'application/json','Cache-Control':'no-store','Retry-After':String(Math.max(60,Number(f.retry)||0,(Number(f.reset)||0)-Math.floor(Date.now()/1000)+3))}});
+ if(f?.status!==200){console.error('MANUAL_IMAGE_HTTP',p.repo,sha.slice(0,12),f?.status);throw new Invalid('GitHub image unavailable (upstream HTTP '+(f?.status||'unknown')+'). Check App access to the private import volume.',502);}
+ if(!f.body||f.body.length!==p.size||await deps.shaHex(f.body)!==sha){console.error('MANUAL_IMAGE_INTEGRITY',p.repo,sha.slice(0,12),p.size,f.body?.length);throw new Invalid('GitHub page byte count or SHA-256 mismatch',502);}
+ if(format==='jpg'&&!(f.body[0]===255&&f.body[1]===216&&f.body[2]===255&&f.body[f.body.length-2]===255&&f.body[f.body.length-1]===217))throw new Invalid('Invalid JPEG page',502);
+ if(format==='png'&&![137,80,78,71,13,10,26,10].every((v,i)=>f.body[i]===v))throw new Invalid('Invalid PNG page',502);
+ if(cache){const immutable=new Response(f.body,{headers:{...headers,'Cache-Control':'public,max-age=31536000,immutable','X-Manual-Verified-Size':String(p.size)}});deps.ctx.waitUntil(cache.put(key,immutable).catch(e=>console.warn('MANUAL_IMAGE_CACHE_WRITE',String(e?.message||e))));}
+ return new Response(req.method==='HEAD'?null:f.body,{headers});
 }
 const decode=r=>({slug:r.slug,revision:r.revision,publication:r.status,metadata:JSON.parse(r.metadata),chapters:JSON.parse(r.chapters)});
 function validateChapters(chapters,verified){
@@ -95,6 +185,13 @@ export async function manualRoute(req,env,deps){
  if(!api&&!image&&!comic&&!lib&&!local)return null;
  try{
   if(!['GET','HEAD'].includes(method)&&req.headers.get('Origin')!==u.origin)throw new Invalid('Same-origin required',403);
+  if(image){
+   if(!['GET','HEAD'].includes(method))throw new Invalid('Method not allowed',405);
+   if(!env.JOURNEY_DB)throw new Invalid('Import catalog unavailable',503);
+   if(!deps.githubConfigured(env))throw new Invalid('GitHub streaming not configured',503);
+   const p=await publishedPage(env.JOURNEY_DB,image[1],image[2]);
+   return await serveManualPage(req,env,deps,p,image[2],true);
+  }
   const db=await ready(env.JOURNEY_DB);
   if(lib||api&&!api[1]&&method==='GET'){
    if(method!=='GET')throw new Invalid('Method not allowed',405);
@@ -167,7 +264,11 @@ export async function manualRoute(req,env,deps){
      // The last batch may have stopped before writing its index. Inventory only
      // content-addressed page names and sizes; no binary bytes enter the Worker.
      const pageList=await deps.gh(env,'GET',repo,'pages');
-     if(pageList.status===404)return json({indexes:[],missing:true,paths:[],size:0});
+     if(pageList.status===404){
+      const inv=deps.importVolumeInventory?await deps.importVolumeInventory(env,repo):null;
+      if(inv?.status===200){const packs=[...inv.files].filter(([path,size])=>/^packs\/[a-f0-9]{64}\.bin$/.test(path)&&size>0&&size<=MAX_BYTES);return json({indexes:[],paths:[],packs:packs.map(([path])=>path.slice(6,-4)),size:packs.reduce((n,[,size])=>n+size,0)});}
+      return json({indexes:[],missing:true,paths:[],size:0});
+     }
      if(!pageList.ok)throw new Invalid('GitHub page inventory HTTP '+pageList.status,pageList.status===403?403:502);
      const entries=await pageList.json();if(!Array.isArray(entries)||entries.length>=1000)throw new Invalid('Page inventory truncated; keep the original files and contact the site administrator',409);
      const valid=entries.filter(x=>x.type==='file'&&/^[a-f0-9]{64}\.(png|jpg)$/.test(x.name)&&Number.isSafeInteger(x.size)&&x.size>0&&x.size<=MAX_BYTES);
@@ -181,7 +282,9 @@ export async function manualRoute(req,env,deps){
    const repo=slug+'-vol-'+String(body.volume).padStart(3,'0');
    const receipt=await db.prepare('SELECT count FROM manual_index_receipts_v1 WHERE slug=? AND revision=? AND volume=? AND digest=?').bind(slug,r.revision,body.volume,body.index).first();
    if(receipt&&!body.recover)return json({ok:true,count:receipt.count});
-   const file=await deps.githubFile(env,repo,'indexes/'+body.index+'.json');
+   let inventory=null;const indexPath='indexes/'+body.index+'.json';
+   let file=await deps.githubFile(env,repo,indexPath);
+   if(file.status===404&&deps.importVolumeInventory){inventory=await deps.importVolumeInventory(env,repo,{fresh:true});if(inventory.status===200)file=await deps.githubFile(env,repo,indexPath,{ref:inventory.branch,readToken:inventory.readToken});else if(inventory.throttled)file=inventory;}
    if(file.throttled||file.status===429){
     const n=Number(file.retry), date=Date.parse(file.retry||''), reset=Number(file.reset)*1000;
     const seconds=Math.ceil(Math.max(60,Number.isFinite(n)?n:0,Number.isFinite(date)?(date-Date.now())/1000:0,Number.isFinite(reset)?(reset-Date.now())/1000+3:0));
@@ -190,11 +293,27 @@ export async function manualRoute(req,env,deps){
    if(file.status!==200)throw new Invalid('GitHub index unavailable (HTTP '+file.status+'). Check reader App access to this private volume and retry the existing draft.',[401,403,404].includes(file.status)?409:502);
    if(!file.body||file.body.length>128*1024||await deps.shaHex(file.body)!==body.index)throw new Invalid('Index checksum mismatch',502);
    let idx;try{idx=JSON.parse(new TextDecoder().decode(file.body));}catch{throw new Invalid('Invalid volume index');}
-   if(idx.slug!==slug||idx.volume!==body.volume||!Array.isArray(idx.pages)||!idx.pages.length||idx.pages.length>100)throw new Invalid('Invalid volume index identity');
+   if(idx.slug!==slug||idx.volume!==body.volume||!Array.isArray(idx.pages)||!idx.pages.length||idx.pages.length>LIMIT)throw new Invalid('Invalid volume index identity');
    const unique=new Set();
    for(const p of idx.pages){if(!SHA.test(p?.sha||'')||unique.has(p.sha)||![p.width,p.height,p.size].every(Number.isSafeInteger)||p.width<1||p.height<1||p.width>20000||p.height>20000||p.width*p.height>MAX_PIXELS||p.size<45||p.size>MAX_BYTES||!['png','jpg'].includes(p.format??'png'))throw new Invalid('Invalid indexed page');unique.add(p.sha);}
+   const packed=new Map();
+   for(const p of idx.pages){
+    if(p.pack===undefined&&p.offset===undefined&&p.packSize===undefined&&p.packGit===undefined)continue;
+    if(!SHA.test(p.pack||'')||!/^[a-f0-9]{40}$/.test(p.packGit||'')||!Number.isSafeInteger(p.offset)||!Number.isSafeInteger(p.packSize)||p.offset<0||p.packSize<45||p.packSize>MAX_BYTES||p.offset+p.size>p.packSize)throw new Invalid('Invalid packed page metadata');
+    const list=packed.get(p.pack)||[];list.push(p);packed.set(p.pack,list);
+   }
+   for(const list of packed.values()){let offset=0;const size=list[0].packSize;for(const p of [...list].sort((a,b)=>a.offset-b.offset)){if(p.offset!==offset||p.packSize!==size||p.packGit!==list[0].packGit)throw new Invalid('Incomplete or overlapping pack index');offset+=p.size;}if(offset!==size)throw new Invalid('Incomplete pack index');}
+   // An index is not proof that its referenced pages exist. Verify the exact
+   // repository/default-branch tree (one inventory per batch, no image relay).
+   if(!deps.importVolumeInventory)throw new Invalid('Import storage verification is unavailable',503);
+   inventory=inventory||await deps.importVolumeInventory(env,repo,{fresh:true});
+   if(inventory.throttled||inventory.status===429)return new Response(JSON.stringify({error:'GitHub page inventory rate limited'}),{status:429,headers:{'Content-Type':'application/json','Cache-Control':'no-store','Retry-After':String(Math.max(60,Number(inventory.retry)||0,(Number(inventory.reset)||0)-Math.floor(Date.now()/1000)+3))}});
+   if(inventory.status!==200)throw new Invalid('Cannot verify private volume '+repo+' ('+(inventory.stage||'inventory')+' HTTP '+inventory.status+'). Existing draft retained.',409);
+   const missing=idx.pages.filter(p=>inventory.files.get(p.pack?'packs/'+p.pack+'.bin':'pages/'+p.sha+'.'+(p.format??'png'))!==(p.pack?p.packSize:p.size));
+   for(const [digest,group] of packed){if(inventory.blobs?.get('packs/'+digest+'.bin')!==group[0].packGit)throw new Invalid('Packed Git object verification failed for '+digest+'; existing draft retained.',409);}
+   if(missing.length)throw new Invalid('Volume '+repo+' is missing '+missing.length+' indexed page file(s), or their sizes differ. Existing draft retained; no publication. First: '+missing[0].sha,409);
    // New encodings are only enabled in the explicitly reserved browser volume.
-   if(idx.pages.some(p=>p.format==='jpg')&&!await db.prepare('SELECT volume FROM manual_browser_volumes_v1 WHERE slug=? AND revision=? AND volume=?').bind(slug,r.revision,body.volume).first())throw new Invalid('JPEG index requires a reserved browser volume',409);
+   if(idx.pages.some(p=>p.format==='jpg'||p.pack)&&!await db.prepare('SELECT volume FROM manual_browser_volumes_v1 WHERE slug=? AND revision=? AND volume=?').bind(slug,r.revision,body.volume).first())throw new Invalid('JPEG index requires a reserved browser volume',409);
    // Use a single JSON parameter rather than a generated UNION of dozens of
    // SELECTs. SQLite/D1 JSON functions are already used by the catalog.
    const compact=JSON.stringify(idx.pages.map(p=>({...p,format:p.format??'png'})));
@@ -203,7 +322,8 @@ export async function manualRoute(req,env,deps){
    if(!receipt){
     const insert=db.prepare("INSERT OR IGNORE INTO manual_local_pages_v1(slug,sha,width,height,size,repo,format) SELECT ?,json_extract(value,'$.sha'),json_extract(value,'$.width'),json_extract(value,'$.height'),json_extract(value,'$.size'),?,json_extract(value,'$.format') FROM json_each(?) WHERE EXISTS(SELECT 1 FROM manual_comics_v1 WHERE slug=? AND revision=? AND status!='deleted')").bind(slug,repo,compact,slug,r.revision);
     const mark=db.prepare("INSERT OR IGNORE INTO manual_index_receipts_v1(slug,revision,volume,digest,count) SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM manual_comics_v1 WHERE slug=? AND revision=? AND status!='deleted')").bind(slug,r.revision,body.volume,body.index,idx.pages.length,slug,r.revision);
-    try{const results=await db.batch([insert,mark]);if(results?.some(x=>x.success===false))throw Error('D1 returned an unsuccessful batch');}catch(e){console.error('MANUAL_INDEX_D1',String(e?.message||e));throw new Invalid('D1 page-index transaction failed. Uploaded files are retained. Check Worker logs for MANUAL_INDEX_D1.',503);}
+    const packInsert=db.prepare("INSERT OR IGNORE INTO manual_pack_pages_v1(slug,sha,pack,offset,pack_size) SELECT ?,json_extract(value,'$.sha'),json_extract(value,'$.pack'),json_extract(value,'$.offset'),json_extract(value,'$.packSize') FROM json_each(?) WHERE json_type(value,'$.pack')='text' AND NOT EXISTS(SELECT 1 FROM manual_local_pages_v1 p WHERE p.slug=? AND p.sha=json_extract(value,'$.sha')) AND EXISTS(SELECT 1 FROM manual_comics_v1 WHERE slug=? AND revision=? AND status!='deleted')").bind(slug,compact,slug,slug,r.revision);
+    try{const results=await db.batch([packInsert,insert,mark]);if(results?.some(x=>x.success===false))throw Error('D1 returned an unsuccessful batch');}catch(e){const limited=providerFailure(e);if(limited)return limited;console.error('MANUAL_INDEX_D1',String(e?.message||e));throw new Invalid('D1 page-index transaction failed. Uploaded files are retained. Check Worker logs for MANUAL_INDEX_D1.',503);}
    }
    const current=await row(db,slug);if(!current||current.status==='deleted'||current.revision!==r.revision)throw new Invalid('Import changed during index registration',409);
    return json({ok:true,count:idx.pages.length,...(body.recover?{pages:idx.pages}: {})});
@@ -220,7 +340,7 @@ export async function manualRoute(req,env,deps){
    if(tail==='manifest.json')return json(manifest(r,await pages(db,slug)));
    // Reuse the unmodified, staged chapter-reader and overview assets. Never
    // fetch arbitrary paths or another comic's manifest. URL stays canonical.
-   const allowed=new Set(['','index.html','app.js','style.css','settings','settings.html','overview','overview/','overview/index.html']);
+   const allowed=new Set(['','index.html','app.js','style.css','settings','settings.html','overview','overview/','overview/index.html','favicon.ico','favicon-16.png','favicon-32.png','favicon-48.png','favicon-180.png','favicon-192.png','favicon-512.png','reader-issues.css','reader-issues.js','source-issue-bell.css','source-issue-bell.js']);
    if(!allowed.has(tail))throw new Invalid('Unknown imported comic route',404);
    if(tail==='overview')return new Response(null,{status:302,headers:{Location:`/comics/${slug}/overview/`,'Cache-Control':'private, no-store'}});
    const mapped=tail;
@@ -238,18 +358,10 @@ export async function manualRoute(req,env,deps){
    return response;
   }
   const pageRoute=api&&path.endsWith('/pages');
-  if(image||api?.[2]){
+  if(api?.[2]){
    if(method!=='GET')throw new Invalid('Method not allowed',405);
-   const sha=(image||api)[2];
-   if(image&&(r.status!=='published'||!JSON.parse(r.chapters).some(c=>c.pages.includes(sha))))throw new Invalid('Page is not published',404);
-   const p=await pageLocation(db,slug,sha);
-   if(!p)throw new Invalid('Page not found',404);
-   const f=await deps.githubFile(env,p.repo,p.path);
-   if(f.status!==200||f.body.length!==p.size||await deps.shaHex(f.body)!==sha)throw new Invalid('GitHub page missing or checksum mismatch',502);
-   const format=p.format||'png';
-   if(format==='jpg'&&!(f.body[0]===255&&f.body[1]===216&&f.body[2]===255&&f.body[f.body.length-2]===255&&f.body[f.body.length-1]===217))throw new Invalid('Invalid JPEG page',502);
-   if(format==='png'&&![137,80,78,71,13,10,26,10].every((v,i)=>f.body[i]===v))throw new Invalid('Invalid PNG page',502);
-   return new Response(f.body,{headers:{'Content-Type':format==='jpg'?'image/jpeg':'image/png','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','ETag':'"'+sha+'"'}});
+   const p=await pageLocation(db,slug,api[2]);
+   return await serveManualPage(req,env,deps,p,api[2],false);
   }
   if(pageRoute&&method==='POST'){
    if(!deps.githubConfigured(env))throw new Invalid('GitHub streaming not configured',503);
@@ -289,5 +401,5 @@ export async function manualRoute(req,env,deps){
    return json({ok:true,slug,revision:r.revision+1,route:`/comics/${slug}/overview/`});
   }
   throw new Invalid('Method not allowed',405);
- }catch(e){if(e instanceof Invalid)return json({error:e.message},e.status);console.error('MANUAL_IMPORT_ERROR',String(e?.message||e));return json({error:'Import storage temporarily unavailable. Existing published comics are unchanged.'},503);}
+ }catch(e){const limited=providerFailure(e);if(limited)return limited;if(e instanceof Invalid)return json({error:e.message},e.status);console.error('MANUAL_IMPORT_ERROR',String(e?.message||e));return json({error:'Import storage temporarily unavailable. Existing published comics are unchanged.'},503);}
 }

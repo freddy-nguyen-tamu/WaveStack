@@ -40,3 +40,15 @@ for(const mode of ['writeError','readError','corrupt']){
  const f=fixture();await f.init();const before=f.calls();await worker.scheduled({scheduledTime:now},f.env,{});assert.equal(f.calls()-before,1);f.sql.close();
 }
 console.log('PASS nightly empty path, multi-batch archival, exact readback, lost commit response, rate limit/403, tampered bytes, atomic D1 rollback, late visits, geo/history pagination, authentication, backlog and scheduled integration');
+{
+ const f=fixture(),r=newRemote();await f.init();f.add(1);
+ const before=await(await f.call('/api/journey/periods?unified=1',true,r.factory)).json();assert.equal(before.archive_epoch,0);assert.equal(before.periods.length,1);
+ await archiveJourneyEvents(f.env,r.factory,now);
+ assert.equal((await f.call('/api/journey/periods?unified=1&epoch=0&snapshot='+before.snapshot,true,r.factory)).status,409);
+ assert.equal((await f.call('/api/journey/period-events?period=1&unified=1&epoch=0&snapshot='+before.snapshot,true,r.factory)).status,409);
+ const current=await(await f.call('/api/journey/periods?unified=1',true,r.factory)).json();assert.equal(current.periods.length,0);assert.equal(current.archive_epoch,1);
+ const older=await(await f.call('/api/journey/archives?snapshot=0',true,r.factory)).json();assert.equal(older.batches.length,0);
+ const archived=await(await f.call('/api/journey/archives?snapshot=1',true,r.factory)).json();assert.equal(archived.batches.length,1);assert.equal(archived.snapshot,1);
+ const detail=await(await f.call('/api/journey/period-events?period=1&archive='+archived.batches[0].digest,true,r.factory)).json();assert.equal(detail.events[0].event_id,'fixture-1');f.sql.close();
+}
+console.log('PASS stable archive snapshot and midnight transition refresh guard');

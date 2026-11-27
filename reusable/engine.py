@@ -33,7 +33,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import parse_qs, urljoin, urlsplit, urlunsplit
 
 import requests
-from reusable.github_cooldown import response_delay, wait as github_wait, git_run, git_throttled, backoff
+from reusable.github_cooldown import response_delay, wait as github_wait, git_run, git_throttled, backoff, GitBatchTooLarge, git_size_rejected, cloudflare_retry_delay
 from itertools import count
 from bs4 import BeautifulSoup
 from PIL import Image
@@ -55,6 +55,12 @@ CONFIG = json.loads((ROOT / "config/default.json").read_text(encoding="utf-8"))
 LOG = logging.getLogger("comic")
 UA = "Mozilla/5.0 (compatible; AuthorizedComicArchiver/0.3; Browser-verified)"
 GITHUB_API = "https://api.github.com"
+# Free-tier hard ceilings; lower configured settings remain valid.
+CONFIG['github_max_file_bytes']=min(int(CONFIG['github_max_file_bytes']),100*1024**2)
+CONFIG['cloudflare_max_file_bytes']=min(int(CONFIG['cloudflare_max_file_bytes']),25*1024**2)
+CONFIG['cloudflare_project_max_files']=min(int(CONFIG['cloudflare_project_max_files']),20000)
+CONFIG['cloudflare_file_target']=min(int(CONFIG['cloudflare_file_target']),CONFIG['cloudflare_project_max_files'])
+CONFIG['pushes_per_minute']=max(1,min(int(CONFIG['pushes_per_minute']),6))
 PAGES_LIMIT = CONFIG["cloudflare_max_file_bytes"]
 
 
@@ -1195,6 +1201,20 @@ def ensure_remote_repo(name, db, token):
     return f"https://github.com/{owner}/{name}.git"
 
 
+GITHUB_PUSH_HARD_BYTES = 2 * 1024**3
+GITHUB_PUSH_HEADROOM_BYTES = 64 * 1024**2
+
+
+def github_push_payload_budget():
+    """Budget raw staged bytes below GitHub's 2 GiB packed-push ceiling.
+
+    The margin covers pack headers, manifests, trees and incompressible input.
+    A lower user-configured budget is respected. Repository rotation is separate.
+    """
+    return min(GITHUB_PUSH_HARD_BYTES - GITHUB_PUSH_HEADROOM_BYTES,
+               int(CONFIG['max_push_mib']) * 1024**2)
+
+
 def paced_push(db, repo):
     now = time.time()
     old = db.execute("SELECT ts FROM push_events WHERE repository=? AND ts>? ORDER BY ts",
@@ -1239,8 +1259,9 @@ def _verify_remote_chapter_tree(remote: str, env: dict, commit: str,
         tip = verify_git('rev-parse', 'FETCH_HEAD').decode('ascii').strip()
         if tip != commit:
             raise RuntimeError('Verification fetch remote branch SHA mismatch')
+        prefixes = [chapter_prefix] if isinstance(chapter_prefix, str) else list(chapter_prefix)
         raw = verify_git('ls-tree', '-r', '-z', '--full-tree', tip,
-                         '--', 'README.md', chapter_prefix)
+                         '--', 'README.md', *prefixes)
         observed = {}
         for entry in raw.split(b'\0'):
             if not entry:
@@ -1266,7 +1287,7 @@ def _verify_remote_chapter_tree(remote: str, env: dict, commit: str,
         return len(observed)
 
 
-def stage_one_chapter(db, repo, chapter, files, manifest, token):
+def stage_one_chapter(db, repo, chapter, files, manifest, token, *, additional=()):
     """Stage images in one Git index batch, then verify remote commit/tree IDs.
 
     This stays provider-agnostic and does not read or modify site adapter state.
@@ -1280,11 +1301,21 @@ def stage_one_chapter(db, repo, chapter, files, manifest, token):
         p = git_run(['git', *args], cwd=cwd, env=env, text=True,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if p.returncode:
+            if args[0]=='push' and git_size_rejected(p.stderr):
+                raise GitBatchTooLarge('GitHub rejected packed push size; local files retained')
             raise RuntimeError(f'git {args[0]} failed: {p.stderr[-900:]}')
         return p.stdout.strip()
 
-    if not files or len(files) != len(manifest.get('images', [])):
-        raise RuntimeError('Chapter files/manifest count mismatch; refusing push')
+    entries = [(chapter, files, manifest), *additional]
+    for ch, paths, meta in entries:
+        if not paths or len(paths) != len(meta.get('images', [])):
+            raise RuntimeError('Chapter files/manifest count mismatch; refusing push')
+        if any(path.stat().st_size>CONFIG['github_max_file_bytes'] for path in paths):
+            raise RuntimeError('Individual image exceeds GitHub file size limit; local files retained')
+    staged_bytes = sum(path.stat().st_size for _, paths, _ in entries for path in paths)
+    if staged_bytes > github_push_payload_budget():
+        raise RuntimeError('GitHub batch exceeds safe 2 GiB push payload budget; files retained')
+    first_chapter = chapter
     with tempfile.TemporaryDirectory(prefix='comic-git-') as tmp:
         work = Path(tmp)
         g('init', '-q', '-b', 'main', cwd=work)
@@ -1296,31 +1327,32 @@ def stage_one_chapter(db, repo, chapter, files, manifest, token):
         parent = g('rev-parse', 'FETCH_HEAD', cwd=work) if latest.returncode == 0 else None
         if parent:
             g('read-tree', parent, cwd=work)
-        chapter_id = safe_slug(chapter.chapter_id, 45)
-        prefix = 'chapters/' + chapter_id + '/'
-        remote_paths = []
         expected_blobs = {}
-
-        # Fail closed if the validated local image bytes were corrupted after
-        # download/checkpoint. Verify SHA-256 and byte counts BEFORE any push.
-        for file, image in zip(files, manifest['images']):
-            if not file.is_file() or file.is_symlink() or file.name in ('', '.', '..') or '/' in file.name or '\\' in file.name:
-                raise RuntimeError('Unsafe/missing image staged for GitHub: ' + str(file))
-            digest = hashlib.sha256()
-            count = 0
-            with file.open('rb') as stream:
-                for block in iter(lambda: stream.read(1024 * 1024), b''):
-                    digest.update(block)
-                    count += len(block)
-            if digest.hexdigest() != image.get('sha256') or count != image.get('bytes'):
-                raise RuntimeError('Image bytes changed after validation: ' + file.name)
-            remote_paths.append(prefix + file.name)
-        if len(remote_paths) != len(set(remote_paths)):
-            raise RuntimeError('Duplicate image filenames in chapter')
-
-        # One Git process to hash ALL chapter files instead of one subprocess
-        # per image. All paths are local generated numeric filenames.
-        input_paths = [str(file) for file in files]
+        plans = []
+        input_paths, all_remote = [], []
+        prefixes = set()
+        for chapter, files, manifest in entries:
+            prefix = 'chapters/' + safe_slug(chapter.chapter_id, 45) + '/'
+            if prefix in prefixes:
+                raise RuntimeError('Duplicate chapter archive prefix')
+            prefixes.add(prefix)
+            remote_paths = []
+            for file, image in zip(files, manifest['images']):
+                if not file.is_file() or file.is_symlink() or file.name in ('', '.', '..') or '/' in file.name or '\\' in file.name:
+                    raise RuntimeError('Unsafe/missing image staged for GitHub: ' + str(file))
+                digest = hashlib.sha256()
+                count = 0
+                with file.open('rb') as stream:
+                    for block in iter(lambda: stream.read(1024 * 1024), b''):
+                        digest.update(block); count += len(block)
+                if digest.hexdigest() != image.get('sha256') or count != image.get('bytes'):
+                    raise RuntimeError('Image bytes changed after validation: ' + file.name)
+                remote_paths.append(prefix + file.name)
+                input_paths.append(str(file))
+            all_remote.extend(remote_paths)
+            plans.append((chapter, manifest, prefix, remote_paths))
+        if len(all_remote) != len(set(all_remote)):
+            raise RuntimeError('Duplicate image filenames in chapter batch')
         if any('\n' in path or '\r' in path for path in input_paths):
             raise RuntimeError('Unsafe newline in image path')
         proc = git_run(['git', 'hash-object', '-w', '--stdin-paths'], cwd=work,
@@ -1329,11 +1361,9 @@ def stage_one_chapter(db, repo, chapter, files, manifest, token):
         if proc.returncode:
             raise RuntimeError('Git batch image hashing failed: ' + proc.stderr[-900:])
         image_hashes = proc.stdout.splitlines()
-        if len(image_hashes) != len(remote_paths) or any(not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', h)
-                                                        for h in image_hashes):
+        if len(image_hashes) != len(all_remote) or any(not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', h) for h in image_hashes):
             raise RuntimeError('Git batch image hashing returned incomplete object IDs')
-        expected_blobs.update(zip(remote_paths, image_hashes))
-
+        expected_blobs.update(zip(all_remote, image_hashes))
         # Fetch the old README only once (the existing remote repo is filtered).
         prior_readme = ''
         if parent:
@@ -1345,19 +1375,20 @@ def stage_one_chapter(db, repo, chapter, files, manifest, token):
             prior_readme = f"# {get_option(db, 'series_title', 'Comic archive')}\n\n"
             prior_readme += ('Verified chapter images are archived in this private repository. '
                              'Use the separately published Cloudflare reader for interactive navigation.\n\n')
-        if f'<!-- archived-chapter:{chapter.chapter_id} -->' not in prior_readme:
-            prior_readme += (f'\n<!-- archived-chapter:{chapter.chapter_id} -->\n'
-                             f'## {chapter.label}\n\n'
-                             f'[Browse chapter images]({prefix})\n\n'
-                             f'[Open first image]({remote_paths[0]})\n\n')
+        for chapter, manifest, prefix, remote_paths in plans:
+            if f'<!-- archived-chapter:{chapter.chapter_id} -->' not in prior_readme:
+                prior_readme += (f'\n<!-- archived-chapter:{chapter.chapter_id} -->\n'
+                                 f'## {chapter.label}\n\n'
+                                 f'[Browse chapter images]({prefix})\n\n'
+                                 f'[Open first image]({remote_paths[0]})\n\n')
         readme_file = work / 'README.md'
-        readme_file.write_text(prior_readme, encoding='utf-8')
+        readme_file.write_bytes(prior_readme.encode('utf-8'))
         expected_blobs['README.md'] = g('hash-object', '-w', str(readme_file), cwd=work)
-        manifest_path = work / 'chapter_manifest.json'
-        manifest['remote_files'] = remote_paths
-        atomic_json(manifest_path, manifest)
-        remote_manifest = prefix + 'manifest.json'
-        expected_blobs[remote_manifest] = g('hash-object', '-w', str(manifest_path), cwd=work)
+        for i, (chapter, manifest, prefix, remote_paths) in enumerate(plans):
+            manifest_path = work / f'chapter_manifest_{i}.json'
+            manifest['remote_files'] = remote_paths
+            atomic_json(manifest_path, manifest)
+            expected_blobs[prefix + 'manifest.json'] = g('hash-object', '-w', str(manifest_path), cwd=work)
         # One atomic index update instead of a process per image.
         records = b''.join((f'100644 {obj}\t{path}'.encode('utf-8') + b'\0')
                            for path, obj in expected_blobs.items())
@@ -1370,7 +1401,7 @@ def stage_one_chapter(db, repo, chapter, files, manifest, token):
         env['GIT_AUTHOR_EMAIL'] = f'{owner}@users.noreply.github.com'
         env['GIT_COMMITTER_NAME'] = owner
         env['GIT_COMMITTER_EMAIL'] = env['GIT_AUTHOR_EMAIL']
-        cp_args = ['git', 'commit-tree', tree, '-m', f'Archive {chapter.label}']
+        cp_args = ['git', 'commit-tree', tree, '-m', f'Archive {len(plans)} chapter(s): {first_chapter.label}']
         if parent:
             cp_args.extend(['-p', parent])
         cp = subprocess.run(cp_args, env=env, cwd=work, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -1379,20 +1410,27 @@ def stage_one_chapter(db, repo, chapter, files, manifest, token):
         commit = cp.stdout.strip()
         paced_push(db, repo)
         start_push = time.monotonic()
-        event('GITHUB_PUSH_START', repo=repo, chapter=chapter.chapter_id)
-        g('push', 'origin', f'{commit}:refs/heads/main', cwd=work)
-        event('GITHUB_PUSH_COMPLETE', repo=repo, chapter=chapter.chapter_id,
+        event('GITHUB_PUSH_START', repo=repo, chapters=[ch.chapter_id for ch,_,_,_ in plans])
+        # An uncertain push response must not cause a duplicate or forced push.
+        try:
+            g('push', 'origin', f'{commit}:refs/heads/main', cwd=work)
+        except RuntimeError:
+            refs = g('ls-remote', 'origin', 'refs/heads/main', cwd=work)
+            if refs.split()[:1] != [commit]:
+                raise
+        event('GITHUB_PUSH_COMPLETE', repo=repo, chapters=len(plans),
               elapsed_seconds=round(time.monotonic() - start_push, 2))
         refs = g('ls-remote', 'origin', 'refs/heads/main', cwd=work)
         if not refs or refs.split()[0] != commit:
             raise RuntimeError('Remote GitHub branch SHA mismatch; retaining local files')
         start_verify = time.monotonic()
-        checked = _verify_remote_chapter_tree(remote, env, commit, expected_blobs, prefix)
-        event('REMOTE_CHAPTER_VERIFIED', repo=repo, chapter=chapter.chapter_id,
-              images=len(files), commit_sha=commit, checked_git_objects=checked,
-              verification_method='remote_commit_tree_object_ids', per_image_blob_fetches=0,
-              elapsed_seconds=round(time.monotonic() - start_verify, 2))
-        return commit, remote_paths
+        checked = _verify_remote_chapter_tree(remote, env, commit, expected_blobs, sorted(prefixes))
+        for chapter, _, _, paths in plans:
+            event('REMOTE_CHAPTER_VERIFIED', repo=repo, chapter=chapter.chapter_id,
+                  images=len(paths), commit_sha=commit, checked_git_objects=checked,
+                  verification_method='remote_commit_tree_object_ids', per_image_blob_fetches=0,
+                  elapsed_seconds=round(time.monotonic() - start_verify, 2))
+        return commit, plans[0][3]
 
 
 def update_local_readme_deployment(db, reader_url: str, volume_urls: dict):
@@ -2030,6 +2068,48 @@ def _archive_run_once(db, source_html: Path | None, source_url: str | None, max_
                     raise RuntimeError("Archive has no series slug; refusing to create an ambiguous GitHub repo")
                 # Absolutely no episode-list traversal when the previous
                 # complete catalog exists; only unresolved chapters are visited.
+            pending = []
+            pending_bytes = pending_files = 0
+            pending_repo = None
+            batch_cap = github_push_payload_budget()
+            def flush_chapters():
+                nonlocal pending_bytes, pending_files, pending_repo, batch_cap
+                if not pending:
+                    return
+                owner, token = credential_for_selected(db)
+                def send_group(group):
+                    nonlocal batch_cap
+                    first = group[0]
+                    try:
+                        commit, _ = stage_one_chapter(db, pending_repo, first[0], first[1], first[2], token,
+                            additional=[(x[0], x[1], x[2]) for x in group[1:]])
+                    except GitBatchTooLarge:
+                        if len(group) == 1:
+                            raise RuntimeError('One chapter exceeds the accepted Git push size; local files retained. Cannot safely split an atomic chapter.')
+                        total_bytes=sum(x[3] for x in group)
+                        batch_cap=min(batch_cap,max(max(x[3] for x in group),total_bytes//2))
+                        mid=1;prefix=group[0][3]
+                        while mid<len(group)-1 and prefix+group[mid][3]<=batch_cap:
+                            prefix+=group[mid][3];mid+=1
+                        event('GITHUB_BATCH_SCALE_DOWN', repo=pending_repo, chapters=len(group), next_chapters=mid)
+                        send_group(group[:mid]); send_group(group[mid:]); return
+                    with db:
+                        for ch, files, manifest, total, folder in group:
+                            db.execute("UPDATE chapters SET repository=?,commit_sha=?,bytes=?,pages_json=?,label=?,status='ARCHIVED_VERIFIED',updated_at=? WHERE chapter_id=?",
+                                (pending_repo, commit, total, json.dumps(manifest), manifest.get('chapter_title') or ch.label, utc(), ch.chapter_id))
+                        db.execute("UPDATE repositories SET logical_bytes=logical_bytes+?,file_count=file_count+?,last_sha=?,updated_at=? WHERE name=?",
+                            (sum(x[3] for x in group), sum(len(x[1]) for x in group), commit, utc(), pending_repo))
+                    from .reader_issue_feed import write_issue_feed
+                    write_issue_feed(ROOT, ROOT / '.archiver_state' / 'source-issues.json')
+                    for ch, files, manifest, total, folder in group:
+                        ensure_cleanup(folder)
+                        with db:
+                            db.execute("UPDATE chapters SET status='ARCHIVED_PENDING_DEPLOYMENT',updated_at=? WHERE chapter_id=?", (utc(), ch.chapter_id))
+                        event('CHAPTER_COMPLETE', chapter=ch.chapter_id, bytes=total, repo=pending_repo)
+                send_group(list(pending))
+                pending.clear()
+                pending_bytes = pending_files = 0
+                pending_repo = None
             for ch in chapters[:max_chapters]:
                 existing = db.execute("SELECT status,repository,commit_sha FROM chapters WHERE chapter_id=?",
                                       (ch.chapter_id,)).fetchone()
@@ -2055,6 +2135,7 @@ def _archive_run_once(db, source_html: Path | None, source_url: str | None, max_
                     files, manifest = acquire_chapter(ctx, ch, DATA / "temporary_downloads",
                                                       guard=guard, visible=not actual_headless)
                 except SourceImageServerUnavailable as exc:
+                    flush_chapters()
                     # A source-origin 404/410 or repeated 5xx is not a broken
                     # bridge. Keep this chapter retryable while archiving the
                     # remaining chapters. Never upload the incomplete chapter.
@@ -2074,6 +2155,7 @@ def _archive_run_once(db, source_html: Path | None, source_url: str | None, max_
                           github_upload=False)
                     continue
                 except Exception as exc:
+                    flush_chapters()
                     # Attribute the failure to this unfinished chapter, so a
                     # later chapter gets its own bounded recovery budget.
                     from .browser_bridge import BrowserBridgeError
@@ -2087,29 +2169,28 @@ def _archive_run_once(db, source_html: Path | None, source_url: str | None, max_
                 total = sum(f.stat().st_size for f in files)
                 event("CHAPTER_SIZE_PLAN", chapter=ch.chapter_id, image_bytes=total,
                       images=len(files), github_preferred_push_mib=CONFIG["max_push_mib"])
-                if total > CONFIG["max_push_mib"] * 1024**2:
+                if total > batch_cap:
                     raise RuntimeError("Chapter exceeds conservative maximum single-push budget; "
                                        "safe multi-commit chunking is not yet implemented. Files retained.")
                 oversize = [f.name for f in files if f.stat().st_size > PAGES_LIMIT]
                 if oversize:
                     event("CLOUDFLARE_UNPUBLISHABLE_ASSET", chapter=ch.chapter_id, assets=oversize)
-                owner, token = credential_for_selected(db)
-                repo = repo_for_chapter(db, slug, total, len(files))
+                if pending:
+                    current = db.execute('SELECT logical_bytes,file_count FROM repositories WHERE name=?', (pending_repo,)).fetchone()
+                    if (pending_bytes + total > batch_cap or
+                        current[0] + pending_bytes + total > CONFIG['github_repo_target_mib'] * 1024**2 or
+                        current[1] + pending_files + len(files) >= 18000):
+                        flush_chapters()
+                if not pending:
+                    pending_repo = repo_for_chapter(db, slug, total, len(files))
                 title_chapter = Chapter(ch.chapter_id, manifest.get('chapter_title') or ch.label, ch.url)
-                commit, remote_paths = stage_one_chapter(db, repo, title_chapter, files, manifest, token)
-                with db:
-                    db.execute("UPDATE chapters SET repository=?,commit_sha=?,bytes=?,pages_json=?,label=?,status='ARCHIVED_VERIFIED',updated_at=? WHERE chapter_id=?",
-                               (repo, commit, total, json.dumps(manifest), manifest.get('chapter_title') or ch.label, utc(), ch.chapter_id))
-                    db.execute("UPDATE repositories SET logical_bytes=logical_bytes+?,file_count=file_count+?,last_sha=?,updated_at=? WHERE name=?",
-                               (total, len(files), commit, utc(), repo))
-                from .reader_issue_feed import write_issue_feed
-                write_issue_feed(ROOT, ROOT / '.archiver_state' / 'source-issues.json')
-                ensure_cleanup(folder)
-                with db:
-                    db.execute("UPDATE chapters SET status='ARCHIVED_PENDING_DEPLOYMENT',updated_at=? WHERE chapter_id=?",
-                               (utc(), ch.chapter_id))
-                event("CHAPTER_COMPLETE", chapter=ch.chapter_id, bytes=total, repo=repo)
+                pending.append((title_chapter, files, manifest, total, folder))
+                pending_bytes += total; pending_files += len(files)
+                event('CHAPTER_QUEUED_FOR_GITHUB_BATCH', chapter=ch.chapter_id, chapters=len(pending), bytes=pending_bytes)
+                if pending_bytes >= batch_cap:
+                    flush_chapters()
                 time.sleep(CONFIG["delay_between_chapters_seconds"])
+            flush_chapters()
         finally:
             ctx.close()
 
@@ -2158,6 +2239,7 @@ def archive_run(db, source_html: Path | None, source_url: str | None, max_chapte
     reconnect_number = 0
     current_recovery_chapter = None
     recovery_counts = {}
+    source_waits = 0
     while True:
         token = _BRIDGE_RECOVERY_PAIR_TIMEOUT.set(90 if reconnect_number else None)
         try:
@@ -2165,7 +2247,7 @@ def archive_run(db, source_html: Path | None, source_url: str | None, max_chapte
                 db, source_html, source_url, max_chapters, authorized,
                 source_headless=source_headless, source_browser=source_browser,
                 force_rediscover=force_rediscover,
-                skip_initial_github_check=skip_initial_github_check or reconnect_number > 0,
+                skip_initial_github_check=skip_initial_github_check or reconnect_number > 0 or source_waits > 0,
                 retry_server_failures=retry_server_failures)
         except BrowserBridgeError as exc:
             reason = bridge_recovery_reason(exc)
@@ -2193,6 +2275,16 @@ def archive_run(db, source_html: Path | None, source_url: str | None, max_chapte
             if current_recovery_chapter and force_rediscover and _catalog_complete(db):
                 force_rediscover = False
             time.sleep(2)
+        except SourceAccessPaused as exc:
+            if not exc.resume_at_utc or not ('HTTP 429' in str(exc) or 'requires a cooldown' in str(exc)):
+                raise
+            try: requested=datetime.fromisoformat(exc.resume_at_utc.replace('Z','+00:00')).timestamp()-time.time()
+            except (ValueError,TypeError,OverflowError): raise exc
+            delay=max(backoff(source_waits),requested+5);source_waits+=1
+            event('WAIT_SOURCE_LIMIT', wait_seconds=delay, reason='source requested cooldown', checkpoint_retained=True)
+            print(f'Source rate limit: waiting {delay:.0f}s before resuming saved chapter; Ctrl+C stops safely.',flush=True)
+            time.sleep(delay)
+            if force_rediscover and _catalog_complete(db):force_rediscover=False
         finally:
             _BRIDGE_RECOVERY_PAIR_TIMEOUT.reset(token)
 
@@ -2352,17 +2444,29 @@ def npx_wrangler(args, cwd=ROOT, check=True, progress_label=None):
     env = cloudflare_account_env()
     env['NO_COLOR'] = '1'
     env['FORCE_COLOR'] = '0'
-    if progress_label:
-        p = _run_monitored_command([str(local), *args], cwd=cwd, env=env,
-                label=progress_label, show_provider_lines=True)
-    else:
-        # Short metadata queries retain the original capture path, including
-        # backwards-compatible test hooks. They don't create upload stalls.
-        raw = subprocess.run([str(local), *args], cwd=cwd, env=env,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
-        stdout = (raw.stdout or b'').decode('utf-8-sig', errors='replace')
-        stderr = (raw.stderr or b'').decode('utf-8-sig', errors='replace')
-        p = subprocess.CompletedProcess(raw.args, raw.returncode, stdout, stderr)
+    read_only = args[:1] in (['whoami'],) or args[:2] in (['deployments','list'], ['versions','list'], ['pages','project'], ['d1','list']) and not any(x in args for x in ('create','delete','deploy'))
+    for attempt in count():
+        if progress_label:
+            p = _run_monitored_command([str(local), *args], cwd=cwd, env=env,
+                    label=progress_label, show_provider_lines=True)
+        else:
+            # Short metadata queries retain the original capture path, including
+            # backwards-compatible test hooks. They don't create upload stalls.
+            raw = subprocess.run([str(local), *args], cwd=cwd, env=env,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
+            stdout = (raw.stdout or b'').decode('utf-8-sig', errors='replace')
+            stderr = (raw.stderr or b'').decode('utf-8-sig', errors='replace')
+            p = subprocess.CompletedProcess(raw.args, raw.returncode, stdout, stderr)
+        delay = cloudflare_retry_delay((p.stderr or '')+'\n'+(p.stdout or ''), attempt) if p.returncode else None
+        # Repeat an explicitly rejected identical deploy only before Wrangler
+        # reports publication success. A partially published version requires
+        # the existing live-state adoption path, not an unconditional redeploy.
+        deploy = args[:1]==['deploy'] or args[:2]==['pages','deploy']
+        published = bool(re.search(r'(?im)^\s*(?:Uploaded [^\n]+ \(\d|Deployed [^\n]+ triggers|Deployment complete|Current Version ID:)',p.stdout or ''))
+        if delay is None or not (read_only or (deploy and not published)):
+            break
+        event('WAIT_CLOUDFLARE_LIMIT', wait_seconds=delay)
+        time.sleep(delay)
     if p.returncode and check:
         raise RuntimeError('Wrangler ' + ' '.join(args[:2]) + ': ' + (p.stderr or p.stdout)[-1200:])
     return p

@@ -155,61 +155,36 @@ def _open_reader_sync_choice(args, *, interactive=None, prompt=None):
 
 
 def _reader_workflow_choices(argv, *, interactive=None, prompt=None):
-    """Choose publication work and independent, optional checks for this run.
-
-    Defaults preserve the existing full workflow for unattended automation.
-    Noninteractive flags can select a narrower workflow explicitly.
-    """
+    """Focused by default after initial library setup; full audit is opt-in."""
     argv=list(argv)
     options={'--status','--archive-needed','--inspect','--audit-resources',
              '--github-login','--github-logout','--github-account',
              '--github-switch-account','--default-source-url',
              '--refresh-extension','--self-test-only','--library-audit'}
     if options.intersection(argv):
-        return 'full', False, True
-    scope='full'
-    if '--open-reader-update-scope' in argv:
+        return 'full', False, '--self-test-only' in argv
+    # A brand-new installation still needs the initial full registry setup.
+    scope='comic' if (ROOT/'.archiver_state/open_reader_registry.json').is_file() else 'full'
+    explicit='--open-reader-update-scope' in argv
+    if explicit:
         ix=argv.index('--open-reader-update-scope')
-        if ix+1>=len(argv):
+        if ix+1>=len(argv) or argv[ix+1] not in ('full','comic','site'):
             raise SystemExit('--open-reader-update-scope requires full, comic, or site')
         scope=argv[ix+1]
-        if scope not in ('full','comic','site'):
-            raise SystemExit('Unrecognized Open Reader update scope: '+scope)
     interactive=sys.stdin.isatty() if interactive is None else interactive
-    if not interactive:
-        return scope, ('--skip-initial-github-check' in argv), True
-    prompt=input if prompt is None else prompt
-    if '--open-reader-update-scope' not in argv and '--skip-open-reader-sync' not in argv:
+    if interactive and not explicit and '--skip-open-reader-sync' not in argv:
+        prompt=input if prompt is None else prompt
         print('What changed in Open Reader?\n'
-              '  1) Current comic only (new chapters/new comic; update library listing)\n'
-              '  2) Homepage, Your Journey, or other shared routes only (no comic changes)\n'
-              '  3) Full library synchronization (default)',flush=True)
-        answer=prompt('Choose publication workflow [1/2/3]: ').strip().lower()
-        if answer in ('1','comic'):
-            scope='comic'
-        elif answer in ('2','site'):
-            scope='site'
-        elif answer in ('','3','full'):
-            scope='full'
-        else:
-            raise SystemExit('Invalid publication choice; nothing changed.')
-    old_check=('--skip-initial-github-check' not in argv)
-    if old_check:
-        # Focused work normally does not need any historical GitHub scan.
-        default='N' if scope in ('comic','site') else 'Y'
-        question = ('Recheck all older comics remotely (turns targeted update into full sync)? ' if scope in ('comic','site')
-                    else 'Reconcile old local GitHub archive history? (Full library scan still runs) ')
-        reply=prompt(question + ('[y/N]: ' if default=='N' else '[Y/n]: ')).strip().lower()
-        if reply in ('y','yes'):
-            old_check=True
-        elif reply in ('n','no',''):
-            old_check=(default=='Y' and reply=='')
-        else:
-            raise SystemExit('Invalid historical-check choice; nothing changed.')
-    answer=prompt('Run optional regression test suites? [Y/n]: ').strip().lower()
-    if answer not in ('','y','yes','n','no'):
-        raise SystemExit('Invalid test-suite choice; nothing changed.')
-    return scope, not old_check, answer not in ('n','no')
+              '  1) Current comic only\n'
+              '  2) Homepage, Your Journey, Add Comic or other shared routes only\n'
+              '  3) Full library synchronization / audit',flush=True)
+        answer=prompt('Choose publication workflow [default '+('1' if scope=='comic' else '3')+']: ').strip().lower()
+        choices={'1':'comic','comic':'comic','2':'site','site':'site','3':'full','full':'full','':scope}
+        if answer not in choices: raise SystemExit('Invalid publication choice; nothing changed.')
+        scope=choices[answer]
+    # Explicit focused commands never ask questions that turn them into a
+    # full-library audit. Full sync remains available as a deliberate choice.
+    return scope, scope != 'full' or '--skip-initial-github-check' in argv, scope=='full'
 
 
 def _initial_github_check_choice(args, *, interactive=None, prompt=None):
@@ -433,6 +408,10 @@ def _run_preflight(*, run_tests=True) -> None:
         print('  PASS release contracts and generated extension parity', flush=True)
     except (OSError, ValueError, KeyError, SyntaxError) as exc:
         fail('missing, broken, or incompatible source file: ' + str(exc))
+
+    if not run_tests:
+        print('PREFLIGHT COMPATIBILITY PASSED: regression suites skipped for focused work.\n', flush=True)
+        return
 
     # Always run the short, provider-neutral regression for the live blob
     # handler revision and exact-image fail-closed behavior. Skipping the long

@@ -7,7 +7,7 @@ import json
 PDF_VERSION = '4.10.38'
 SOURCE_FILES = ('reusable/manual_import.py', 'reusable/manual_import_browser.html',
                 'reusable/manual_import.css', 'reusable/manual_import_browser.js', 'reusable/manual_direct_upload.js',
-                'reusable/worker_addon/manual_import_worker.mjs')
+                'reusable/worker_addon/manual_import_worker.mjs', 'reusable/manual_reader_image_loader.js')
 
 
 def pdf_assets(root):
@@ -70,6 +70,11 @@ def stage_assets(root, stage):
     # The warning is inside the existing grid area only when imports cannot load.
     html=html.replace('grid.after(hint)','grid.append(hint)')
     home.write_text(html,encoding='utf-8')
+    # Keep normal comic bundles byte-identical; only the dynamic imported reader
+    # gets its status-aware, authenticated image loader.
+    app=stage/'manual-reader-template'/'app.js'
+    with app.open('a',encoding='utf-8',newline='\n') as f:
+        f.write('\n'+(root/'reusable'/'manual_reader_image_loader.js').read_text(encoding='utf-8')+'\n')
     # Edit metadata link and description appear only on the imported overview.
     overview=stage/'manual-reader-template'/'overview'/'index.html'
     html=overview.read_text(encoding='utf-8')

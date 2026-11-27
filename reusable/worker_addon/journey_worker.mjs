@@ -166,6 +166,7 @@ async function periods(req,env,validSession){
  if(!validOffset(offset))return bad('Invalid offset');
  try{
   await ready(env.JOURNEY_DB);
+  const epoch=await unifiedEpoch(env.JOURNEY_DB,u);
   const snapshot=await historySnapshot(env.JOURNEY_DB,u);
   const sql=PERIOD_CTE+`SELECT period_id,MIN(ip) AS ip,MIN(created_at) AS start_at,
     MAX(created_at) AS end_at,COUNT(*) AS actions,MIN(row_seq) AS first_seq,
@@ -173,10 +174,11 @@ async function periods(req,env,validSession){
     MIN(country) AS country
     FROM grouped GROUP BY period_id ORDER BY period_id DESC LIMIT ? OFFSET ?`;
   const data=await env.JOURNEY_DB.prepare(sql).bind(snapshot,251,offset).all();
+  if(epoch!==null&&epoch!==await archiveEpoch(env.JOURNEY_DB))return bad('History was archived during browsing. Refresh the timeline.',409);
   const found=data.results||[],more=found.length>250;
   return result({ok:true,periods:found.slice(0,250),next_offset:more?offset+250:null,
-    retention_days:RETAIN_DAYS,snapshot});
- }catch(e){if(e instanceof RangeError)return bad(e.message);console.error('JOURNEY_PERIODS_ERROR',String(e?.message||e));return bad('Timeline unavailable',503)}
+    retention_days:RETAIN_DAYS,snapshot,...(epoch===null?{}:{archive_epoch:epoch})});
+ }catch(e){if(e instanceof RangeError)return bad(e.message);if(e.historyChanged)return bad(e.message,409);console.error('JOURNEY_PERIODS_ERROR',String(e?.message||e));return bad('Timeline unavailable',503)}
 }
 async function periodEvents(req,env,validSession){
  if(!await validSession(req,env))return bad('Sign-in required',401);
@@ -186,6 +188,7 @@ async function periodEvents(req,env,validSession){
  if(!Number.isSafeInteger(id)||id<1||!validOffset(offset))return bad('Invalid period or offset');
  try{
   await ready(env.JOURNEY_DB);
+  const epoch=await unifiedEpoch(env.JOURNEY_DB,u);
   const snapshot=await historySnapshot(env.JOURNEY_DB,u);
   const sql=PERIOD_CTE+`SELECT grouped.created_at,grouped.kind,grouped.path,
     grouped.slug,grouped.chapter,grouped.ip,grouped.city,grouped.region,
@@ -194,9 +197,10 @@ async function periodEvents(req,env,validSession){
     FROM grouped LEFT JOIN journey_event_locations geo ON grouped.event_id=geo.event_id
     WHERE grouped.period_id=? ORDER BY grouped.created_at,grouped.row_seq LIMIT ? OFFSET ?`;
   const data=await env.JOURNEY_DB.prepare(sql).bind(snapshot,id,201,offset).all();
+  if(epoch!==null&&epoch!==await archiveEpoch(env.JOURNEY_DB))return bad('History was archived during browsing. Refresh the timeline.',409);
   const found=data.results||[],more=found.length>200;
   return result({ok:true,events:found.slice(0,200),next_offset:more?offset+200:null,snapshot});
- }catch(e){if(e instanceof RangeError)return bad(e.message);console.error('JOURNEY_PERIOD_EVENTS_ERROR',String(e?.message||e));return bad('Period unavailable',503)}
+ }catch(e){if(e instanceof RangeError)return bad(e.message);if(e.historyChanged)return bad(e.message,409);console.error('JOURNEY_PERIOD_EVENTS_ERROR',String(e?.message||e));return bad('Period unavailable',503)}
 }
 export async function journeyRoute(req,env,validSession,remoteFactory){
  const path=new URL(req.url).pathname;
@@ -233,6 +237,8 @@ async function archiveReady(db){
  return archiveSchemaPromise;
 }
 const one=async statement=>(await statement.all()).results?.[0]||null;
+async function archiveEpoch(db){await archiveReady(db);return Number((await one(db.prepare('SELECT COALESCE(MAX(rowid),0) AS n FROM journey_archive_index')))?.n??0);}
+async function unifiedEpoch(db,u){if(u.searchParams.get('unified')!=='1')return null;const n=await archiveEpoch(db),raw=u.searchParams.get('epoch');if(raw!==null&&(!/^\d+$/.test(raw)||!Number.isSafeInteger(Number(raw))))throw new RangeError('Invalid history epoch');if(raw!==null&&Number(raw)!==n){const e=Error('History was archived during browsing. Refresh the timeline.');e.historyChanged=true;throw e;}return n;}
 const pending=db=>one(db.prepare('SELECT * FROM journey_archive_pending WHERE slot=1'));
 const eventQuery=`SELECT e.rowid AS row_seq,e.event_id,e.created_at,e.kind,e.path,e.slug,e.chapter,e.ip,e.city,e.region,e.country,e.timezone,e.colo,g.latitude,g.longitude FROM journey_events e LEFT JOIN journey_event_locations g ON e.event_id=g.event_id WHERE e.created_at < ? ORDER BY e.created_at,e.rowid LIMIT ${ARCHIVE_BATCH}`;
 function missingTable(e){return /no such table: (?:main\.)?journey_events\b/i.test(String(e?.message||e));}
@@ -259,9 +265,8 @@ export async function archiveJourneyEvents(env,remoteFactory,now=Date.now()){
  for(let i=0;i<ARCHIVE_BATCHES;i++){
   let p=await pending(db);
   if(!p){
-   const rows=await selectBatch(db,cutoff);if(!rows.length)break;
-   const payload=JSON.stringify({schema:'open-reader.journey.events.v1',events:rows});
-   const bytes=ARCHIVE_ENCODER.encode(payload);if(bytes.length>1024*1024)throw Error('Journey batch exceeds safety bound');
+   let rows=await selectBatch(db,cutoff);if(!rows.length)break;
+   let payload,bytes;for(;;){payload=JSON.stringify({schema:'open-reader.journey.events.v1',events:rows});bytes=ARCHIVE_ENCODER.encode(payload);if(bytes.length<=1024*1024)break;if(rows.length===1)throw Error('Journey archive event exceeds safety bound; retained');rows=rows.slice(0,Math.ceil(rows.length/2));}
    const digest=await archiveSha(bytes),start=rows[0].created_at,end=rows.at(-1).created_at;
    // INSERT OR IGNORE makes concurrent scheduled invocations agree on one
    // exact immutable batch; no second selection can change its contents.
@@ -303,8 +308,14 @@ async function archiveList(req,env){
  await archiveReady(env.JOURNEY_DB);
  const u=new URL(req.url),offset=Number(u.searchParams.get('offset')||0);
  if(!validOffset(offset))return bad('Invalid archive offset');
- const found=(await env.JOURNEY_DB.prepare('SELECT digest,start_at,end_at,event_count FROM journey_archive_index ORDER BY end_at DESC,digest DESC LIMIT 51 OFFSET ?').bind(offset).all()).results||[];
- return result({ok:true,batches:found.slice(0,50),next_offset:found.length>50?offset+50:null});
+ // Freeze the append-only archive index for the current browsing session.
+ // rowid is insertion order and breaks ties for same-timestamp batches.
+ const raw=u.searchParams.get('snapshot');
+ let snapshot;
+ if(raw===null){snapshot=Number((await one(env.JOURNEY_DB.prepare('SELECT COALESCE(MAX(rowid),0) AS n FROM journey_archive_index')))?.n??0);}
+ else{snapshot=Number(raw);if(!/^\d+$/.test(raw)||!Number.isSafeInteger(snapshot)||snapshot<0)return bad('Invalid archive snapshot');}
+ const found=(await env.JOURNEY_DB.prepare('SELECT digest,start_at,end_at,event_count FROM journey_archive_index WHERE rowid<=? ORDER BY end_at DESC,rowid DESC LIMIT 51 OFFSET ?').bind(snapshot,offset).all()).results||[];
+ return result({ok:true,batches:found.slice(0,50),next_offset:found.length>50?offset+50:null,snapshot});
 }
 async function archivedHistory(req,env,remoteFactory){
  const u=new URL(req.url),digest=u.searchParams.get('archive'),offset=Number(u.searchParams.get('offset')||0);

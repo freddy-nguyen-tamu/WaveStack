@@ -304,7 +304,8 @@ export async function browserImportToken(env,repo,marker) {
   if(info.private!==true||info.name!==repo||info.owner?.login?.toLowerCase()!==owner.toLowerCase()||info.description!==marker||!Number.isSafeInteger(info.id))throw Error('Private import repository identity mismatch; refusing browser access');
   const data=await mintGithubToken(env,{repository_ids:[info.id],permissions:{contents:'write'}});
   if(!Array.isArray(data.repositories)||data.repositories.length!==1||data.repositories[0].id!==info.id||data.permissions?.contents!=='write'||Object.entries(data.permissions||{}).some(([k,v])=>!['contents','metadata'].includes(k)&&v!=='none'))throw Error('GitHub did not confirm repository-scoped write access');
-  return {token:data.token,expires_at:data.expires_at,owner,repo};
+  if(typeof info.default_branch!=='string'||!info.default_branch)throw Error('Private import repository has no default branch');
+  return {token:data.token,expires_at:data.expires_at,owner,repo,branch:info.default_branch};
 }
 // Dedicated private history repository. No browser token, no automatic repo
 // creation, no expansion of image-upload path allowlists. Check visibility
@@ -324,7 +325,7 @@ export async function journeyArchiveRemote(env){
   async read(path){const r=await checked(contents(path)+'?ref='+encodeURIComponent(branch),'GET',null,'application/vnd.github.raw+json');if(r.status===404)return null;if(!r.ok)throw Error('Journey history read HTTP '+r.status);
    let bytes=new Uint8Array(await r.arrayBuffer());if(bytes.length>1500000)throw Error('Journey history response too large');
    // GitHub may return Contents metadata instead of raw bytes.
-   if(/application\/json/i.test(r.headers.get('Content-Type')||'')){let m;try{m=JSON.parse(new TextDecoder().decode(bytes))}catch{}if(m?.type==='file'&&m.encoding==='base64'&&typeof m.content==='string'){bytes=Uint8Array.from(atob(m.content.replace(/\s/g,'')),x=>x.charCodeAt(0));}}
+   if(/(?:application\/(?:[\w.+-]+\+)?json|text\/json)/i.test(r.headers.get('Content-Type')||'')||bytes[0]===123){let m;try{m=JSON.parse(new TextDecoder().decode(bytes))}catch{}if(m?.type==='file'&&m.encoding==='base64'&&typeof m.content==='string'){bytes=Uint8Array.from(atob(m.content.replace(/\s/g,'')),x=>x.charCodeAt(0));}}
    return bytes;
   },
   async write(path,bytes){let parts=[];for(let i=0;i<bytes.length;i+=8192)parts.push(String.fromCharCode(...bytes.subarray(i,i+8192)));
@@ -333,20 +334,20 @@ export async function journeyArchiveRemote(env){
  };
 }
 
-async function gh(env, method, repo, path, {accept='application/vnd.github+json', data}={}) {
+async function gh(env, method, repo, path, {accept='application/vnd.github+json', data, ref, readToken}={}) {
   if(!/^[A-Za-z0-9-]{1,39}$/.test(String(env.GITHUB_OWNER||'')))throw new Error('Bad GitHub account config');
   if(repo!=='open-reader' && !REPO_RE.test(repo))throw new Error('Unrecognized archive repository');
   if(!path.split('/').every(p=>/^[A-Za-z0-9_.-]+$/.test(p) && p!=='.' && p!=='..'))throw new Error('Unsafe archive path');
   const url=`https://api.github.com/repos/${env.GITHUB_OWNER}/${repo}/contents/`+
-    path.split('/').map(encodeURIComponent).join('/');
-  const request=async()=>fetch(url,{method,headers:{'Authorization':'Bearer '+await githubToken(env),'Accept':accept,
+    path.split('/').map(encodeURIComponent).join('/')+(ref?'?ref='+encodeURIComponent(ref):'');
+  const request=async()=>fetch(url,{method,...(method==='GET'&&/^import-[a-f0-9]{32}-vol-[0-9]{3}$/.test(repo)?{signal:AbortSignal.timeout(30000)}:{}),headers:{'Authorization':'Bearer '+(readToken||await githubToken(env)),'Accept':accept,
     'X-GitHub-Api-Version':'2026-03-10','User-Agent':'open-reader-streaming',
     ...(data?{'Content-Type':'application/json'}:{})},
     ...(data?{body:JSON.stringify(data)}:{})});
   let response=await request();
   // A different Worker isolate may still hold a token minted before the
   // import volume was created. Refresh only once, only on reads, never on throttles.
-  if(method==='GET'&&/^import-[a-f0-9]{32}-vol-[0-9]{3}$/.test(repo)&&[401,403,404].includes(response.status)&&!(await githubFailure(response.clone())).throttled){githubInstallation=null;response=await request();}
+  if(!readToken&&method==='GET'&&/^import-[a-f0-9]{32}-vol-[0-9]{3}$/.test(repo)&&[401,403,404].includes(response.status)&&!(await githubFailure(response.clone())).throttled){githubInstallation=null;response=await request();}
   return response;
 }
 async function githubFailure(response) {
@@ -354,15 +355,15 @@ async function githubFailure(response) {
   const throttled=response.status===429||(response.status===403&&(remaining==='0'||retry||/secondary rate limit|api rate limit exceeded|abuse detection/i.test(await response.text())));
   return {status:response.status,throttled:!!throttled,retry,reset:remaining==='0'?reset:null};
 }
-async function githubFile(env, repo, path) {
+async function githubFile(env, repo, path, options={}) {
   let response;
-  try{response=await gh(env,'GET',repo,path,{accept:'application/vnd.github.raw+json'});}
+  try{response=await gh(env,'GET',repo,path,{accept:'application/vnd.github.raw+json',...options});}
   catch(e){if(e.githubFailure?.throttled)return e.githubFailure;throw e;}
   if(!response.ok)return githubFailure(response);
   let body=new Uint8Array(await response.arrayBuffer());
   // GitHub Contents can return JSON metadata even when a raw-image media
   // type was requested. Decode only a bounded, validated file response.
-  if(!guessMime(body) && /application\/json/i.test(response.headers.get('Content-Type')||'')) {
+  if(!guessMime(body) && (body[0]===123 || /(?:application\/(?:[\w.+-]+\+)?json|text\/json)/i.test(response.headers.get('Content-Type')||''))) {
     let meta;
     try {meta=JSON.parse(new TextDecoder().decode(body));} catch {meta=null}
     if(meta?.type==='file' && meta.encoding==='base64' &&
@@ -375,6 +376,34 @@ async function githubFile(env, repo, path) {
     }
   }
   return {status:200,body};
+}
+// Read-only, repository-scoped probe. Cache per installation and volume so
+// a failed chapter does not mint a token or enumerate a tree for every panel.
+const importVolumeChecks=new Map();
+async function importVolumeInventory(env,repo,{fresh=false}={}){
+ if(!/^import-[a-f0-9]{32}-vol-[0-9]{3}$/.test(repo))throw Error('Invalid import volume');
+ const owner=String(env.GITHUB_OWNER||'');
+ if(!/^[A-Za-z0-9-]{1,39}$/.test(owner))throw Error('Invalid owner');
+ const key=owner.toLowerCase()+':'+env.GITHUB_APP_ID+':'+env.GITHUB_APP_INSTALLATION_ID+':'+repo;
+ const now=Date.now(), old=importVolumeChecks.get(key);
+ if(!fresh&&old&&old.until>now)return old.promise;
+ const promise=(async()=>{
+  let token;
+  try{const minted=await mintGithubToken(env,{repositories:[repo],permissions:{contents:'read'}});if(minted.permissions?.contents!=='read'||!Array.isArray(minted.repositories)||minted.repositories.length!==1||minted.repositories[0].name!==repo)throw Error('GitHub did not confirm exact repository read scope');token=minted.token;}
+  catch(e){if(e.githubFailure?.throttled)return e.githubFailure;return {status:e.githubFailure?.status||403,stage:'App repository-scoped token'};}
+  const base=`https://api.github.com/repos/${owner}/${repo}`;
+  const get=url=>fetch(url,{headers:{Authorization:'Bearer '+token,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2026-03-10','User-Agent':'open-reader-streaming'},signal:AbortSignal.timeout(20000)});
+  let r=await get(base);if(!r.ok)return {...await githubFailure(r),stage:'repository metadata'};
+  const info=await r.json();if(info.private!==true||info.name!==repo||info.owner?.login?.toLowerCase()!==owner.toLowerCase()||!info.default_branch)return {status:409,stage:'private repository identity'};
+  r=await get(base+'/git/trees/'+encodeURIComponent(info.default_branch)+'?recursive=1');if(!r.ok)return {...await githubFailure(r),stage:'default branch tree'};
+  const tree=await r.json();if(tree.truncated||!Array.isArray(tree.tree))return {status:409,stage:'incomplete Git tree'};
+  const files=new Map(tree.tree.filter(x=>x.type==='blob'&&/^(?:pages\/[a-f0-9]{64}\.(?:png|jpg)|packs\/[a-f0-9]{64}\.bin)$/.test(x.path)&&Number.isSafeInteger(x.size)).map(x=>[x.path,x.size]));
+  const blobs=new Map(tree.tree.filter(x=>files.has(x.path)&&/^[a-f0-9]{40}$/.test(x.sha||'')).map(x=>[x.path,x.sha]));
+  return {status:200,files,blobs,branch:info.default_branch,readToken:token};
+ })().catch(()=>({status:503,stage:'repository inventory connection'}));
+ importVolumeChecks.set(key,{until:now+60000,promise});
+ if(importVolumeChecks.size>64){for(const [k,v] of importVolumeChecks){if(v.until<=now)importVolumeChecks.delete(k);}while(importVolumeChecks.size>64)importVolumeChecks.delete(importVolumeChecks.keys().next().value);}
+ return promise;
 }
 async function shaHex(bytes) {return toHex(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)));}
 async function archiveManifest(req,env,slug) {
@@ -608,7 +637,7 @@ export default {
     // All public routes, including static assets and image streams, require the
     // same site session. Credentials never enter any public file or JS bundle.
     if(!await validSession(req,env))return unauthenticated(req);
-    const manual=await manualRoute(req,env,{gh,githubFile,shaHex,boundedBody,githubConfigured,browserImportToken});
+    const manual=await manualRoute(req,env,{gh,githubFile,shaHex,boundedBody,githubConfigured,browserImportToken,importVolumeInventory,ctx});
     if(manual)return renewIfNeeded(req,env,manual);
     const journey = await journeyRoute(req,env,(r,e)=>validSession(r,e),journeyArchiveRemote);
     if(journey)return renewIfNeeded(req,env,journey);

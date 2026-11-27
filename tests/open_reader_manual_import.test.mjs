@@ -12,6 +12,7 @@ const env={GITHUB_OWNER:'owner',JOURNEY_DB:db,READER_ADMIN_PASSWORD:'test-passwo
 const store=new Map();let writes=0,fail=false,throttled=false;
 const hash=async b=>createHash('sha256').update(b).digest('hex');
 const deps={githubConfigured:()=>true,shaHex:hash,boundedBody:async r=>new Uint8Array(await r.arrayBuffer()),gh:async(_env,method,repo,path,opts)=>{assert.equal(repo,'open-reader');assert.match(path,/^manual-imports\/import-[a-f0-9]{32}\/[a-f0-9]{64}\.png$/);assert.equal(method,'PUT');writes++;if(store.has(path))return new Response(null,{status:422});store.set(path,new Uint8Array(Buffer.from(opts.data.content,'base64')));return new Response(null,{status:201});},githubFile:async(_env,repo,path)=>throttled?{status:403,throttled:true,retry:'120'}:({status:store.has(path)?200:404,body:fail?new Uint8Array([1]):store.get(path)})};
+const inventories=new Map();deps.importVolumeInventory=async(_env,repo)=>({status:200,files:inventories.get(repo)||new Map()});
 const call=async(path,method='GET',body,originHeader=origin)=>manualRoute(new Request(origin+path,{method,headers:{Origin:originHeader},...(body!==undefined?{body:body instanceof Uint8Array?body:JSON.stringify(body)}:{})}),env,deps);
 const request=(path,method='GET',body,headers={})=>worker.fetch(new Request(origin+path,{method,headers:{Origin:origin,...headers},...(body!==undefined?{body:JSON.stringify(body)}:{})}),env);
 assert.equal((await request('/api/manual-comics')).status,401);assert.equal((await request('/add-comic/')).status,302);assert.equal((await request('/api/manual-comics','POST',{title:'x'})).status,401);
@@ -57,6 +58,7 @@ assert.equal((await call(np+'/local-init','POST',{owner:'other',metadata:nm})).s
 assert.equal((await call(np+'/local-init','POST',{owner:'owner',metadata:nm})).status,200);
 const sha=await hash(page1),indexBytes=new TextEncoder().encode(JSON.stringify({slug:newSlug,volume:1,pages:[{sha,width:1,height:1,size:page1.length}]})),index=await hash(indexBytes);
 store.set('indexes/'+index+'.json',indexBytes);store.set('pages/'+sha+'.png',page1);
+inventories.set(newSlug+'-vol-001',new Map([['pages/'+sha+'.png',page1.length]]));
 const registration={owner:'owner',revision:0,volume:1,index};
 throttled=true;r=await call(np+'/local-index','POST',registration);assert.equal(r.status,429);assert.ok(+r.headers.get('Retry-After')>=120);throttled=false;
 assert.equal((await call(np+'/local-index','POST',registration)).status,200);
@@ -83,6 +85,7 @@ console.log('PASS browser volume reservation: stable retries, separate repositor
 const jpg=Uint8Array.from(Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAIBAQIBAQICAgICAgICAwUDAwMDAwYEBAMFBwYHBwcGBwcICQsJCAgKCAcHCg0KCgsMDAwMBwkODw0MDgsMDAz/2wBDAQICAgMDAwYDAwYMCAcIDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAz/wAARCAADAAIDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD4jooor8HP6EP/2Q==','base64')), jsha=await hash(jpg);
 const jIndex=new TextEncoder().encode(JSON.stringify({slug:browserSlug,volume:999,pages:[{sha:jsha,width:2,height:3,size:jpg.length,format:'jpg'}]})),jDigest=await hash(jIndex);
 store.set('indexes/'+jDigest+'.json',jIndex);store.set('pages/'+jsha+'.jpg',jpg);
+inventories.set(browserSlug+'-vol-999',new Map([['pages/'+jsha+'.jpg',jpg.length]]));
 const jReq={owner:'owner',revision:0,volume:999,index:jDigest};
 const savedBatch=db.batch;db.batch=async()=>{throw Error('simulated atomic registration failure')};
 assert.equal((await call(bp+'/local-index','POST',jReq)).status,503);
@@ -112,10 +115,40 @@ const priorGh=deps.gh;deps.gh=async(_env,method,repo,path)=>{assert.equal(method
 const recoverReq={owner:'owner',revision:0,volume:rv.volume};
 assert.equal((await call(rp+'/local-recover','POST',{...recoverReq,volume:998})).status,404);
 assert.deepEqual((await(await call(rp+'/local-recover','POST',recoverReq)).json()).indexes,[oldDigest]);
-let rr=await call(rp+'/local-index','POST',{...recoverReq,index:oldDigest,recover:true});assert.equal(rr.status,200);assert.deepEqual((await rr.json()).pages,oldPages);
+let rr=await call(rp+'/local-index','POST',{...recoverReq,index:oldDigest,recover:true});assert.equal(rr.status,409,'index alone cannot establish storage');assert.equal(sql.prepare('SELECT COUNT(*) AS n FROM manual_local_pages_v1 WHERE slug=?').get(recoverSlug).n,0);
+inventories.set(rv.repo,new Map(oldPages.map(p=>['pages/'+p.sha+'.jpg',p.size])));
+rr=await call(rp+'/local-index','POST',{...recoverReq,index:oldDigest,recover:true});assert.equal(rr.status,200);assert.deepEqual((await rr.json()).pages,oldPages);
 rr=await call(rp+'/local-index','POST',{...recoverReq,index:oldDigest,recover:true});assert.equal(rr.status,200);assert.deepEqual((await rr.json()).pages,oldPages);
 const existing=await(await call(rp)).json();assert.equal(existing.pages.length,26);assert.equal(existing.volumes.length,1);
 assert.equal((await call(rp,'PUT',{revision:0,metadata:recoveredMeta,chapters:[chapter(ch1,'1','Recovered',oldPages.map(p=>p.sha))]})).status,200);
 assert.deepEqual((await(await call('/comics/'+recoverSlug+'/manifest.json')).json()).chapters[0].images.map(p=>p.sha256),oldPages.map(p=>p.sha));
 assert.equal(writes,3);deps.gh=priorGh;
 console.log('PASS interrupted 26-page draft recovered from existing index; duplicate draft prevented, published exact order, no new image writes');
+// Actual Worker fetch/auth/Contents decoder path, not just a mocked githubFile.
+const {generateKeyPairSync}=await import('node:crypto');
+const {privateKey}=generateKeyPairSync('rsa',{modulusLength:2048});
+Object.assign(env,{GITHUB_APP_ID:'100',GITHUB_APP_INSTALLATION_ID:'101',GITHUB_APP_PRIVATE_KEY:privateKey.export({type:'pkcs8',format:'pem'}).toString()});
+const beforeFetch=globalThis.fetch, beforeCache=globalThis.caches;
+let remoteGets=0;const memoryCache=new Map();let waiters=[];
+globalThis.caches={default:{async match(key){return memoryCache.get(key.url)?.clone()},async put(key,res){memoryCache.set(key.url,res.clone())}}};
+let scopedMints=0,treeReads=0;
+const volumeRepo=browserSlug+'-vol-999',rootURL='https://api.github.com/repos/owner/'+volumeRepo;
+globalThis.fetch=async(url,opts)=>{
+ url=String(url);
+ if(url.includes('/access_tokens')){const body=JSON.parse(opts.body);if(body.repositories){scopedMints++;assert.deepEqual(body.repositories,[volumeRepo]);assert.deepEqual(body.permissions,{contents:'read'});return Response.json({token:'exact-read-token',expires_at:new Date(Date.now()+3600000).toISOString(),permissions:{contents:'read'},repositories:[{name:volumeRepo}]});}return Response.json({token:'fixture-installation-token',expires_at:new Date(Date.now()+3600000).toISOString()});}
+ if(url===rootURL){assert.equal(opts.headers.Authorization,'Bearer exact-read-token');return Response.json({private:true,name:volumeRepo,owner:{login:'owner'},default_branch:'main'});}
+ if(url===rootURL+'/git/trees/main?recursive=1'){treeReads++;return Response.json({tree:[{type:'blob',path:'pages/'+jsha+'.jpg',size:jpg.length}],truncated:false});}
+ assert.equal(url.split('?')[0],rootURL+'/contents/pages/'+jsha+'.jpg');
+ if(!url.endsWith('?ref=main'))return new Response(null,{status:404});
+ assert.equal(opts.headers.Authorization,'Bearer exact-read-token');remoteGets++;
+ return new Response(JSON.stringify({type:'file',encoding:'base64',size:jpg.length,content:Buffer.from(jpg).toString('base64')}),{headers:{'Content-Type':'application/vnd.github+json'}});
+};
+const imageUrl=origin+'/api/manual-image/'+browserSlug+'/'+jsha;
+const imageRequest=()=>worker.fetch(new Request(imageUrl,{headers:{Cookie:cookie}}),env,{waitUntil(p){waiters.push(p)}});
+let served=await imageRequest();assert.equal(served.status,200);assert.equal(served.headers.get('Content-Type'),'image/jpeg');assert.deepEqual(new Uint8Array(await served.arrayBuffer()),jpg);await Promise.all(waiters);assert.equal(remoteGets,1);assert.equal(scopedMints,1);assert.equal(treeReads,1);
+served=await imageRequest();assert.equal(served.status,200);assert.deepEqual(new Uint8Array(await served.arrayBuffer()),jpg);assert.equal(remoteGets,1,'warm cache must avoid GitHub');
+assert.equal((await worker.fetch(new Request(imageUrl),env,{})).status,401);
+assert.equal((await call(bp,'DELETE',{revision:1,confirm:nm.title})).status,200);
+assert.equal((await imageRequest()).status,404,'deleted comic denied even with verified cached bytes');assert.equal(remoteGets,1);
+globalThis.fetch=beforeFetch;globalThis.caches=beforeCache;sql.close();
+console.log('PASS real Worker authenticated private JPEG read, vendor JSON decode, verified cache, unauthenticated and deleted-cache refusal');
