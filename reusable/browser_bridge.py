@@ -1,3 +1,4 @@
+
 """Paired, loopback-only WebExtension transport for an already-open normal browser.
 
 The Python bridge never controls a browser through WebDriver or CDP. A separate,
@@ -55,7 +56,8 @@ def bridge_recovery_reason(exc):
                            'Browser script_scroll failed:', 'Browser script_plan failed:',
                            'Browser script_download_status failed:', 'Browser script_capabilities failed:',
                            'Browser script_download_start failed:', 'Browser script_resource_prepare failed:',
-                           'Browser script_resource_read failed:', 'Browser script_resource_position failed:')) and 'Selected-tab browser API stalled:' in message:
+                           'Browser script_resource_read failed:', 'Browser script_resource_position failed:',
+                           'Browser script_dom_plan failed:', 'Browser script_dom_read failed:')) and 'Selected-tab browser API stalled:' in message:
         return 'selected_tab_api_stalled'
     if message.startswith(('Browser recover_image did not respond within ',
                            'Browser page did not respond within ',
@@ -66,7 +68,8 @@ def bridge_recovery_reason(exc):
                            'Browser script_download_start did not respond within ',
                            'Browser script_download_status did not respond within ',
                            'Browser script_capabilities did not respond within ', 'Browser script_resource_prepare did not respond within ',
-                           'Browser script_resource_read did not respond within ', 'Browser script_resource_position did not respond within ')):
+                           'Browser script_resource_read did not respond within ', 'Browser script_resource_position did not respond within ',
+                           'Browser script_dom_plan did not respond within ', 'Browser script_dom_read did not respond within ')):
         return 'browser_rpc_timeout'
     return None
 
@@ -962,7 +965,11 @@ def source_extension_context(data_dir: Path, source_url: str, *,
             result=bridge.rpc('script_capabilities', {}, timeout=30)
             if result.get('revision')!='native-chapter-download-v2':
                 raise BrowserBridgeError('SCRIPT_DOWNLOAD: reload current Chrome/Edge extension')
-            if getattr(adapter,'CHAPTER_DOWNLOAD_TRANSPORT','native')=='loaded-resource':
+            if getattr(adapter,'CHAPTER_DOWNLOAD_TRANSPORT','native')=='ordered-dom':
+                if result.get('orderedDom') is not True:
+                    raise BrowserBridgeError('ORDERED_DOM: reload current Chrome/Edge extension')
+                print('BROWSER_ORDERED_DOM_MODE: READY',flush=True)
+            elif getattr(adapter,'CHAPTER_DOWNLOAD_TRANSPORT','native')=='loaded-resource':
                 if result.get('loadedResource') is not True:
                     raise BrowserBridgeError('SCRIPT_RESOURCE: reload current Chrome/Edge extension')
                 print('BROWSER_LOADED_RESOURCE_MODE: READY',flush=True)
@@ -1045,3 +1052,5 @@ def ensure_generated_extensions(root, adapter, port):
             if not target_file.exists() or target_file.read_bytes() != raw:
                 target_file.write_bytes(raw)
     return target
+
+

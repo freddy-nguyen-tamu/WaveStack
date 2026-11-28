@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """One-command entry: python run.py (from the extracted project directory).
 
@@ -234,6 +235,7 @@ _PREFLIGHT_PYTHON = (
     ('test_native_dialog_recovery.py', 3),
     ('test_image_checkpoint_resume.py', 8),
     ('test_native_chapter_download.py', 3),
+    ('test_ordered_dom_transport.py', 6),
     ('test_site_separation.py', 3),
     ('test_github_fast_verification.py', 5),
     ('test_challenge_passive_resume.py', 6),
@@ -259,6 +261,7 @@ _PREFLIGHT_PYTHON = (
 _PREFLIGHT_JAVASCRIPT = (
     'extension_persistent_autoconnect.js',
     'extension_native_chapter_download.js',
+    'extension_ordered_dom_transport.js',
     'extension_screenshot_permission_fallback.js',
     'extension_fast_path_and_watchdog.js',
     'extension_tile_stall_recovery.js',
@@ -420,6 +423,13 @@ def _run_preflight(*, run_tests=True) -> None:
                              (registry_worker, 'return registryResponse(req,env)')):
             if marker not in code:
                 fail('large registry deployment files are inconsistent; install the cumulative patch: ' + marker)
+        if getattr(site_adapter,'CHAPTER_DOWNLOAD_TRANSPORT','native')=='ordered-dom':
+            acquisition=(ROOT / 'reusable' / 'chapter_script.py').read_text(encoding='utf-8')
+            if ('def _acquire_ordered_dom(' not in acquisition or 'BROWSER_ORDERED_DOM_MODE: READY' not in bridge or
+                    b'async function orderedDomCommand(' not in background or
+                    not (ROOT/'browser_bridge'/'chrome'/'chapter_download_adapter.js').is_file()):
+                fail('ordered-DOM transport installation incomplete; extract the complete patch')
+            print('  PASS ordered-DOM acquisition contract', flush=True)
         print('  PASS large registry deployment contract', flush=True)
         print('  PASS release contracts and generated extension parity', flush=True)
     except (OSError, ValueError, KeyError, SyntaxError) as exc:
@@ -702,3 +712,5 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
+

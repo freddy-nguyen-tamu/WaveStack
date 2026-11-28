@@ -1,3 +1,4 @@
+
 """Generate installed extension manifests from provider-neutral source templates.
 
 The reusable bridge never stores a website host or comic path. Only the active
@@ -51,7 +52,8 @@ def generate_installed_manifests(root: Path, adapter, *, port: int = 18765):
         # See reusable/chapter_script.py; generated files are never hand edited.
         script=getattr(adapter,'CHAPTER_DOWNLOAD_JS',None)
         if isinstance(script,str) and script.strip() and browser=='chrome':
-            data['permissions']=list(dict.fromkeys([*data['permissions'],'downloads']))
+            if getattr(adapter,'CHAPTER_DOWNLOAD_TRANSPORT','native')!='ordered-dom':
+                data['permissions']=list(dict.fromkeys([*data['permissions'],'downloads']))
             script_path=target.parent/'chapter_download_adapter.js'
             script_path.parent.mkdir(parents=True,exist_ok=True)
             digest=hashlib.sha256(script.strip().encode('utf-8')).hexdigest()
@@ -71,3 +73,5 @@ def generate_installed_manifests(root: Path, adapter, *, port: int = 18765):
             target.write_text(serialized,encoding='utf-8')
             if browser not in changed: changed.append(browser)
     return changed
+
+

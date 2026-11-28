@@ -13,8 +13,7 @@
     "storage",
     "webRequest",
     "http://127.0.0.1:18765/*",
-    "https://toonily.com/*",
-    "https://data.tnlycdn.com/*"
+    "https://hentairead.com/*"
   ],
   "background": {
     "scripts": [
@@ -28,7 +27,8 @@
   "content_scripts": [
     {
       "matches": [
-        "https://toonily.com/serie/breakaway-joys-of-travel-f99c6f14/*"
+        "https://hentairead.com/hentai/dekaketsu-powerhara-tenchou-ni-shiboraretai/english/*",
+        "https://hentairead.com/hentai/dekaketsu-powerhara-tenchou-ni-shiboraretai-2/english/*"
       ],
       "js": [
         "content.js"

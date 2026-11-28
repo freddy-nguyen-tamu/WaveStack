@@ -1,3 +1,4 @@
+
 /* One selected real browser tab + authenticated loopback Python. No automation stealth. */
 let state = null;
 let polling = false;
@@ -814,8 +815,235 @@ function scriptCapabilities() {
   const scripting=!!chrome.scripting?.executeScript;
   return {revision:'native-chapter-download-v2',
     native:scripting && !!chrome.downloads?.download && !!chrome.downloads?.search,
+    orderedDom:scripting,
     loadedResource:scripting && !!chrome.debugger?.attach && !!chrome.debugger?.sendCommand};
 }
+// Provider-independent ordered DOM acquisition. A stable page identity is not a
+// network URL. Only the installed adapter supplies exact scoped image selectors.
+let orderedDomPlan=null;
+async function orderedDomCommand(action,payload,tab) {
+  const tabId=state.tabId, expected=canonicalPage(payload.url), target={tabId};
+  if(!expected || !sourceMatches(expected) || new URL(expected).origin!==new URL(tab.url).origin || tab.status==='loading')
+    throw Error('ORDERED_DOM: unexpected managed document');
+  const checkTab=async()=>{
+    const t=await checkedIO(tabsGet(tabId),'ordered DOM tab',5000);
+    if(state?.tabId!==tabId || t.status==='loading' || !sourceMatches(t.url) ||
+       new URL(t.url).origin!==new URL(expected).origin || t.pendingUrl)
+      throw Error('ORDERED_DOM: managed document changed');
+  };
+  const checkDocument=async nonce=>{
+    await checkTab();
+    const r=await checkedIO(chrome.scripting.executeScript({target,func:(nonce,expected)=>{
+      const c=document.querySelector('link[rel="canonical"]')?.href||location.href;
+      return globalThis.__comicArchiverOrderedDomNonce===nonce && c===expected;
+    },args:[nonce,expected]}),'ordered DOM identity',10000);
+    if(r?.[0]?.result!==true) throw Error('ORDERED_DOM: chapter document replaced');
+  };
+  if(action==='script_dom_plan') {
+    if(!Array.isArray(payload.reader_selectors)||!payload.reader_selectors.length||payload.reader_selectors.length>12||payload.reader_selectors.some(s=>typeof s!=='string'||!s.length||s.length>512))
+      throw Error('ORDERED_DOM: reader selectors required');
+    // Normal selected-tab network capture is optional for blob/canvas, but
+    // permits already-delivered authorized HTTPS responses without a new GET.
+    if(chrome.debugger?.attach && !inspectedReady) {
+      try {await checkedIO(attachSelectedTab(),'ordered DOM network observer',10000);} catch(e) {console.warn('Ordered DOM original-response observer unavailable:',String(e));}
+    }
+    await checkedIO(chrome.scripting.executeScript({target,files:['chapter_download_adapter.js']}),'ordered DOM adapter',10000);
+    const nonce=crypto.randomUUID();
+    const r=await checkedIO(chrome.scripting.executeScript({target,func:nonce=>{
+      globalThis.__comicArchiverOrderedDomNonce=nonce;
+      return globalThis.__comicArchiverNativePlan;
+    },args:[nonce]}),'ordered DOM plan',10000);
+    const envelope=r?.[0]?.result, plan=envelope?.plan;
+    if(envelope?.digest!==payload.digest || plan?.url!==expected || !Array.isArray(plan.items) || !plan.items.length || plan.items.length>2000 || plan.total!==plan.items.length)
+      throw Error('ORDERED_DOM: invalid or stale installed adapter plan');
+    const seen=new Set();
+    for(const [i,x] of plan.items.entries()) {
+      const n=String(i+1);
+      if(x.key!==n||x.order!==i+1||x.url!==expected+'#reader-page-'+n||x.filename!==n.padStart(4,'0')+'.png'||typeof x.selector!=='string'||!x.selector.length||x.selector.length>512||seen.has(x.selector))
+        throw Error('ORDERED_DOM: invalid native slot');
+      seen.add(x.selector);
+    }
+    await checkDocument(nonce);
+    orderedDomPlan={tabId,expected,nonce,items:plan.items,roots:payload.reader_selectors,token:null};
+    return plan;
+  }
+  const plan=orderedDomPlan, item=payload.item;
+  if(action!=='script_dom_read'||!plan||plan.tabId!==tabId||plan.expected!==expected||!/^[a-f0-9]{32}$/.test(payload.token||'')||!item||
+      !plan.items[item.order-1]||['key','order','url','filename','selector'].some(k=>plan.items[item.order-1][k]!==item[k])||
+      (plan.token!==null&&plan.token!==payload.token)) throw Error('ORDERED_DOM: request differs from verified plan');
+  plan.token=payload.token;
+  await checkDocument(plan.nonce);
+  const receipt=(state,extra={})=>({key:item.key,url:item.url,state,...extra});
+  // Read only the declared img, never other DOM nodes or site internals.
+  const inspect=async (selector,roots,expected,position,mode,prior,allowed,maxBytes)=>{
+    // Chrome can return an InjectionResult without result when an injected
+    // function throws. Keep every page-side outcome serializable, including
+    // failures before the old canvas try/catch (selector/scroll/layout).
+    let phase='document';
+    try {
+    const canon=document.querySelector('link[rel="canonical"]')?.href||location.href;
+    if(canon!==expected) throw Error('ORDERED_DOM: wrong canonical document');
+    phase='locate';
+    const list=[...new Set(roots.flatMap(s=>[...document.querySelectorAll(s)].flatMap(root=>[...root.querySelectorAll(selector)])))];
+    // A slot is a logical page, not necessarily a single DOM node. Readers
+    // may retain hidden clones or duplicate the very same loaded resource.
+    // Positioning is harmless even if acquisition identity is still ambiguous.
+    const valid=e=>e.tagName==='IMG'&&!e.closest('noscript,script')&&e.isConnected!==false;
+    const describe=e=>{
+      if(!valid(e)) return {valid:false,visible:false,ready:false};
+      const rect=e.getBoundingClientRect(), style=getComputedStyle(e);
+      const layout=rect.width>0&&rect.height>0&&style.display!=='none';
+      const visible=layout&&style.visibility==='visible'&&Number(style.opacity)!==0&&
+        (typeof e.checkVisibility!=='function'||e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}));
+      return {valid:true,layout,visible,ready:visible&&!!e.complete&&e.naturalWidth>0&&e.naturalHeight>0&&!!e.currentSrc,
+        width:e.naturalWidth||0,height:e.naturalHeight||0,src:e.currentSrc||'',top:rect.top||0};
+    };
+    const entries=list.map(e=>({e,...describe(e)}));
+    const slotDetails=()=>JSON.stringify({phase:mode,selector,roots:roots.map(s=>({selector:s,count:document.querySelectorAll(s).length})),matches:list.length,elements:entries.slice(0,6).map(v=>({tag:v.e.tagName,connected:v.e.isConnected!==false,invalidAncestor:!!v.e.closest('noscript,script'),visible:v.visible,layout:v.layout,ready:v.ready,width:v.width,height:v.height,top:v.top,protocol:v.src?.split(':')[0]||'',sourceGroup:v.src?entries.findIndex(w=>w.src===v.src):null}))});
+    if(!list.length) return {state:'pending',reason:'Native slot temporarily absent '+slotDetails()};
+    if(entries.some(v=>!v.valid)) return {state:'unavailable',reason:'Native slot invalid '+slotDetails()};
+    phase='position';
+    if(mode==='position') {
+      // Only position a declared slot. This choice never authorizes bytes.
+      // Even an opacity-zero lazy placeholder can have a valid layout box.
+      const targets=entries.filter(v=>v.layout);
+      if(!targets.length) return {state:'pending',reason:'Native slot has no layout '+slotDetails()};
+      const chosen=targets.find(v=>v.visible)||targets[0];
+      chosen.e.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
+      return {state:'positioned'};
+    }
+    phase='layout';
+    const visible=entries.filter(v=>v.visible), ready=visible.filter(v=>v.ready);
+    if(!ready.length) return {state:'pending',reason:'Native slot not decoded '+slotDetails()};
+    const chosen=ready[0];
+    // A hidden clone cannot be the displayed page. For multiple visible
+    // nodes, first require all to be decoded at identical natural dimensions.
+    // Distinct resource URLs (e.g. separate blob instances) are only equivalent
+    // if the browser permits reading their decoded pixels and the hashes agree.
+    if(visible.length>1) {
+      if(visible.some(v=>!v.ready||v.width!==chosen.width||v.height!==chosen.height))
+        return {state:'pending',reason:'Native slot ambiguous '+slotDetails()};
+      if(visible.some(v=>v.src!==chosen.src)) {
+        if(visible.length>4||chosen.width*chosen.height>36000000)
+          return {state:'pending',reason:'Native slot ambiguous (comparison limit) '+slotDetails()};
+        const allowedSource=v=>{try{const u=new URL(v.src);return u.protocol==='blob:'?u.origin===location.origin:u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&allowed.includes(u.hostname);}catch{return false;}};
+        if(!visible.every(allowedSource)) return {state:'denied',reason:'Duplicate slot contains an undeclared source'};
+        const fingerprint=async v=>{
+          const canvas=document.createElement('canvas');
+          try {
+            canvas.width=v.width;canvas.height=v.height;
+            const ctx=canvas.getContext('2d',{willReadFrequently:true});
+            if(!ctx)throw Error('Canvas unavailable');
+            ctx.drawImage(v.e,0,0);
+            const data=ctx.getImageData(0,0,v.width,v.height).data;
+            const hash=await crypto.subtle.digest('SHA-256',data);
+            return Array.from(new Uint8Array(hash)).join(',');
+          } finally {canvas.width=canvas.height=0;}
+        };
+        try {
+          const first=await fingerprint(chosen);
+          for(const v of visible.slice(1)) {
+            if(await fingerprint(v)!==first) return {state:'pending',reason:'Native slot ambiguous (different decoded pixels) '+slotDetails()};
+          }
+        } catch(e) {return {state:e?.name==='SecurityError'?'denied':'pending',reason:'Duplicate pixel comparison: '+String(e?.name||'Error')+': '+String(e?.message||e)};}
+        // Async digest can yield to reader DOM changes; never accept stale nodes.
+        const current=[...new Set(roots.flatMap(s=>[...document.querySelectorAll(s)].flatMap(root=>[...root.querySelectorAll(selector)])))];
+        if(current.length!==list.length||current.some((e,i)=>e!==list[i])||entries.some(v=>{const n=describe(v.e);return n.visible!==v.visible||n.ready!==v.ready||n.src!==v.src||n.width!==v.width||n.height!==v.height;}))
+          return {state:'pending',reason:'Native slot changed during duplicate comparison'};
+      }
+    }
+    const im=chosen.e, width=chosen.width,height=chosen.height,src=chosen.src;
+    let u; try{u=new URL(src);}catch{return {state:'unavailable',reason:'Invalid image URL'};}
+    if(u.protocol==='blob:') {
+      if(u.origin!==location.origin) return {state:'denied',reason:'Foreign blob origin'};
+    } else if(u.protocol==='https:') {
+      if(u.username||u.password||u.port||!allowed.includes(u.hostname)) return {state:'denied',reason:'Image host not declared by adapter'};
+    } else return {state:'unavailable',reason:'Unsupported image scheme'};
+    if(mode==='inspect') return {state:'loaded',src,width,height};
+    if(!prior||src!==prior.src||width!==prior.width||height!==prior.height) return {state:'pending'};
+    const encode=async blob=>{
+      if(!blob||!blob.size||blob.size>maxBytes) throw Error('Image exceeds bounded transfer size');
+      const bytes=new Uint8Array(await blob.arrayBuffer()), pieces=[];
+      for(let i=0;i<bytes.length;i+=16384)pieces.push(String.fromCharCode(...bytes.subarray(i,i+16384)));
+      return btoa(pieces.join(''));
+    };
+    // Same-origin local blob retrieval only. No fresh CDN request is issued.
+    if(u.protocol==='blob:') {
+      try {
+        const response=await fetch(src,{signal:AbortSignal.timeout(10000)});
+        if(response.ok) {
+          const blob=await response.blob();
+          if(blob.type.startsWith('image/') && blob.size>0 && blob.size<=maxBytes) {
+            const bitmap=await createImageBitmap(blob);
+            try {if(bitmap.width===width&&bitmap.height===height) return {state:'complete',base64:await encode(blob),via:'reader-blob-original',width,height};}
+            finally {bitmap.close();}
+          }
+        } else if(response.status===401||response.status===403||response.status===429) return {state:'denied',reason:'Blob response '+response.status};
+      } catch(e) { /* revoked blob: only origin-clean canvas may follow */ }
+    }
+    if(width*height>36000000) return {state:'unavailable',reason:'Decoded pixel limit exceeded'};
+    const canvas=document.createElement('canvas');
+    try {
+      canvas.width=width;canvas.height=height;
+      const ctx=canvas.getContext('2d');if(!ctx)throw Error('Canvas unavailable');
+      ctx.drawImage(im,0,0);
+      const blob=await new Promise((resolve,reject)=>{try{canvas.toBlob(b=>b?resolve(b):reject(Error('PNG encoding failed')),'image/png');}catch(e){reject(e);}});
+      return {state:'complete',base64:await encode(blob),via:'reader-decoded-png',width,height};
+    } catch(e) {return {state:e.name==='SecurityError'?'denied':'unavailable',reason:e.name+': '+e.message};}
+    finally {canvas.width=canvas.height=0;}
+    } catch(e) {
+      return {state:e?.name==='SecurityError'?'denied':'unavailable',reason:phase+': '+String(e?.name||'Error')+': '+String(e?.message||e)};
+    }
+  };
+  const allowed=(chrome.runtime.getManifest().host_permissions||[]).filter(p=>/^https:\/\/[^/*]+\/\*$/.test(p)).map(p=>new URL(p.replace(/\*$/,'')).hostname);
+  const callInspect=async (mode,prior=null)=>{
+    // DOM-only operations do not need the site's JS world. Isolate them from
+    // overridden page globals; retain MAIN for existing authorized blob/canvas export.
+    const result=await checkedIO(chrome.scripting.executeScript({target,world:mode==='export'?'MAIN':'ISOLATED',func:inspect,args:[item.selector,plan.roots,expected,false,mode,prior,allowed,MAX_IMAGE_BYTES]}),'ordered DOM '+mode,35000);
+    await checkDocument(plan.nonce);
+    const v=result?.[0]?.result;
+    if(!v||typeof v.state!=='string') {
+      const detail=String(result?.[0]?.error?.message||result?.[0]?.error||'no result').slice(0,240);
+      console.warn('ORDERED_DOM_RECEIPT_MISSING page='+item.key+' phase='+mode+' detail='+detail);
+      // Missing receipt is not image data or permission to use another source.
+      // Let Python poll the same verified slot, bounded by its page deadline.
+      return {state:'pending',reason:'missing '+mode+' receipt: '+detail};
+    }
+    return v;
+  };
+  if(payload.position) {
+    const pos=await callInspect('position');
+    if(pos.state!=='positioned') return receipt(pos.state,{reason:pos.reason});
+    await sleep(250);
+  }
+  const dom=await callInspect('inspect');
+  if(dom.state!=='loaded') return receipt(dom.state,{reason:dom.reason});
+  if(dom.src.startsWith('https:')) {
+    const key=normalizeResourceUrl(dom.src);
+    const status=imageNetworkStatus.get(key)||imageWebRequestStatus.get(key);
+    if(status?.status>=400) return receipt('denied',{reason:'HTTP '+status.status});
+    let body=capturedImages.get(key)?.base64;
+    if(!body && inspectedReady && inspectedTabId===tabId) {
+      try {
+        const tree=await checkedIO(cdp('Page.getResourceTree'),'ordered DOM loaded tree',8000);
+        const resource=findFrameResource(tree.frameTree,key);
+        if(resource) {
+          const raw=await checkedIO(cdp('Page.getResourceContent',resource),'ordered DOM loaded resource',8000);
+          if(raw?.base64Encoded && storeOriginalImage(key,raw.content))body=raw.content;
+        }
+      } catch(e) {console.debug('Ordered DOM original bytes unavailable:',String(e));}
+    }
+    if(body) {
+      const now=await callInspect('inspect');
+      if(now.state!=='loaded'||now.src!==dom.src||now.width!==dom.width||now.height!==dom.height)return receipt('pending');
+      return receipt('complete',{base64:body,via:'reader-https-original',width:dom.width,height:dom.height});
+    }
+  }
+  const result=await callInspect('export',dom);
+  if(result.state==='complete' && (!result.base64||result.base64.length>MAX_IMAGE_BYTES*4/3+8)) throw Error('ORDERED_DOM: invalid transfer size');
+  return {...result,key:item.key,url:item.url};
+}
+
 async function nativeChapterCommand(action,payload,tab) {
   const tabId=state.tabId;
   const expected=canonicalPage(payload.url);
@@ -1009,6 +1237,7 @@ async function execute(job) {
     return releaseOwnedReader(state, true);
   }
   const initialTab=await tabInfo();
+  if (action.startsWith('script_dom_')) return orderedDomCommand(action,payload,initialTab);
   if (action.startsWith('script_')) return nativeChapterCommand(action,payload,initialTab);
   // The browser may detach on navigation or when DevTools takes ownership.
   // Stop BEFORE another scroll if loaded-response inspection was lost.
@@ -1051,7 +1280,7 @@ async function execute(job) {
       throw Error('Cross-site navigation refused');
     await cleanupArchiverTabs(state.tabId,current.href);
     clearImageMemory();
-    nativeChapterPlan=null;
+    nativeChapterPlan=null;orderedDomPlan=null;
     if (desired.href !== current.href) {
       await tabsUpdate(state.tabId,{url:desired.href});
     } else {
@@ -1514,7 +1743,7 @@ async function releaseOwnedReader(session, includeWakeTabs=false) {
   const auxiliaryClosed=await cleanupArchiverTabs(id,tab.url,includeWakeTabs,session.managedNonce,true);
   if(inspectedTabId===id) {
     try {if(chrome.debugger?.detach) await checkedIO(call(chrome.debugger,'detach',{tabId:id}),'release reader debugger',3000);} catch(e) {console.warn('COMIC_BRIDGE_DEBUGGER_RELEASE:',String(e));}
-    inspectedTabId=null;inspectedReady=false;clearImageMemory();nativeChapterPlan=null;
+    inspectedTabId=null;inspectedReady=false;clearImageMemory();nativeChapterPlan=null;orderedDomPlan=null;
   }
   if(!owns(await checkedIO(storageGet(keys),'recheck reader ownership',3000))) return {closed:false,reason:'ownership changed'};
   const now=await checkedIO(tabsGet(id),'recheck reader tab',3000);
@@ -1806,3 +2035,5 @@ chrome.runtime.onMessage.addListener((m,_sender,respond) => {
       capture:captureDiagnostics()});
   }
 });
+
+

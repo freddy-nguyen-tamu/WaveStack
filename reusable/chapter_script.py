@@ -1,3 +1,4 @@
+
 """Opt-in chapter-level browser downloads. Existing capture strategy is untouched."""
 from __future__ import annotations
 
@@ -53,8 +54,26 @@ from __future__ import annotations
 # existing series identity/checkpoints when changing a source for the same comic.
 # Regenerate/reload the extension after a script or host change. Test against
 # supplied captures before returning a patch. Never delete this comment block.
+# ADDITIVE ORDERED-DOM MODE (not a change to the HTTPS-only modes above):
+# CHAPTER_DOWNLOAD_TRANSPORT = 'ordered-dom' supports normal DOM images whose
+# blob URLs may expire or whose HTTPS responses cannot be fetched under CORS.
+# The synchronous adapter plan returns {url: canonical chapter URL, items,
+# loaded, total}; items use the same key/order/filename contract, but url is
+# chapter URL + '#reader-page-N' (stable slot identity, NEVER a fetch URL),
+# and selector is a unique CSS selector for the exact img within READER_SELECTORS.
+# script_download_expected is REQUIRED and independently validates the complete
+# native slot count/order from HTML. No guessed slots, ad images or hidden pages.
+# Generic code positions each declared image, validates the live document, reads
+# same-origin live blobs or authorized already-delivered HTTPS bytes, otherwise
+# exports origin-clean decoded pixels (PNG, never represented as original bytes).
+# CORS/tainted canvas, unsupported sources and explicit access denial fail closed;
+# do not intercept revocation, disable CORS, forge headers or bypass protections.
+# Python receives bounded individual receipts, checkpoints each validated image,
+# creates one verified chapter ZIP locally and passes the existing ordered files
+# to the unchanged GitHub publisher. No browser download prompts or external CDN.
+# All selectors, chapter URLs, and native catalog proof remain in the adapter.
 # === END PERMANENT ADAPTER CONTRACT ===
-import base64, hashlib, io, json, os, re, time, uuid
+import base64, hashlib, io, json, os, re, time, uuid, zipfile
 from pathlib import Path
 from urllib.parse import urlsplit
 from PIL import Image
@@ -129,7 +148,7 @@ def _import(receipt,item,token,directory,checkpoint,limit):
     return result
 
 
-def _save_bytes(raw,item,directory,checkpoint,limit):
+def _save_bytes(raw,item,directory,checkpoint,limit,*,via=None):
     if not 0 < len(raw) <= limit:
         raise RuntimeError('SCRIPT_DOWNLOAD: image is empty or exceeds file limit')
     with Image.open(io.BytesIO(raw)) as im:
@@ -146,8 +165,103 @@ def _save_bytes(raw,item,directory,checkpoint,limit):
     os.replace(tmp,target)
     result=checkpoint.record_image(item['key'],item['order'],item['url'],target,{
         'sha256':hashlib.sha256(raw).hexdigest(),'bytes':len(raw),'width':width,'height':height,
-        'format':ext,'source_url':item['url']})
+        'format':ext,'source_url':item['url'],**({'acquisition_method':via} if via else {})})
     return result
+
+
+def _ordered_dom_plan(plan, chapter_url, limit):
+    if not isinstance(plan,dict) or plan.get('url')!=chapter_url:
+        raise RuntimeError('ORDERED_DOM: wrong chapter document')
+    items=plan.get('items')
+    if not isinstance(items,list) or not 0<len(items)<=limit or plan.get('total')!=len(items):
+        raise RuntimeError('ORDERED_DOM: incomplete native catalog')
+    selectors=set()
+    for i,x in enumerate(items,1):
+        if (not isinstance(x,dict) or x.get('key')!=str(i) or x.get('order')!=i or
+            x.get('url')!=chapter_url+'#reader-page-'+str(i) or x.get('filename')!=f'{i:04d}.png' or
+            not isinstance(x.get('selector'),str) or not 0<len(x['selector'])<=512 or x['selector'] in selectors):
+            raise RuntimeError('ORDERED_DOM: invalid ordered slot')
+        selectors.add(x['selector'])
+    return items
+
+
+def _ordered_dom_zip(directory, files, manifest):
+    # Local transport artifact, never a GitHub image or a Cloudflare asset.
+    # It survives until existing verified post-push chapter cleanup removes it.
+    target=directory/'chapter-complete.zip'; tmp=target.with_suffix('.zip.part')
+    with zipfile.ZipFile(tmp,'w',compression=zipfile.ZIP_STORED,allowZip64=True) as z:
+        for path in files: z.write(path,path.name)
+        z.writestr('_report.json',json.dumps({'total':len(files),'images':manifest},ensure_ascii=False))
+    with zipfile.ZipFile(tmp) as z:
+        if z.namelist()!=[p.name for p in files]+['_report.json'] or z.testzip() is not None:
+            raise RuntimeError('ORDERED_DOM: invalid chapter ZIP')
+        for path,meta in zip(files,manifest):
+            with z.open(path.name) as stream:
+                digest=hashlib.sha256()
+                for chunk in iter(lambda:stream.read(1024*1024),b''): digest.update(chunk)
+            if digest.hexdigest()!=meta['sha256']:
+                raise RuntimeError('ORDERED_DOM: ZIP image hash mismatch')
+    os.replace(tmp,target)
+    return target
+
+
+def _acquire_ordered_dom(page,chapter,directory,adapter,config,bridge,event,utc,source_title):
+    url=chapter.url
+    # Discover the whole declared native slot list BEFORE scrolling. Blob URLs
+    # change across navigation; only stable page identity belongs in checkpoints.
+    plan=bridge.rpc('script_dom_plan',{'url':url,'digest':hashlib.sha256(adapter.CHAPTER_DOWNLOAD_JS.strip().encode()).hexdigest(),
+        'reader_selectors':list(adapter.READER_SELECTORS)},timeout=40)
+    items=_ordered_dom_plan(plan,url,int(config['max_pages_per_chapter']))
+    expected=getattr(adapter,'script_download_expected',None)
+    if not callable(expected) or expected(page.content(),url)!=[(x['key'],x['url']) for x in items]:
+        raise RuntimeError('ORDERED_DOM: native HTML catalog differs from plan')
+    # Include selector mapping in durable catalog identity, not ephemeral src.
+    token=_token(directory,url,[{**x,'filename':x['filename']+'|'+x['selector']} for x in items])
+    cp=ChapterImageCheckpoint(directory,chapter.chapter_id,url)
+    cp.record_catalog([x['key'] for x in items],{x['key']:{'url':x['url']} for x in items})
+    saved={}
+    for x in items:
+        r=cp.reuse(x['key'],x['order'],x['url'])
+        if r:
+            saved[x['key']]=r
+            event('IMAGE_REUSED_FROM_CHECKPOINT',chapter=chapter.chapter_id,image=x['order'],total=len(items),bytes=r[1]['bytes'])
+    event('SCRIPT_DOWNLOAD_PLAN',chapter=chapter.chapter_id,total=len(items),reused=len(saved),missing=len(items)-len(saved),loaded=plan.get('loaded'),transport='ordered-dom')
+    for x in items:
+        if x['key'] in saved: continue
+        deadline=time.monotonic()+60; next_position=0.0; last_reason=None
+        while True:
+            position=time.monotonic()>=next_position
+            if position: next_position=time.monotonic()+5
+            r=bridge.rpc('script_dom_read',{'url':url,'token':token,'item':x,'position':position},timeout=120)
+            if r.get('key')!=x['key'] or r.get('url')!=x['url']:
+                raise RuntimeError('ORDERED_DOM: mismatched page receipt')
+            state=r.get('state')
+            if state=='complete':
+                via=r.get('via')
+                if via not in ('reader-blob-original','reader-https-original','reader-decoded-png') or any(type(r.get(k)) is not int or r[k]<=0 for k in ('width','height')):
+                    raise RuntimeError('ORDERED_DOM: invalid image receipt')
+                raw=base64.b64decode(r['base64'],validate=True)
+                if via=='reader-decoded-png' and not raw.startswith(b'\x89PNG\r\n\x1a\n'):
+                    raise RuntimeError('ORDERED_DOM: decoded receipt is not PNG')
+                saved[x['key']]=_save_bytes(raw,{**x,'width':r['width'],'height':r['height']},directory,cp,int(config['github_max_file_bytes']),via=via)
+                event('IMAGE_VALIDATED',chapter=chapter.chapter_id,image=x['order'],total=len(items),bytes=saved[x['key']][1]['bytes'],during_scroll=False,via=via)
+                break
+            if state=='denied':
+                raise SourceAccessPaused('ORDERED_DOM: access denied at page '+x['key']+': '+str(r.get('reason','')))
+            if state!='pending':
+                raise RuntimeError('ORDERED_DOM: page '+x['key']+' unavailable: '+str(r.get('reason','unknown'))+'; checkpoints retained')
+            reason=str(r.get('reason') or 'waiting for decoded reader image')
+            if reason!=last_reason:
+                event('ORDERED_DOM_PAGE_PENDING',chapter=chapter.chapter_id,image=x['order'],total=len(items),reason=reason)
+                last_reason=reason
+            if time.monotonic()>deadline:
+                raise RuntimeError('ORDERED_DOM: page '+x['key']+' did not become ready: '+reason+'; checkpoints retained')
+            time.sleep(.5)
+    files=[saved[x['key']][0] for x in items]; manifest=[saved[x['key']][1] for x in items]
+    archive=_ordered_dom_zip(directory,files,manifest)
+    event('CHAPTER_ZIP_VERIFIED',chapter=chapter.chapter_id,images=len(files),bytes=archive.stat().st_size)
+    event('SCRIPT_DOWNLOAD_COMPLETE',chapter=chapter.chapter_id,images=len(files))
+    return files,{'chapter_id':chapter.chapter_id,'label':source_title,'chapter_title':source_title,'original_url':url,'images':manifest,'total_images':len(files),'created_at':utc()}
 
 
 def acquire(page, chapter, directory, adapter, config, guard, event, utc, source_title):
@@ -156,6 +270,8 @@ def acquire(page, chapter, directory, adapter, config, guard, event, utc, source
         raise RuntimeError('SCRIPT_DOWNLOAD requires the installed Chrome/Edge Comic Bridge')
     chapter_url=chapter.url
     transport=getattr(adapter,'CHAPTER_DOWNLOAD_TRANSPORT','native')
+    if transport=='ordered-dom':
+        return _acquire_ordered_dom(page,chapter,directory,adapter,config,bridge,event,utc,source_title)
     if transport not in ('native','loaded-resource'):
         raise RuntimeError('SCRIPT_DOWNLOAD: unknown adapter transport')
     if transport=='loaded-resource':
@@ -279,3 +395,5 @@ def acquire(page, chapter, directory, adapter, config, guard, event, utc, source
         raise RuntimeError('SCRIPT_DOWNLOAD: invalid final manifest order')
     event('SCRIPT_DOWNLOAD_COMPLETE',chapter=chapter.chapter_id,images=len(files))
     return files,{'chapter_id':chapter.chapter_id,'label':source_title,'chapter_title':source_title,'original_url':chapter_url,'images':manifest,'total_images':len(files),'created_at':utc()}
+
+
