@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -57,7 +58,7 @@ def find_normal_chrome():
     return None
 
 
-def launch_normal_chrome(chapter_url: str, *, executable=None, popen=subprocess.Popen):
+def launch_normal_chrome(chapter_url: str, *, startup_nonce=None, executable=None, popen=subprocess.Popen):
     """Wake the user's normal Chrome; extension creates/owns the chapter tab.
 
     Do not open chapter_url here: if an older tab has the identical chapter URL,
@@ -80,7 +81,10 @@ def launch_normal_chrome(chapter_url: str, *, executable=None, popen=subprocess.
         command.append('--profile-directory=' + profile)
     # The URL is carried separately in the authenticated extension bootstrap.
     # Only wake the normal profile here; never create a second matching chapter tab.
-    command.append('about:blank')
+    nonce = uuid.uuid4().hex if startup_nonce is None else startup_nonce
+    if not isinstance(nonce, str) or not re.fullmatch(r'[a-f0-9]{32}', nonce):
+        raise ValueError('Invalid Comic Bridge startup nonce')
+    command.append('about:blank#comicarchiver-' + nonce)
     options = {'stdin': subprocess.DEVNULL, 'stdout': subprocess.DEVNULL,
                'stderr': subprocess.DEVNULL}
     if os.name == 'nt':

@@ -105,6 +105,10 @@ async function main(){
   assert.equal(cold.get().reloaded,1,'same run never reloads twice');
   assert.equal(cold.get().created,1);
   assert.equal(cold.get().hello,1);
+  const retired=setup([],page(62),{comicBridgeRefreshedStartupNonce:nonce,comicBridgeRetiredStartupNonce:nonce},nonce);
+  await retired.test.autoConnect();
+  assert.equal(retired.get().created,0,'released session cannot reopen its reader');
+  assert.equal(retired.get().hello,0);
   const invalid=setup([],page(62),{},'not-a-valid-nonce');
   await invalid.test.autoConnect();
   assert.equal(invalid.get().created,0,'bad session nonce must not open a chapter');

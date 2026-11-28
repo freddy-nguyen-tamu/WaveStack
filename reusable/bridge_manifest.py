@@ -5,6 +5,7 @@ site_specific.site_adapter supplies URL patterns and CDN hosts.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -45,9 +46,28 @@ def generate_installed_manifests(root: Path, adapter, *, port: int = 18765):
         else:
             data['permissions']=list(dict.fromkeys([x for x in data['permissions']
                                                     if not x.startswith(('https://','http://'))]+grants))
+        # PERMANENT MODE CONTRACT: preserve this adapter-only activation rule.
+        # Opt-in native downloads only for adapters supplying a local script.
+        # See reusable/chapter_script.py; generated files are never hand edited.
+        script=getattr(adapter,'CHAPTER_DOWNLOAD_JS',None)
+        if isinstance(script,str) and script.strip() and browser=='chrome':
+            data['permissions']=list(dict.fromkeys([*data['permissions'],'downloads']))
+            script_path=target.parent/'chapter_download_adapter.js'
+            script_path.parent.mkdir(parents=True,exist_ok=True)
+            digest=hashlib.sha256(script.strip().encode('utf-8')).hexdigest()
+            generated_script=('globalThis.__comicArchiverNativePlan = {digest:'+json.dumps(digest)+
+                              ', plan:('+script.strip()+')};\n')
+            if not script_path.exists() or script_path.read_text(encoding='utf-8')!=generated_script:
+                script_path.write_text(generated_script,encoding='utf-8')
+                if browser not in changed: changed.append(browser)
+        else:
+            script_path=target.parent/'chapter_download_adapter.js'
+            if script_path.exists():
+                script_path.unlink()
+                if browser not in changed: changed.append(browser)
         serialized=json.dumps(data,indent=2,ensure_ascii=False)+'\n'
         if not target.exists() or target.read_text(encoding='utf-8')!=serialized:
             target.parent.mkdir(parents=True,exist_ok=True)
             target.write_text(serialized,encoding='utf-8')
-            changed.append(browser)
+            if browser not in changed: changed.append(browser)
     return changed

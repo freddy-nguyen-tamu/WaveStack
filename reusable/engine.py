@@ -1768,6 +1768,12 @@ def acquire_chapter(context, chapter: Chapter, storage: Path, config=CONFIG, gua
         if callable(after):
             after(page, chapter.url)
         source_title = chapter_title_from_source(page.content(), chapter.label)
+        # PERMANENT MODE CONTRACT: do not remove. New site-specific scripts live
+        # only in site_specific/site_adapter.py; see reusable/chapter_script.py.
+        # Nonempty CHAPTER_DOWNLOAD_JS opts in; absence preserves the legacy path.
+        from . import chapter_script
+        if chapter_script.enabled(ADAPTER):
+            return chapter_script.acquire(page, chapter, chapter_dir, ADAPTER, config, guard, event, utc, source_title)
         checkpoint = ChapterImageCheckpoint(chapter_dir, chapter.chapter_id, chapter.url)
         saved = {}
         attempts = {}

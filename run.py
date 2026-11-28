@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -232,6 +233,7 @@ _PREFLIGHT_PYTHON = (
     ('test_optimized_bridge.py', 4),
     ('test_native_dialog_recovery.py', 3),
     ('test_image_checkpoint_resume.py', 8),
+    ('test_native_chapter_download.py', 3),
     ('test_site_separation.py', 3),
     ('test_github_fast_verification.py', 5),
     ('test_challenge_passive_resume.py', 6),
@@ -256,6 +258,7 @@ _PREFLIGHT_PYTHON = (
 )
 _PREFLIGHT_JAVASCRIPT = (
     'extension_persistent_autoconnect.js',
+    'extension_native_chapter_download.js',
     'extension_screenshot_permission_fallback.js',
     'extension_fast_path_and_watchdog.js',
     'extension_tile_stall_recovery.js',
@@ -328,7 +331,7 @@ def _run_preflight(*, run_tests=True) -> None:
                                b"'X-Comic-Bridge-Bootstrap':'1'",
                                b"'X-Comic-Bridge-Client':chrome.runtime.id",
                                b"screenshotBackend !== 'debugger'",
-                           b"pickComicTab(config.site,config.startup_url)",
+                           b"pickComicTab(config.site,config.startup_url,config.startup_nonce||'')",
                            b"chrome.tabs.onCreated?.addListener(()=>autoConnect())")
         for marker in required_bridge:
             if marker not in bridge:
@@ -340,13 +343,13 @@ def _run_preflight(*, run_tests=True) -> None:
             fail('Python source session does not forward the startup chapter')
         if 'def launch_normal_chrome(' not in launcher or '--new-tab' not in launcher:
             fail('normal Chrome launcher missing or incompatible')
-        if "command.append('about:blank')" not in launcher:
+        if not any(marker in launcher for marker in ("command.append('about:blank')", "command.append('about:blank#comicarchiver-'")):
             fail('normal Chrome launcher must not create a second matching chapter tab')
         if 'require_managed_tab=True' not in bridge or 'tab_ownership' not in bridge:
             fail('Python must reject old extension workers that reuse manual tabs')
         if 'comicBridgeManagedTabId' not in background.decode('utf-8'):
             fail('auto startup can select an old manually opened matching tab')
-        if 'launch_normal_chrome(bridge.initial_chapter_url)' not in bridge:
+        if 'launch_normal_chrome(bridge.initial_chapter_url, startup_nonce=bridge.startup_nonce)' not in bridge:
             fail('Python bridge does not launch the selected chapter in normal Chrome')
         if 'Bootstrap requires a browser extension Origin' in bridge:
             fail('old Python bootstrap handler reintroduced; 403 regression detected')
@@ -521,9 +524,101 @@ def _run_preflight(*, run_tests=True) -> None:
     print('PREFLIGHT PASSED: safe to enter normal archiver startup.\n', flush=True)
 
 
+
+# Process-level recovery is deliberately separate from the engine's existing
+# per-chapter reconnect budget. Each attempt starts with fresh Python objects,
+# while the engine's durable SQLite/image checkpoints remain authoritative.
+_RETRY_CHILD_FLAG = '--_archive-retry-child'
+_RETRY_CHILD_CODE = 75
+# Preserve a longer delay when a child explicitly returns the historical
+# source-pause code. No exception-class dependency is required.
+_RETRY_MANUAL_STOP_CODE = 76
+# Windows console interruption may be reported as signed or unsigned NTSTATUS.
+_RETRY_INTERRUPT_CODES = {130, -2, -1073741510, 3221225786}
+
+
+def _archive_retry_child(args):
+    # Permanent supervisor contract: never import optional acquisition-specific
+    # exception classes or classify failures here. Any uncaught exception exits
+    # nonzero and the parent restarts it, regardless of installed adapter mode
+    # or reusable module revision. The engine retains its own safety checks.
+    sys.argv = ['comic_archiver.py', *args]
+    try:
+        import reusable.engine as engine
+        engine.main()
+    except KeyboardInterrupt:
+        raise SystemExit(130) from None
+
+
+def _archive_retry_enabled(args, scope):
+    # Never turn inspection, account maintenance or bounded test runs into jobs.
+    maintenance = {'--status', '--archive-needed', '--inspect', '--audit-resources',
+                   '--github-login', '--github-logout', '--github-account',
+                   '--github-switch-account', '--default-source-url',
+                   '--refresh-extension', '--self-test-only', '--library-audit',
+                   '--source-login', '--repair-reader-readmes', '--help', '-h'}
+    flags = {arg.split('=', 1)[0] for arg in args}
+    return (scope != 'site' and bool(flags & {'--archive', '--resume'})
+            and not flags.intersection(maintenance | {'--max-chapters', '--open-reader-url'}))
+
+
+def _run_archive_retry_loop(args, *, call=None, sleep=None):
+    call = subprocess.call if call is None else call
+    sleep = time.sleep if sleep is None else sleep
+    current = list(args)
+    attempt = 0
+    print('ARCHIVE_AUTO_RETRY_ENABLED: every failed archive child restarts automatically; '
+          'only success or Ctrl+C stops the supervisor.', flush=True)
+    while True:
+        try:
+            code = call([sys.executable, '-u', str(ROOT / 'run.py'),
+                         _RETRY_CHILD_FLAG, *current], cwd=ROOT)
+        except OSError as exc:
+            print(f'ARCHIVE_CHILD_LAUNCH_FAILED: {exc}', file=sys.stderr, flush=True)
+            code = _RETRY_CHILD_CODE
+        except KeyboardInterrupt:
+            print('ARCHIVE_RETRY_STOPPED: Ctrl+C; saved checkpoints retained.', flush=True)
+            raise SystemExit(130) from None
+        if code == 0:
+            # The engine alone decides whether publication is verified and
+            # whether an explicitly authorized shutdown may be scheduled.
+            return
+        if code in _RETRY_INTERRUPT_CODES:
+            print('ARCHIVE_RETRY_STOPPED: child interrupted; saved checkpoints retained.', flush=True)
+            raise SystemExit(130)
+        # Do NOT allowlist exception messages or error codes. An ordinary
+        # traceback (exit 1), an unknown browser error or a child crash must
+        # restart just like a known recoverable transport error (exit 75).
+        # Every child still enforces all existing verification and access gates.
+        attempt += 1
+        delay = min(60, 5 * 2 ** min(attempt - 1, 4))
+        # An access pause still retries indefinitely, but give the operator and
+        # source a longer interval; never bypass the engine's access checks.
+        if code == _RETRY_MANUAL_STOP_CODE:
+            delay = max(delay, 300)
+        print(f'ARCHIVE_AUTO_RESTART attempt={attempt} exit_code={code} wait_seconds={delay} '
+              'checkpoint_retained=True historical_github_check=False; '
+              'Ctrl+C stops the retry loop.', flush=True)
+        if '--skip-initial-github-check' not in current:
+            current.append('--skip-initial-github-check')
+        # Preserve explicit refresh requests; ordinary resume already uses the
+        # cached catalog. Do not implicitly authorize any additional work.
+        try:
+            sleep(delay)
+        except KeyboardInterrupt:
+            print('ARCHIVE_RETRY_STOPPED: Ctrl+C; saved checkpoints retained.', flush=True)
+            raise SystemExit(130) from None
+
+
 def main() -> None:
     os.chdir(ROOT)
     _relaunch_project_venv()
+    if sys.argv[1:2] == [_RETRY_CHILD_FLAG]:
+        _archive_retry_child(sys.argv[2:])
+        return
+    no_auto_retry = '--no-auto-retry' in sys.argv[1:]
+    if no_auto_retry:
+        sys.argv.remove('--no-auto-retry')
     if '--repair-reader-readmes' in sys.argv[1:]:
         if sys.argv[1:] != ['--repair-reader-readmes']:
             raise SystemExit('--repair-reader-readmes must be used alone')
@@ -567,6 +662,9 @@ def main() -> None:
     elif '--shutdown-on-complete' in args:
         print('Automatic shutdown suppressed: shared-reader publication was skipped.', flush=True)
         args = [value for value in args if value != '--shutdown-on-complete']
+    if not no_auto_retry and _archive_retry_enabled(args, scope):
+        _run_archive_retry_loop(args)
+        return
     sys.argv = ['comic_archiver.py', *args]
     engine.main()
 

@@ -116,7 +116,8 @@ class AutoNormalChromeTests(unittest.TestCase):
         def spawned(args,**kw): calls.append((args,kw))
         with patch.dict(os.environ, {'COMIC_ARCHIVER_CHROME_PROFILE_DIRECTORY':''}, clear=False):
             result=launcher.launch_normal_chrome(SITE, executable='C:/Chrome/chrome.exe', popen=spawned)
-        self.assertEqual(result, ['C:/Chrome/chrome.exe', '--new-tab', 'about:blank'])
+        self.assertEqual(result[:2], ['C:/Chrome/chrome.exe', '--new-tab'])
+        self.assertRegex(result[2], r'^about:blank#comicarchiver-[a-f0-9]{32}$')
         self.assertEqual(calls[0][0],result)
         self.assertTrue(all('debugging' not in arg and 'automation' not in arg and
                             'user-data-dir' not in arg and 'headless' not in arg for arg in result))
@@ -143,13 +144,14 @@ class AutoNormalChromeTests(unittest.TestCase):
         buffer = io.BytesIO()
         Image.new('RGB',(2,2)).save(buffer,format='PNG')
         events=[]
-        fake=Mock(initial_chapter_url=SITE)
+        fake=Mock(initial_chapter_url=SITE, rendered_image_selector=None, startup_nonce="a"*32)
         fake.start.side_effect=lambda:events.append('listener-ready')
         fake.wait_paired.side_effect=lambda:events.append('extension-paired')
         fake.rpc.side_effect=lambda *_a,**_kw:(events.append('image-proof') or
             {'base64':base64.b64encode(buffer.getvalue()).decode('ascii'),'via':'rendered-png'})
         adapter=SimpleNamespace(IMAGE_ATTRIBUTES=[],BRIDGE_IMAGE_HOSTS=[])
-        def launched(url):
+        def launched(url, *, startup_nonce):
+            self.assertEqual(startup_nonce,"a"*32)
             self.assertEqual(url,SITE)
             events.append('normal-chrome-open')
             return ['chrome.exe','--new-tab','about:blank']
@@ -170,8 +172,8 @@ class AutoNormalChromeTests(unittest.TestCase):
         browser=(root/'reusable/browser_bridge.py').read_text(encoding='utf-8')
         self.assertIn('initial_chapter_url=(remaining[0].url if remaining else seed)',engine)
         self.assertIn('bridge.start()\n    # The loopback listener MUST be ready before opening Chrome',browser)
-        self.assertIn('launch_normal_chrome(bridge.initial_chapter_url)',browser)
-        self.assertIn("command.append('about:blank')",(root/'reusable/normal_browser_launch.py').read_text(encoding='utf-8'))
+        self.assertIn('launch_normal_chrome(bridge.initial_chapter_url, startup_nonce=bridge.startup_nonce)',browser)
+        self.assertIn("command.append('about:blank#comicarchiver-'",(root/'reusable/normal_browser_launch.py').read_text(encoding='utf-8'))
         self.assertNotIn('toongod', (root/'reusable/normal_browser_launch.py').read_text(encoding='utf-8').lower())
 
 if __name__ == '__main__':unittest.main()

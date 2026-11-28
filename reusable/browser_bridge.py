@@ -51,12 +51,22 @@ def bridge_recovery_reason(exc):
     if message.startswith(('Browser recover_image failed:', 'Browser image failed:',
                            'Browser snapshot failed:', 'Browser classify failed:',
                            'Browser page failed:', 'Browser scroll failed:',
-                           'Browser probe failed:', 'Browser image_diagnostics failed:')) and 'Selected-tab browser API stalled:' in message:
+                           'Browser probe failed:', 'Browser image_diagnostics failed:',
+                           'Browser script_scroll failed:', 'Browser script_plan failed:',
+                           'Browser script_download_status failed:', 'Browser script_capabilities failed:',
+                           'Browser script_download_start failed:', 'Browser script_resource_prepare failed:',
+                           'Browser script_resource_read failed:', 'Browser script_resource_position failed:')) and 'Selected-tab browser API stalled:' in message:
         return 'selected_tab_api_stalled'
     if message.startswith(('Browser recover_image did not respond within ',
                            'Browser page did not respond within ',
                            'Browser image_diagnostics did not respond within ',
-                           'Browser probe did not respond within ')):
+                           'Browser probe did not respond within ',
+                           'Browser script_scroll did not respond within ',
+                           'Browser script_plan did not respond within ',
+                           'Browser script_download_start did not respond within ',
+                           'Browser script_download_status did not respond within ',
+                           'Browser script_capabilities did not respond within ', 'Browser script_resource_prepare did not respond within ',
+                           'Browser script_resource_read did not respond within ', 'Browser script_resource_position did not respond within ')):
         return 'browser_rpc_timeout'
     return None
 
@@ -650,7 +660,7 @@ class BridgePage:
             'refresh_source': bool(refresh_source),
             'reader_selectors': self.context.reader_selectors,
             'image_attributes': self.context.image_attributes,
-        }, timeout=35)
+        }, timeout=55)
 
     def image_diagnostics(self, url):
         """Read status cached by the EXISTING tab's Chrome Network observer.
@@ -736,13 +746,32 @@ class BridgeContext:
         self.image_attributes = list(image_attributes)
         self.pages = [BridgePage(self)]
         self.request = BridgeRequest(self)
+        self._closed = False
 
     def new_page(self):
         # Engine calls this for discovery/chapter lifecycle. Never create tabs.
         return self.pages[0]
 
     def close(self):
-        self.bridge.close()
+        # Engine finally blocks call ctx.close() BEFORE the contextmanager
+        # unwinds. Release the owned tab while the RPC listener is still alive.
+        # Idempotent: the contextmanager also calls close on its way out.
+        if self._closed:
+            return
+        self._closed = True
+        bridge = self.bridge
+        try:
+            if bridge.require_managed_tab and bridge.ready.is_set() and isinstance(bridge.tab_id, int):
+                try:
+                    receipt = bridge.rpc('release_managed_reader', {}, timeout=20)
+                    if receipt.get('closed') is True and receipt.get('tab_id') == bridge.tab_id:
+                        print('BROWSER_RETRY_TAB_CLEANUP: ' + str(receipt), flush=True)
+                    else:
+                        print('BROWSER_RETRY_TAB_CLEANUP_DEFERRED: ' + str(receipt), flush=True)
+                except Exception as cleanup_error:
+                    print('BROWSER_RETRY_TAB_CLEANUP_DEFERRED: ' + str(cleanup_error), flush=True)
+        finally:
+            bridge.close()
 
 
 # The probe validates the screenshot transport, not the separate exact-image
@@ -876,7 +905,7 @@ def source_extension_context(data_dir: Path, source_url: str, *,
     try:
         if os.environ.get('COMIC_ARCHIVER_NO_AUTO_BROWSER') != '1':
             from .normal_browser_launch import launch_normal_chrome
-            command = launch_normal_chrome(bridge.initial_chapter_url)
+            command = launch_normal_chrome(bridge.initial_chapter_url, startup_nonce=bridge.startup_nonce)
             print('NORMAL_CHROME_AUTO_OPEN: normal Chrome/Edge ready; '
                   'installed extension owns and navigates the chapter tab: '
                   + bridge.initial_chapter_url, flush=True)
@@ -889,6 +918,25 @@ def source_extension_context(data_dir: Path, source_url: str, *,
             bridge.wait_paired()
         else:
             bridge.wait_paired(timeout_seconds=reconnect_timeout)
+        from .chapter_script import enabled as script_mode_enabled
+        if script_mode_enabled(adapter):
+            # Feature query only. A managed tab may still be settling after
+            # pairing; chapter-specific RPCs validate the actual document.
+            result=bridge.rpc('script_capabilities', {}, timeout=30)
+            if result.get('revision')!='native-chapter-download-v2':
+                raise BrowserBridgeError('SCRIPT_DOWNLOAD: reload current Chrome/Edge extension')
+            if getattr(adapter,'CHAPTER_DOWNLOAD_TRANSPORT','native')=='loaded-resource':
+                if result.get('loadedResource') is not True:
+                    raise BrowserBridgeError('SCRIPT_RESOURCE: reload current Chrome/Edge extension')
+                print('BROWSER_LOADED_RESOURCE_MODE: READY',flush=True)
+            else:
+                if result.get('native') is not True:
+                    raise BrowserBridgeError('SCRIPT_DOWNLOAD: native download permission unavailable; reload current Chrome/Edge extension')
+                print('BROWSER_NATIVE_CHAPTER_DOWNLOAD_MODE: READY',flush=True)
+            # Ordinary navigation/access classification remains active. No
+            # pretend byte proof, and no old screenshot probe is performed.
+            yield ctx
+            return
         # Real transfer proof BEFORE the crawler scrolls a single chapter.
         # This transfers a decoded image across extension -> localhost -> Python,
         # validates bytes, and gives the user an on-disk artifact to inspect.

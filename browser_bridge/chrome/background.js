@@ -39,6 +39,8 @@ async function directTabCommand(id, payload) {
             if(window.__comicBridgeContentLoadedVersion !== 10 ||
                window.__comicBridgeNestedScrollRevision !== 1 ||
                (command.payload?.rendered_reader_selector && window.__comicBridgeScopedRenderedRevision !== 1) ||
+               ((command.type==='RECOVER_IMAGE_STATUS' || command.payload?.recovery_id) &&
+                window.__comicBridgeRecoveryReceiptRevision !== 1) ||
                typeof window.__comicBridgeDirect !== 'function' ||
                ((command.type==='SCROLL' || command.type==='SCROLL_STATUS') &&
                 window.__comicBridgeScrollRevision !== 1))
@@ -62,6 +64,7 @@ async function directTabCommand(id, payload) {
       return result;
     } catch(error) {
       failure=String(error);
+      if(/RECOVERY_(DOCUMENT_CHANGED|RECEIPT_UNKNOWN|RECEIPT_UNVERIFIED)/.test(failure)) throw error;
       if(!lostReceiver(error) && !/context|frame|document|transport|navigation|cannot access/i.test(failure))
         throw error;
       await sleep(350);
@@ -459,6 +462,7 @@ const SCREENSHOT_GAP_MS = 560; // Chrome tabs capture API rate limit; NOT used f
 // This is a per-I/O inactivity watchdog, never a chapter/run time limit.
 const BROWSER_IO_STALL_MS = 18000;
 let scrollCommandSequence = 0;
+let recoveryCommandSequence = 0;
 async function checkedIO(task, name, timeoutMs=BROWSER_IO_STALL_MS) {
   let timeout;
   try {
@@ -787,9 +791,225 @@ async function recycleManagedChapterTab() {
     reason:'existing managed chapter document responded; restart scanner from checkpoint'};
 }
 
+// Optional local adapter-script acquisition. No dynamic eval, no screenshot RPC.
+// PERMANENT MODE CONTRACT: do not delete. Only the adapter defines a
+// website-specific chapter download plan. The reusable layer executes the
+// trusted installed script, validates its ordered URL/filename commands and
+// handles native browser receipts. See reusable/chapter_script.py.
+let nativeChapterPlan=null;
+function nativeAllowedImage(raw) {
+  try {
+    const u=new URL(raw);
+    if(u.protocol!=='https:' || u.username || u.password || u.port) return false;
+    return (chrome.runtime.getManifest().host_permissions||[]).some(p=>p==='https://'+u.hostname+'/*');
+  } catch {return false;}
+}
+// Permanent CORS warning: successful <img> rendering or HTTP 200 does NOT
+// imply that page-context fetch() can read a cross-origin response. Do not
+// disable browser security, use opaque no-cors responses as bytes, or treat
+// an interrupted/HTML download as an image. See the adapter contract.
+function scriptCapabilities() {
+  // Feature detection is read-only and has no chapter document dependency.
+  // The tab may be between documents after /hello; no script is injected here.
+  const scripting=!!chrome.scripting?.executeScript;
+  return {revision:'native-chapter-download-v2',
+    native:scripting && !!chrome.downloads?.download && !!chrome.downloads?.search,
+    loadedResource:scripting && !!chrome.debugger?.attach && !!chrome.debugger?.sendCommand};
+}
+async function nativeChapterCommand(action,payload,tab) {
+  const tabId=state.tabId;
+  const expected=canonicalPage(payload.url);
+  const capabilities=scriptCapabilities();
+  if(action.startsWith('script_resource_') ? !capabilities.loadedResource :
+     action.startsWith('script_download_') ? !capabilities.native : !chrome.scripting?.executeScript)
+    throw Error('SCRIPT_DOWNLOAD: requested transport unavailable; reload current Chrome/Edge extension');
+  const documentError=(phase,t)=>Error('SCRIPT_DOWNLOAD: chapter document changed ('+phase+
+    '; expected='+expected+'; actual='+canonicalPage(t?.url)+'; status='+String(t?.status||'unknown')+
+    '; pending='+canonicalPage(t?.pendingUrl)+')');
+  const isReady=t=>!!t && state?.tabId===tabId && canonicalPage(t.url)===expected &&
+    (!t.pendingUrl || canonicalPage(t.pendingUrl)===expected) && t.status!=='loading';
+  if(!expected || !sourceMatches(expected)) throw documentError('invalid requested chapter',tab);
+  // Only wait for a navigation to the exact expected chapter. This is a
+  // bounded read-only readiness check: no extra navigation, reload or action.
+  const waitingForExpected=t=>!!t && state?.tabId===tabId &&
+    (t.pendingUrl ? canonicalPage(t.pendingUrl)===expected :
+      canonicalPage(t.url)===expected && t.status==='loading');
+  const deadline=Date.now()+12000;
+  while(!isReady(tab) && waitingForExpected(tab) && Date.now()<deadline) {
+    await sleep(250);
+    tab=await checkedIO(tabsGet(tabId),'wait for requested chapter document',5000);
+  }
+  if(!isReady(tab)) {
+    if(waitingForExpected(tab)) throw Error('Selected-tab browser API stalled: requested chapter still loading before '+action);
+    throw documentError('before '+action,tab);
+  }
+  const target={tabId};
+  const verify=async()=>{
+    const after=await checkedIO(tabsGet(tabId),'native download document',5000);
+    if(!isReady(after)) throw documentError('after '+action,after);
+  };
+  if(action==='script_resource_prepare') {
+    await checkedIO(attachSelectedTab(),'attach normal reader response observer',10000);
+    if(!inspectedReady || inspectedTabId!==tabId) throw Error('SCRIPT_RESOURCE: selected-tab response inspection unavailable');
+    await verify(); return {ready:true};
+  }
+  if(action==='script_scroll') {
+    const result=await checkedIO(chrome.scripting.executeScript({target,func:(reset,selectors,wanted)=>{
+      if(location.href!==wanted) throw Error('SCRIPT_DOWNLOAD: wrong scroll document');
+      const root=selectors.map(s=>document.querySelector(s)).find(Boolean);
+      if(!root) throw Error('SCRIPT_DOWNLOAD: reader absent');
+      const imgs=[...root.querySelectorAll('img')].filter(im=>!im.closest('noscript,script'));
+      const el=document.scrollingElement||document.documentElement;
+      const height=el.scrollHeight, y=el.scrollTop, bottom=Math.max(0,height-innerHeight);
+      const atBottom=y>=bottom-2;
+      // Synchronous absolute movement. No page timers or paint awaits.
+      window.scrollTo({top:reset?0:Math.min(bottom,y+Math.max(1,Math.floor(innerHeight*.8))),behavior:'instant'});
+      return {url:location.href,height,count:imgs.length,loaded:imgs.filter(x=>x.complete&&x.naturalWidth>0&&x.naturalHeight>0).length,atBottom:!reset&&atBottom};
+    },args:[!!payload.reset,payload.reader_selectors||[],tab.url]}),'native chapter scroll',10000);
+    await verify(); return result?.[0]?.result;
+  }
+  if(action==='script_plan') {
+    // The local file is generated exclusively from the trusted installed Python adapter.
+    await checkedIO(chrome.scripting.executeScript({target,files:['chapter_download_adapter.js']}),'native chapter script',10000);
+    const result=await checkedIO(chrome.scripting.executeScript({target,func:()=>globalThis.__comicArchiverNativePlan}),'native chapter script result',10000);
+    const envelope=result?.[0]?.result;
+    if(!envelope || envelope.digest!==payload.digest) throw Error('SCRIPT_DOWNLOAD: stale adapter script; reload Comic Bridge');
+    const plan=envelope.plan;
+    await verify();
+    if(!plan || canonicalPage(plan.url)!==expected || !Array.isArray(plan.items) || !plan.items.length || plan.items.length>2000)
+      throw Error('SCRIPT_DOWNLOAD: invalid native catalog');
+    for(const [i,x] of plan.items.entries()) {
+      if(x.key!==String(i+1) || x.order!==i+1 || !new RegExp('^'+String(i+1).padStart(4,'0')+'\\.(jpg|jpeg|png|webp|avif|gif|bmp)$').test(x.filename) || !nativeAllowedImage(x.url))
+        throw Error('SCRIPT_DOWNLOAD: invalid adapter download command');
+    }
+    nativeChapterPlan={tabId,url:expected,items:plan.items};
+    return plan;
+  }
+  if(!nativeChapterPlan || nativeChapterPlan.tabId!==tabId || nativeChapterPlan.url!==expected || !/^[a-f0-9]{32}$/.test(payload.token||'') || !Array.isArray(payload.items) || !payload.items.length || payload.items.length>6)
+    throw Error('SCRIPT_DOWNLOAD: missing verified chapter plan');
+  for(const x of payload.items) {
+    const match=nativeChapterPlan.items[Number(x.order)-1];
+    if(!match || ['key','order','url','filename'].some(k=>match[k]!==x[k])) throw Error('SCRIPT_DOWNLOAD: command differs from adapter plan');
+  }
+  if(action==='script_resource_position' || action==='script_resource_read') {
+    if(payload.items.length!==1) throw Error('SCRIPT_RESOURCE: one ordered resource per response');
+    if(!inspectedReady || inspectedTabId!==tabId) throw Error('SCRIPT_RESOURCE: selected-tab response observer detached');
+    const item=payload.items[0];
+    const found=await checkedIO(chrome.scripting.executeScript({target,func:(url,wanted,position,attrs,selectors)=>{
+      if(location.href!==wanted) throw Error('SCRIPT_RESOURCE: wrong document');
+      const exact=raw=>{try{const u=new URL(raw,location.href);u.hash='';return u.href===url;}catch{return false;}};
+      const roots=selectors.map(s=>document.querySelector(s)).filter(Boolean);
+      const matches=[...new Set(roots.flatMap(root=>[...root.querySelectorAll('img')]))].filter(im=>!im.closest('noscript,script') &&
+        [im.currentSrc,im.getAttribute('src'),...attrs.map(a=>im.getAttribute(a))].some(x=>x&&exact(x)));
+      if(!matches.length) return {found:false,loaded:false};
+      const im=matches.find(x=>x.complete&&x.naturalWidth>0&&x.naturalHeight>0&&exact(x.currentSrc||x.src))||matches[0];
+      if(position) im.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
+      return {found:true,loaded:im.complete&&im.naturalWidth>0&&im.naturalHeight>0&&exact(im.currentSrc||im.src),width:im.naturalWidth,height:im.naturalHeight};
+    },args:[normalizeResourceUrl(item.url),tab.url,action==='script_resource_position',payload.image_attributes||[],payload.reader_selectors||[]]}),'read exact reader resource state',10000);
+    const dom=found?.[0]?.result;
+    await verify();
+    if(!dom?.found) throw Error('SCRIPT_RESOURCE: exact image URL absent from current reader');
+    if(action==='script_resource_position') return {positioned:true,loaded:dom.loaded};
+    const key=normalizeResourceUrl(item.url);
+    const http=imageNetworkStatus.get(key)||imageWebRequestStatus.get(key);
+    if(http?.status>=400) return {key:item.key,url:item.url,state:'denied',status:http.status};
+    let body=capturedImages.get(key)?.base64;
+    // Only read already-delivered bytes. Never re-request a failed CDN URL,
+    // change referrer/cookies, bypass CORS, or alter source access decisions.
+    if(!body && dom.loaded) {
+      try {
+        const tree=await checkedIO(cdp('Page.getResourceTree'),'inspect loaded resource tree',10000);
+        const r=findFrameResource(tree.frameTree,key);
+        if(r) {
+          const bytes=await checkedIO(cdp('Page.getResourceContent',r),'read already loaded image',10000);
+          if(bytes?.base64Encoded && storeOriginalImage(key,bytes.content)) body=bytes.content;
+        }
+      } catch(e) {if(/Selected-tab browser API stalled/.test(String(e))) throw e;}
+      if(!body) {
+        await checkedIO(recoverExistingPageSnapshot(),'read loaded page snapshot',15000);
+        body=capturedImages.get(key)?.base64;
+      }
+    }
+    await verify();
+    if(!body) return {key:item.key,url:item.url,state:dom.loaded?'unavailable':'pending'};
+    return {key:item.key,url:item.url,state:'complete',base64:body,via:'managed-reader-original-response',width:dom.loaded?dom.width:0,height:dom.loaded?dom.height:0};
+  }
+  const receipt=async item=>{
+    const relative='ComicArchiver-script/'+payload.token+'/'+item.filename;
+    const ledgerKey='nativeDownload:'+payload.token+':'+item.key;
+    const ledger=(await checkedIO(call(chrome.storage.local,'get',ledgerKey),'native download ledger',5000))[ledgerKey];
+    if(ledger && (ledger.url!==item.url || ledger.relative!==relative)) throw Error('SCRIPT_DOWNLOAD: conflicting download ledger');
+    const query=ledger?.id!==undefined?{id:ledger.id}:{url:item.url};
+    const entries=await checkedIO(call(chrome.downloads,'search',query),'native download status',5000);
+    const suffix='/'+relative;
+    const norm=d=>String(d.filename||'').replace(/\\/g,'/');
+    const scoped=d=>norm(d).includes('/ComicArchiver-script/'+payload.token+'/') && norm(d).split('/').slice(-3,-1).join('/')==='ComicArchiver-script/'+payload.token;
+    const owned=entries.filter(d=>d.url===item.url && (d.byExtensionId===chrome.runtime.id || (ledger?.id===d.id && !d.byExtensionId)));
+    // Chrome can report temporary paths while a transfer is active and can
+    // choose another final extension/name. The persisted ID, not a filename,
+    // binds the receipt to the exact adapter URL and ordinal. Never recover a
+    // renamed external file by URL alone when the start acknowledgement is lost.
+    const candidates=owned.filter(d=>ledger?.id!==undefined ? d.id===ledger.id : norm(d).endsWith(suffix));
+    if(candidates.length>1) throw Error('SCRIPT_DOWNLOAD: duplicate browser download receipts');
+    const d=candidates[0];
+    if(!d) return {key:item.key,url:item.url,filename:item.filename,state:'pending',ledger,relative,ledgerKey};
+    if(d.finalUrl && (!nativeAllowedImage(d.finalUrl) || canonicalPage(d.finalUrl)!==canonicalPage(item.url))) throw Error('SCRIPT_DOWNLOAD: native download redirected away from the exact planned image URL');
+    const idBound=Number.isInteger(d.id) && (ledger?.id===d.id || norm(d).endsWith(suffix));
+    const extensionOwned=d.byExtensionId===chrome.runtime.id;
+    const managed=scoped(d);
+    if(d.state==='complete' && (!d.exists || !d.filename || !idBound || (!managed && !extensionOwned)))
+      throw Error('SCRIPT_DOWNLOAD: completed native file missing or receipt ownership uncertain');
+    return {key:item.key,url:item.url,filename:item.filename,state:d.state,path:d.filename||'',error:d.error||'',id:d.id,idBound,extensionOwned,managed,fileSize:d.fileSize??-1,canResume:!!d.canResume,ledger,relative,ledgerKey};
+  };
+  if(action==='script_download_status') {
+    const receipts=[];
+    for(const item of payload.items) {
+      const r=await receipt(item);
+      receipts.push({key:r.key,url:r.url,filename:r.filename,state:r.state,path:r.path,error:r.error,id:r.id,idBound:r.idBound,extensionOwned:r.extensionOwned,managed:r.managed,fileSize:r.fileSize});
+    }
+    await verify(); return {receipts};
+  }
+  if(action==='script_download_start') {
+    const interval=Math.max(1000,Math.min(25000,Number(payload.interval_ms)||1500));
+    for(const item of payload.items) {
+      await verify();
+      const r=await receipt(item);
+      if(r.state==='interrupted') {
+        if(r.canResume && ['NETWORK_FAILED','NETWORK_TIMEOUT','NETWORK_DISCONNECTED'].includes(r.error) && (r.ledger?.resumes||0)<2) {
+          await checkedIO(call(chrome.storage.local,'set',{[r.ledgerKey]:{url:item.url,relative:r.relative,id:r.id,resumes:(r.ledger?.resumes||0)+1}}),'native download retry receipt',5000);
+          await checkedIO(call(chrome.downloads,'resume',r.id),'native download resume',5000);
+          await sleep(interval);
+        }
+        continue;
+      }
+      if(r.state!=='pending') continue;
+      // If start ACK was lost, never issue a second download. Native history may
+      // populate after a delay; status polling can recover the exact path.
+      if(r.ledger) continue;
+      const intent={url:item.url,relative:r.relative};
+      await checkedIO(call(chrome.storage.local,'set',{[r.ledgerKey]:intent}),'native download intent',5000);
+      const id=await checkedIO(call(chrome.downloads,'download',{url:item.url,filename:r.relative,saveAs:false,conflictAction:'uniquify'}),'native download start',10000);
+      await checkedIO(call(chrome.storage.local,'set',{[r.ledgerKey]:{...intent,id}}),'native download receipt',5000);
+      await sleep(interval);
+    }
+    return {started:true};
+  }
+  throw Error('SCRIPT_DOWNLOAD: unsupported command');
+}
+
 async function execute(job) {
   const {action,payload={}}=job;
-  await tabInfo();
+  // Pairing already established the managed tab. Query features without
+  // asking Chrome for a stable document or touching the source website.
+  if (action==='script_capabilities') return scriptCapabilities();
+  if (action==='release_managed_reader') {
+    // Do not re-pair the SAME closing Python session between the release ACK
+    // and listener shutdown, even if Chrome restarts the service worker.
+    if(state?.managedNonce) await checkedIO(storageSet({comicBridgeRetiredStartupNonce:state.managedNonce}),'retire closing session',3000);
+    return releaseOwnedReader(state, true);
+  }
+  const initialTab=await tabInfo();
+  if (action.startsWith('script_')) return nativeChapterCommand(action,payload,initialTab);
   // The browser may detach on navigation or when DevTools takes ownership.
   // Stop BEFORE another scroll if loaded-response inspection was lost.
   // The visual path is independent of debugger state.  Never stall a chapter
@@ -829,7 +1049,9 @@ async function execute(job) {
     const current=new URL((await tabsGet(state.tabId)).url);
     if (!sourceMatches(desired.href) || desired.host !== current.host)
       throw Error('Cross-site navigation refused');
+    await cleanupArchiverTabs(state.tabId,current.href);
     clearImageMemory();
+    nativeChapterPlan=null;
     if (desired.href !== current.href) {
       await tabsUpdate(state.tabId,{url:desired.href});
     } else {
@@ -858,6 +1080,7 @@ async function execute(job) {
     }
     // Never accept the old chapter's receiver while navigation commits.
     const result=await waitContent(85000, desired.href);
+    await cleanupArchiverTabs(state.tabId,current.href);
     return {url:result.url,status:200,tab_id:result.tab_id,tab_title:result.tab_title};
   }
   // COMICARCHIVER_AUTH_BLOB_TRANSFER_20261122 provider-neutral extension action follows
@@ -1148,11 +1371,15 @@ async function execute(job) {
   // Also watch ordinary scroll/snapshot commands. A stalled content-script
   // message must not block the single extension command queue indefinitely.
   let result;
+  const commandPayload=action==='recover_image' ? {...payload,
+    recovery_id:Date.now().toString(36)+'-'+(++recoveryCommandSequence).toString(36),
+    recovery_chapter:canonicalPage(initialTab.url)} : payload;
+  const recoveryTabId=state.tabId;
   try {
     // recoverImage waits at most ~7 seconds for a lazy-loaded DOM image. A
     // longer scripting wait means the Chrome API/transport is stalled, not
     // that we should abandon every other image in this chapter.
-    result=await checkedIO(send(state.tabId,{type,payload}), action+' page command',
+    result=await checkedIO(send(state.tabId,{type,payload:commandPayload}), action+' page command',
       action==='recover_image' ? 11000 : BROWSER_IO_STALL_MS);
   } catch(error) {
     if (action==='scroll' &&
@@ -1174,8 +1401,38 @@ async function execute(job) {
     console.warn('Comic Bridge: recovery injection stalled; trying existing tab listener once');
     const tab=await checkedIO(tabsGet(state.tabId),'inspect managed tab for image recovery',5000);
     if(!sourceMatches(tab.url) || tab.status==='loading') throw error;
-    result=await checkedIO(sendRaw(state.tabId,{type,payload}),
+    result=await checkedIO(sendRaw(state.tabId,{type,payload:commandPayload}),
       'recover_image existing-listener fallback', 8500);
+  }
+  // Old responses have no receipt and retain exactly their existing behavior.
+  // A short ACK is not an image success: poll read-only from the extension
+  // worker, which is independent of the reader's throttled animation timers.
+  if(action==='recover_image' && result?.recovery_id) {
+    const expected=commandPayload.recovery_id;
+    const requested=String(payload.url||'').trim();
+    const chapter=canonicalPage(initialTab.url);
+    const valid=r=>r?.recovery_id===expected && r.key===String(payload.key) &&
+      r.requested===requested && canonicalPage(r.chapter_url)===chapter &&
+      (r.status==='pending' || r.status==='decoded') && r.loaded===(r.status==='decoded') &&
+      (!r.loaded || (r.width>0 && r.height>0));
+    const deadline=Date.now()+7000;
+    if(!valid(result)) throw Error('RECOVERY_RECEIPT_UNVERIFIED: wrong document, ordinal or URL');
+    console.info('COMIC_BRIDGE_LAZY_RECOVERY_ACK key='+payload.key);
+    while(!result.loaded && Date.now()<deadline) {
+      await sleep(250);
+      if(state.tabId!==recoveryTabId) throw Error('RECOVERY_DOCUMENT_CHANGED: managed tab changed');
+      const command={type:'RECOVER_IMAGE_STATUS',payload:commandPayload};
+      const status=chrome.scripting?.executeScript ? directTabCommand(recoveryTabId,command) : sendRaw(recoveryTabId,command);
+      // Do not replay mutation after an uncertain status read. Existing
+      // reconnect/checkpoint handling owns a genuinely stalled transport.
+      result=await checkedIO(status,'read lazy image recovery receipt',3000);
+      if(result?.error) throw Error(result.error);
+      if(!valid(result)) throw Error('RECOVERY_RECEIPT_UNVERIFIED: wrong document, ordinal or URL');
+    }
+    if(state.tabId!==recoveryTabId) throw Error('RECOVERY_DOCUMENT_CHANGED: managed tab changed');
+    const after=await checkedIO(tabsGet(recoveryTabId),'verify lazy recovery document',5000);
+    if(canonicalPage(after.url)!==chapter || after.status==='loading') throw Error('RECOVERY_DOCUMENT_CHANGED: chapter changed');
+    console.info('COMIC_BRIDGE_LAZY_RECOVERY_RESULT key='+payload.key+' loaded='+result.loaded);
   }
   if (result?.error) throw Error(result.error);
   return result;
@@ -1192,7 +1449,71 @@ function trustedStartupUrl(site, startupUrl) {
     return u.href;
   } catch {return '';}
 }
-async function pickComicTab(site, startupUrl='') {
+// Only close our uniquely marked launch tabs and blank/duplicate chapter
+// popups whose opener is the managed reader. Never close manual reader tabs.
+function isArchiverWakeTab(t) {
+  return !!t && !t.pinned && /^about:blank#comicarchiver-[a-f0-9]{32}$/.test(t.url||'') &&
+    (!t.pendingUrl || t.pendingUrl===t.url);
+}
+async function cleanupArchiverTabs(managedId, previousUrl='', includeWakeTabs=true, wakeNonce='', verify=false) {
+  if (!chrome.tabs?.query || !chrome.tabs?.remove) {
+    if(verify) throw Error('Owned tab cleanup API unavailable');
+    return 0;
+  }
+  const all=await checkedIO(call(chrome.tabs,'query',{}),'list owned auxiliary tabs',5000);
+  const tagged=t=>isArchiverWakeTab(t) && (includeWakeTabs ||
+    (!!wakeNonce && t.url==='about:blank#comicarchiver-'+wakeNonce));
+  const children=new Set([managedId]);
+  for(let i=0;i<all.length;i++) for(const t of all) if(children.has(t.openerTabId)) children.add(t.id);
+  const removable=t=>t.id!==managedId && !t.pinned && (tagged(t) || (children.has(t.id) &&
+    (!t.pendingUrl || t.pendingUrl===t.url) && (t.url==='about:blank' || (previousUrl && canonicalPage(t.url)===canonicalPage(previousUrl)))));
+  let closed=0;
+  for(const tab of all.filter(removable)) {
+    try {
+      const now=await tabsGet(tab.id);
+      if(!removable(now) || now.url!==tab.url || now.openerTabId!==tab.openerTabId) continue;
+      await checkedIO(call(chrome.tabs,'remove',tab.id),'close owned auxiliary tab',5000); closed++;
+    } catch(e) { console.warn('COMIC_BRIDGE_OWNED_TAB_CLEANUP:',String(e)); }
+  }
+  if(closed) console.info('COMIC_BRIDGE_OWNED_TABS_CLOSED count='+closed);
+  if(verify) {
+    const remaining=await checkedIO(call(chrome.tabs,'query',{}),'verify owned auxiliary tabs closed',5000);
+    if(remaining.some(removable)) throw Error('Owned auxiliary tabs still open');
+  }
+  return closed;
+}
+// Release only a tab whose saved automatic-session ownership still matches.
+// A disconnect may race the next Python launch: do not close its new wake tab.
+async function releaseOwnedReader(session, includeWakeTabs=false) {
+  if (!session?.managedSite || !Number.isInteger(session.tabId)) return {closed:false,reason:'not automatic'};
+  const id=session.tabId;
+  const keys=['comicBridgeManagedTabId','comicBridgeManagedSite','comicBridgeManagedNonce'];
+  const owns=s=>s.comicBridgeManagedTabId===id && s.comicBridgeManagedSite===session.managedSite &&
+    (s.comicBridgeManagedNonce||'')===(session.managedNonce||'');
+  const safe=t=>{try{return !!t && !t.pinned && sourceMatches(t.url) &&
+    new URL(t.url).hostname===session.managedSite && (!t.pendingUrl ||
+      (sourceMatches(t.pendingUrl) && new URL(t.pendingUrl).hostname===session.managedSite));}catch{return false;}};
+  if(!owns(await checkedIO(storageGet(keys),'verify reader ownership',3000))) return {closed:false,reason:'ownership changed'};
+  let tab;
+  try {tab=await checkedIO(tabsGet(id),'inspect reader before release',3000);} catch(e) {return {closed:false,reason:String(e)};}
+  if(!safe(tab) && !isArchiverWakeTab(tab)) return {closed:false,reason:'reader no longer owned'};
+  // Close children before their opener, which Chrome may otherwise forget.
+  const auxiliaryClosed=await cleanupArchiverTabs(id,tab.url,includeWakeTabs,session.managedNonce,true);
+  if(inspectedTabId===id) {
+    try {if(chrome.debugger?.detach) await checkedIO(call(chrome.debugger,'detach',{tabId:id}),'release reader debugger',3000);} catch(e) {console.warn('COMIC_BRIDGE_DEBUGGER_RELEASE:',String(e));}
+    inspectedTabId=null;inspectedReady=false;clearImageMemory();nativeChapterPlan=null;
+  }
+  if(!owns(await checkedIO(storageGet(keys),'recheck reader ownership',3000))) return {closed:false,reason:'ownership changed'};
+  const now=await checkedIO(tabsGet(id),'recheck reader tab',3000);
+  if((!safe(now) && !isArchiverWakeTab(now)) || now.url!==tab.url) return {closed:false,reason:'reader navigated'};
+  await checkedIO(call(chrome.tabs,'remove',id),'release owned reader',5000);
+  const remaining=await checkedIO(call(chrome.tabs,'query',{}),'verify reader tab closed',5000);
+  if(remaining.some(t=>t.id===id)) throw Error('Owned reader tab still open');
+  await storageSet({comicBridgeManagedTabId:null,comicBridgeManagedSite:null,comicBridgeManagedNonce:null});
+  console.info('COMIC_BRIDGE_READER_RELEASED tab_id='+id);
+  return {closed:true,tab_id:id,auxiliary_closed:auxiliaryClosed};
+}
+async function pickComicTab(site, startupUrl='', nonce='') {
   const requested=trustedStartupUrl(site,startupUrl);
   // Never silently fall back to a manual tab when an automatic startup URL is invalid.
   if(startupUrl && !requested) return null;
@@ -1205,16 +1526,31 @@ async function pickComicTab(site, startupUrl='') {
     // The extension owns the archiver tab. Never select an arbitrary tab with
     // the same URL: Chrome tabs.query() is not creation-order sorted, and the
     // user's older manual tab must NEVER be repurposed for an automatic run.
-    const saved=await storageGet(['comicBridgeManagedTabId','comicBridgeManagedSite']).catch(()=>({}));
+    const saved=await storageGet(['comicBridgeManagedTabId','comicBridgeManagedSite','comicBridgeManagedNonce']).catch(()=>({}));
     const managed=candidates.find(tab => tab.id===saved.comicBridgeManagedTabId &&
-      saved.comicBridgeManagedSite===site);
-    if(managed) {
-      if(canonicalPage(managed.url)!==canonicalPage(requested))
+      saved.comicBridgeManagedSite===site && !tab.pinned);
+    // Consume the launcher-created tab instead of opening a second tab/window.
+    // Never use an ordinary about:blank or a manually opened reader.
+    const wake=(tabs||[]).filter(t=>isArchiverWakeTab(t) &&
+      (!nonce || t.url==='about:blank#comicarchiver-'+nonce)).sort((a,b)=>Number(!!b.active)-Number(!!a.active))[0];
+    const previousSession=!!nonce && nonce!==saved.comicBridgeManagedNonce;
+    if(managed && !previousSession && !wake) {
+      if(canonicalPage(managed.url)!==canonicalPage(requested)) {
+        await cleanupArchiverTabs(managed.id,managed.url);
         return tabsUpdate(managed.id,{url:requested,active:true});
+      }
       return managed;
     }
-    const owned=await call(chrome.tabs,'create',{url:requested,active:true});
-    await storageSet({comicBridgeManagedTabId:owned.id,comicBridgeManagedSite:site});
+    // Create the destination BEFORE closing the former tab so that we never
+    // close the only Chrome window and lose the extension during a restart.
+    const owned=wake ? await tabsUpdate(wake.id,{url:requested,active:true}) :
+      await call(chrome.tabs,'create',{url:requested,active:true});
+    if(managed && managed.id!==owned.id) {
+      try {await releaseOwnedReader({tabId:managed.id,managedSite:site,managedNonce:saved.comicBridgeManagedNonce||''},false);}
+      catch(e) {console.warn('COMIC_BRIDGE_STALE_READER_RELEASE:',String(e));}
+    }
+    await storageSet({comicBridgeManagedTabId:owned.id,comicBridgeManagedSite:site,comicBridgeManagedNonce:nonce});
+    if(wake) console.info('COMIC_BRIDGE_WAKE_TAB_REUSED tab_id='+owned.id);
     return owned;
   }
   // No startup URL: retain the original manual-only fallback for legacy
@@ -1249,7 +1585,8 @@ async function autoConnect() {
     if(config.startup_nonce) {
       if(!/^[a-f0-9]{32}$/i.test(config.startup_nonce))
         throw Error('Invalid local startup refresh nonce');
-      const previous=await storageGet(['comicBridgeRefreshedStartupNonce']);
+      const previous=await storageGet(['comicBridgeRefreshedStartupNonce','comicBridgeRetiredStartupNonce']);
+      if(previous.comicBridgeRetiredStartupNonce===config.startup_nonce) return;
       if(previous.comicBridgeRefreshedStartupNonce!==config.startup_nonce) {
         if(typeof chrome.runtime.reload!=='function')
           throw Error('This browser does not support updating the unpacked extension automatically');
@@ -1259,9 +1596,10 @@ async function autoConnect() {
         return;
       }
     }
-    const tab=await pickComicTab(config.site,config.startup_url);
+    const tab=await pickComicTab(config.site,config.startup_url,config.startup_nonce||'');
     if(!tab) { lastError='No authorized comic tab or startup URL available';return;}
-    state={tabId:tab.id,port:config.port,token:config.token};
+    state={tabId:tab.id,port:config.port,token:config.token,
+      managedSite:config.startup_url?config.site:null,managedNonce:config.startup_nonce||''};
     try {
       // No debugger requirement: pixel capture is available in normal Chrome.
       // tabs.update may return the OLD document before the resume URL commits.
@@ -1270,6 +1608,7 @@ async function autoConnect() {
       const expectedResumeUrl=trustedStartupUrl(config.site,config.startup_url);
       await waitContent(20000,expectedResumeUrl || tab.url);
       const readyTab=await tabInfo();
+      await cleanupArchiverTabs(readyTab.id,readyTab.url);
       if(expectedResumeUrl && canonicalPage(readyTab.url)!==canonicalPage(expectedResumeUrl))
         throw Error('BROWSER_RESUME_TARGET_NOT_READY: managed tab is not at the requested unfinished chapter');
       await api('/hello',{url:readyTab.url,
@@ -1279,7 +1618,10 @@ async function autoConnect() {
       await storageSet({lastPort:port,selectedTabId:tab.id}).catch(()=>{});
       lastError='';
       workLoop();
-    } catch(error) {state=null;throw error;}
+    } catch(error) {
+      try {await releaseOwnedReader(state,false);} catch(e) {console.warn('COMIC_BRIDGE_PAIR_RELEASE:',String(e));}
+      state=null;throw error;
+    }
   } catch(error) {
     lastError=String(error);
   } finally {autoConnecting=false;}
@@ -1297,7 +1639,18 @@ chrome.runtime.onInstalled?.addListener(()=>autoConnect());
 chrome.tabs.onActivated?.addListener(()=>autoConnect());
 chrome.tabs.onCreated?.addListener(()=>autoConnect());
 chrome.tabs.onUpdated?.addListener((_tabId,changeInfo)=>{
-  if(changeInfo?.url || changeInfo?.status==='complete') autoConnect();
+  if(changeInfo?.url || changeInfo?.status==='complete') {
+    autoConnect();
+    // A wake tab can arrive AFTER an already-running extension paired. Close
+    // only the uniquely tagged auxiliary, even if it appeared in a new window.
+    const session=state;
+    if(session?.managedSite && polling && !autoConnecting && _tabId!==session.tabId) {
+      (async()=>{const tab=await tabsGet(_tabId);
+        if(state===session && isArchiverWakeTab(tab) &&
+          tab.url==='about:blank#comicarchiver-'+session.managedNonce) await checkedIO(call(chrome.tabs,'remove',_tabId),'close late wake tab',5000);
+      })().catch(()=>{});
+    }
+  }
 });
 setTimeout(()=>autoConnect(),200);
 // The Python RPC may run for an arbitrarily long healthy image/chapter job.
@@ -1337,11 +1690,15 @@ async function workLoop() {
       } catch(e) {response={id:command.id,ok:false,error:String(e)};}
       finally {if(command.action==='navigate')dialogNavigationInFlight=false;}
       await checkedIO(api('/result',response), 'deliver local Python result');
+      if(command.action==='release_managed_reader') break;
     }
   } catch(e) {
     lastError=String(e);
     if (state) console.warn('Comic Bridge:',lastError);
   } finally {
+    // Keep polling locked until old session cleanup finishes. On a hard Python
+    // exit there is no cleanup RPC, so the extension owns this fallback.
+    try {await releaseOwnedReader(state,false);} catch(e) {console.warn('COMIC_BRIDGE_DISCONNECT_RELEASE:',String(e));}
     polling=false;
     // Python may restart with a new per-run token. Never retry the stale one.
     state=null;

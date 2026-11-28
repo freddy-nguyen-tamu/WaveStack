@@ -95,7 +95,7 @@ class Tests(unittest.TestCase):
             saved=kwargs['on_progress'](info,['1','2','3'],seen,True)
             if len(saved)!=3:raise RuntimeError('interrupted before third image')
             return [(str(i),seen[str(i)]) for i in range(1,4)]
-        with patch.object(engine,'scan_browser_images',side_effect=scan),patch.object(engine,'image_download',side_effect=fetch), patch.object(engine.ADAPTER,'after_chapter_visit',None,create=True):
+        with patch.object(engine,'scan_browser_images',side_effect=scan),patch.object(engine,'image_download',side_effect=fetch), patch.object(engine.ADAPTER,'after_chapter_visit',None,create=True), patch.object(engine.ADAPTER,'CHAPTER_DOWNLOAD_JS',None,create=True):
             with self.assertRaisesRegex(RuntimeError,'interrupted'):
                 engine.acquire_chapter(ctx,chapter,self.folder)
             self.assertEqual(attempts,[1,2,3])

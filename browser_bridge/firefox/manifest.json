@@ -13,9 +13,8 @@
     "storage",
     "webRequest",
     "http://127.0.0.1:18765/*",
-    "https://mangadex.org/*",
-    "https://api.mangadex.org/*",
-    "https://uploads.mangadex.org/*"
+    "https://toonily.com/*",
+    "https://data.tnlycdn.com/*"
   ],
   "background": {
     "scripts": [
@@ -29,7 +28,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://mangadex.org/chapter/*"
+        "https://toonily.com/serie/breakaway-joys-of-travel-f99c6f14/*"
       ],
       "js": [
         "content.js"

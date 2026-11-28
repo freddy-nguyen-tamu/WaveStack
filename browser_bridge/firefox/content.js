@@ -6,6 +6,7 @@
       window.__comicBridgeScrollRevision === 1 &&
       window.__comicBridgeNestedScrollRevision === 1 &&
       window.__comicBridgeScopedRenderedRevision === 1 &&
+      window.__comicBridgeRecoveryReceiptRevision === 1 &&
       typeof window.__comicBridgeDirect === 'function') return;
   window.__comicBridgeContentLoadedVersion = 10;
   window.__comicBridgeContentLoaded = true;
@@ -14,6 +15,7 @@
   window.__comicBridgeScrollRevision = 1;
   window.__comicBridgeNestedScrollRevision = 1;
   window.__comicBridgeScopedRenderedRevision = 1;
+  window.__comicBridgeRecoveryReceiptRevision = 1;
   const scrollLedger = window.__comicBridgeScrollLedger || Object.create(null);
   window.__comicBridgeScrollLedger = scrollLedger;
   const scrollHistory = window.__comicBridgeScrollOrder || [];
@@ -144,7 +146,34 @@
   // Revisit one known missing image in the ORIGINAL reader, rather than
   // repeatedly waiting at the bottom and then abandoning the chapter.
   // Generic selectors and attributes are passed from site_specific/site_adapter.py.
+  // A lazy slot with a declared URL but no src can starve the page's timers.
+  // The receipt separates an absolute positioning operation from decoding.
+  // Keep the old animated/awaited recovery for every other image and caller.
+  const recoveryReceipts = window.__comicBridgeRecoveryReceipts || new Map();
+  window.__comicBridgeRecoveryReceipts = recoveryReceipts;
+  function recoveryStatus(p) {
+    const id=String(p.recovery_id||'');
+    const r=recoveryReceipts.get(id);
+    if(!r || r.chapter!==location.href || r.key!==String(p.key) || r.requested!==String(p.url||'').trim())
+      return {error:'RECOVERY_RECEIPT_UNKNOWN: current document has no matching recovery receipt'};
+    const nodes=[...r.root.querySelectorAll('img')].filter(im=>!im.closest('script,noscript'));
+    const matches=nodes.filter((im,i)=>String(im.closest('[data-page]')?.getAttribute('data-page')||
+      im.getAttribute('data-index')||i+1)===r.key);
+    if(matches.length!==1 || matches[0]!==r.im || !r.im.isConnected)
+      return {error:'RECOVERY_DOCUMENT_CHANGED: target ordinal no longer identifies the original DOM image'};
+    const im=r.im;
+    const loaded=!!(im.complete && im.naturalWidth>0 && im.naturalHeight>0 && abs(im.currentSrc||im.src)===r.desired);
+    const declared=[im.currentSrc,im.getAttribute('src'),...r.attrs.map(a=>im.getAttribute(a))]
+      .filter(Boolean).map(abs);
+    if(!declared.includes(r.desired)) return {error:'RECOVERY_DOCUMENT_CHANGED: original image URL no longer declared'};
+    return {recovery_id:id,key:r.key,chapter_url:r.chapter,requested:r.requested,
+      status:loaded?'decoded':'pending',loaded,width:im.naturalWidth||0,height:im.naturalHeight||0,
+      reason:loaded?'requested image decoded after short-ack targeted scroll':'awaiting native lazy image decode'};
+  }
   async function recoverImage(p) {
+    // A repeated command from the existing-listener fallback must not repeat
+    // an already-issued absolute positioning or source refresh.
+    if(p.recovery_id && recoveryReceipts.has(String(p.recovery_id))) return recoveryStatus(p);
     const selectors=Array.isArray(p.reader_selectors) ? p.reader_selectors : [];
     const root=selectors.map(x=>{try{return document.querySelector(x);}catch{return null;}})
       .find(x=>x && x.querySelector('img,[data-page]')) ||
@@ -199,6 +228,27 @@
     const isReady=()=>im.isConnected && im.complete && im.naturalWidth>0 &&
       im.naturalHeight>0 && (!desired || absolute(im.currentSrc || im.src)===desired);
     if(isReady() && !p.force_position) return {loaded:true,key,width:im.naturalWidth,height:im.naturalHeight,alreadyReady:true};
+    if (p.recovery_id && /^[a-zA-Z0-9_-]{1,80}$/.test(p.recovery_id) &&
+        !isReady() && !String(im.getAttribute('src')||'').trim() &&
+        !String(im.currentSrc||'').trim() && desired.startsWith('https:') &&
+        attrs.some(a=>a!=='src' && absolute(im.getAttribute(a))===desired)) {
+      // Store the exact original node and ordinal before any mutation. No
+      // requestAnimationFrame, content timer, or async image wait in this path.
+      if(p.recovery_chapter && absolute(location.href)!==p.recovery_chapter)
+        return {error:'RECOVERY_DOCUMENT_CHANGED: requested chapter is no longer current'};
+      const id=String(p.recovery_id);
+      const receipt={chapter:location.href,key,requested:wanted,desired,im,root,attrs};
+      recoveryReceipts.set(id,receipt);
+      if(recoveryReceipts.size>128) recoveryReceipts.delete(recoveryReceipts.keys().next().value);
+      im.loading='eager';
+      if(p.refresh_source && !isReady()) im.src=desired;
+      readerRoot=root;
+      const rect=im.getBoundingClientRect(),surface=scrollSurface(im);
+      const bounds=surface ? scrollBounds(surface) : {top:0};
+      setPosition(surface,Math.max(0,position(surface)+rect.top-bounds.top+
+        (rect.height-(surface ? surface.clientHeight : window.innerHeight))/2));
+      return recoveryStatus(p);
+    }
     // Keep the viewport on the missing image. Restoring the previous offset
     // (often the bottom) after EVERY attempt caused an endless up/down
     // teleport and prevented lazy IntersectionObservers from settling.
@@ -383,6 +433,7 @@
     if (message?.type === 'CLASSIFY') return classify();
     if (message?.type === 'SNAPSHOT') return snapshot(message.payload || {});
     if (message?.type === 'IMAGE_STATUS') return imageStatus(message.payload?.url,message.payload?.rendered_reader_selector);
+    if (message?.type === 'RECOVER_IMAGE_STATUS') return recoveryStatus(message.payload || {});
     if (message?.type === 'RECOVER_IMAGE') return recoverImage(message.payload || {});
     if (message?.type === 'REOBSERVE_LOADED_IMAGE') return reobserveLoadedImage(message.payload?.url);
     if (message?.type === 'SCROLL_POSITION') return {scrollY:position(scrollSurface())};
