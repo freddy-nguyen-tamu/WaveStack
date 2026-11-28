@@ -482,6 +482,8 @@ def _reader_hash(root):
         if file.is_file(): files[relative]=sha(file.read_bytes())
     from .manual_import import hash_inputs
     files.update(hash_inputs(root))
+    from .open_reader_arcade import hash_inputs as arcade_hash_inputs
+    files.update(arcade_hash_inputs(root, sha))
     return sha(canonical(files))
 
 
@@ -1120,6 +1122,8 @@ def stage_worker_assets(root, registry, stage, *, partial_records=None):
     journey = stage_journey(stage)
     print(f'open-reader: Your Journey tracking on {journey["tracked_html_routes"]} HTML routes', flush=True)
     manual_import.stage_assets(root, stage)
+    from .open_reader_arcade import stage_assets as stage_arcade
+    stage_arcade(root, stage)
     return payload
 
 
@@ -1160,6 +1164,10 @@ def _worker_config(stage, config_dir, root=None):
         cfg['triggers']={'crons':['0 4 * * *']}
     else:
         print('WARNING: Your Journey D1 database not configured. Visit events cannot be recorded until configured.',flush=True)
+    # Arcade D1 binding is independent of Your Journey and comic uploads.
+    if (root / 'reusable' / 'arcade' / 'games.json').is_file():
+        from .open_reader_arcade import bind_database as arcade_bind_database
+        arcade_bind_database(root, cfg)
     path = Path(config_dir) / 'wrangler.json'
     path.write_bytes(canonical(cfg))
     return path

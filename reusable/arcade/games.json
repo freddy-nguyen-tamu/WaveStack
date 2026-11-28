@@ -1,0 +1,268 @@
+{
+  "games": [
+    {
+      "id": "bloody-roar-2",
+      "title": "Bloody Roar II \u2014 PlayStation (Europe)",
+      "engine": "psx",
+      "ready": true,
+      "disc": {
+        "name": "bloody-roar-2-europe.chd",
+        "sha": "3aac7fd2a0241fd6927ce689d22db424807a3168ec7299fd0448a4def14ffbaa",
+        "size": 323673289,
+        "parts": [
+          "disc-0000.part",
+          "disc-0001.part",
+          "disc-0002.part",
+          "disc-0003.part",
+          "disc-0004.part",
+          "disc-0005.part",
+          "disc-0006.part",
+          "disc-0007.part",
+          "disc-0008.part",
+          "disc-0009.part",
+          "disc-0010.part",
+          "disc-0011.part",
+          "disc-0012.part",
+          "disc-0013.part",
+          "disc-0014.part",
+          "disc-0015.part",
+          "disc-0016.part",
+          "disc-0017.part",
+          "disc-0018.part",
+          "disc-0019.part",
+          "disc-0020.part",
+          "disc-0021.part",
+          "disc-0022.part",
+          "disc-0023.part",
+          "disc-0024.part",
+          "disc-0025.part",
+          "disc-0026.part",
+          "disc-0027.part",
+          "disc-0028.part",
+          "disc-0029.part",
+          "disc-0030.part",
+          "disc-0031.part",
+          "disc-0032.part",
+          "disc-0033.part",
+          "disc-0034.part",
+          "disc-0035.part",
+          "disc-0036.part",
+          "disc-0037.part",
+          "disc-0038.part"
+        ]
+      },
+      "files": [
+        {
+          "name": "disc-0000.part",
+          "sha": "93100e8afe2d2a7fd8e4dbe3fe84f22337c8b40ddf14e1a5276d4daec78a0442",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0001.part",
+          "sha": "42b14dac5d765fae3a9da3416381d82b40018be19b788875af9b879d3d92bceb",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0002.part",
+          "sha": "7916e3ee63cacb3cf801f7a8313376e0d9e200ced907211bdbeed46e156639eb",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0003.part",
+          "sha": "7e288900e221f6e463124d76c1614ee7156268221ec7a474ef8d0dc9f87509b2",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0004.part",
+          "sha": "47d6ad9581a944c946e17b0bf64727e0358d8844215a5719b03a45503196722b",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0005.part",
+          "sha": "33531cdd24e826ee33da8872364edb1bb1d2f161f39509cf7d9d4b0c0cc51084",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0006.part",
+          "sha": "ce6a8bc0a11f85186461c6320a812c941315bad2af9e46406de67e17cf12d404",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0007.part",
+          "sha": "02d84ee883e3a0290c61093c6997990c8748745104714a3edaff3e9a20826c97",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0008.part",
+          "sha": "9e9046a79ea0b359021bcb8925d12662044b50481d801180ff4868a7affaae32",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0009.part",
+          "sha": "764e708d5c0485fb0c97558de4a6bf62c7607816dc8dcbac3b384163f8d84464",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0010.part",
+          "sha": "d38af4bdbe1a1707d0ea272718dd3b64cbf4cfd793db13f6258e5f256807f099",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0011.part",
+          "sha": "e6f94fcc9a646fbcc4339c26a4aabdf9c8c8d26bcad45256ad07eee0347bd854",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0012.part",
+          "sha": "a4f23701e71c648269f6f3425bdedbe2b2b983359c116e2c97e4277f33fa7ca8",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0013.part",
+          "sha": "73ad182a01e7d8718b7697c83c21308bc61dc98b69333abe06a3a528210d1130",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0014.part",
+          "sha": "40d329d2dadc42d7f236529b9d136cc287fec8d726f423db1ece173b80c06b1a",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0015.part",
+          "sha": "532a2e0e292f28342340b178f35bcee416cefc9e21505e3725b5142623c960d9",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0016.part",
+          "sha": "108656328a36fa541bd5fc3b50b10f505f91effb7a9419329f66d292387dffea",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0017.part",
+          "sha": "2828ef256809d473d48c13316ef33ccf0e8ed459f7f932654f2457ce4f4fcdd7",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0018.part",
+          "sha": "915e33c33727537ef2c4ae655bd3dac068d837de1d6c8008d6df9a136d8b33c7",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0019.part",
+          "sha": "e4c6b43c614f7daa9d98f54b5b1e66ca1f7cb9896ef2833bd828ecf12f93af0f",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0020.part",
+          "sha": "5f4fbd24884a9d7b960da25ed29dc4f6c6c9f129c2cee9e06d151cde66c8f872",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0021.part",
+          "sha": "ee9e0de05a41fed53094977f524a7d19147b8b110e45a37e33b6287c16b29338",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0022.part",
+          "sha": "c8f598ca8b89aff08bbdb78598987f86e3193178377fac1d826aa5014306970d",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0023.part",
+          "sha": "8a820d44603d39195ad230e72f39cbafe6ad6c4d1c8394091ee642359c32dc45",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0024.part",
+          "sha": "93db2c5f2f691445eb9c9cd0e15967398a9f2203b6a23ffcb64b1fba79037905",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0025.part",
+          "sha": "2fd8a5b70709498860bb68375c367e451e0a7ac031a67d29642fefa79c18b44e",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0026.part",
+          "sha": "5e5dd7081c1fc9174fbced910bcc0df8f4959367768df5418c48e36fe9740337",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0027.part",
+          "sha": "73ff79b0e810b4c0459dd26c960c33f8dce4cc6c42a8ebc21a5881af25bb8157",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0028.part",
+          "sha": "ab5d13671224491cc187e8f1e6e9759399ce762522b5f55e82f96305b102d660",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0029.part",
+          "sha": "881d1e292e3ff3ebe63162e1ecf81937c75faf941fd69ec20e844bb5a471d219",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0030.part",
+          "sha": "cd6c2fe6a0efc0ddd59c91d93dc80523783421075da35816c06b2c176b3c2446",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0031.part",
+          "sha": "0d663f2c0ed2d368d03a5d271fc74979828a5bbc8c6878a2efd1f4612b859965",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0032.part",
+          "sha": "88c74af152a8e9b46e92b9fb8b97cf63160605a7dded3e21c335ce0b6b75bcf5",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0033.part",
+          "sha": "8d099e0771c3ace70c03d5a2de7ea3f53498993fa9d837d8a5a02b6f696270a2",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0034.part",
+          "sha": "28fe5eb4bd2bb6b7027f5f0f98183cbde57c11b1da3db1e3f9668aeaf25742c4",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0035.part",
+          "sha": "d8c02937914ff5a39234d3c1d0e7d5ebb064758bc8fe8ecc2a7d3ad08279e594",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0036.part",
+          "sha": "157e4b285900223da2dac8b8f7a3985bc3c5a8e5bf984035863d0750a00a0b2b",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0037.part",
+          "sha": "81055aab0a3266e6e35452426fcca5c16df203df92a5314a04c5cb0b8ce76d7d",
+          "size": 8388608
+        },
+        {
+          "name": "disc-0038.part",
+          "sha": "5df3be9ca04e2398ba3d5a0b2cd7e41409c5cb7499729396109eb37e9fa87a6e",
+          "size": 4906185
+        }
+      ],
+      "version": "2f3f6fa0d572b316c6e53c780948e7e64184d608613f4c8c5e78522ac255ba80"
+    },
+    {
+      "id": "chaos-faction-2",
+      "title": "Chaos Faction 2",
+      "engine": "ruffle",
+      "ready": true,
+      "version": "84b6a1cdd9e708ed1b949316ae15efc08346e650fae4031dbb5235747c3e9503",
+      "files": [
+        {
+          "name": "chaos-faction-2-5645.swf",
+          "sha": "b964fbe7a3b60f0bf00ff78d1a2fe16c2ea47ecc61bd0ea07b46c5236294e6a3",
+          "size": 12336544
+        }
+      ]
+    }
+  ]
+}

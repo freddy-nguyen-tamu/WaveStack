@@ -1,4 +1,5 @@
 import { manualRoute } from './manual_import_worker.mjs';
+import { arcadeRoute } from './arcade_worker.mjs';
 import { journeyRoute, journeyConfigured, archiveJourneyEvents } from './journey_worker.mjs';
 /* Cloudflare Worker entrypoint for the EXISTING shared-reader assets.
  * Required bindings: env.ASSETS (Workers static assets), env.PANEL_REPLACEMENTS
@@ -632,11 +633,14 @@ export default {
       if(!sameOriginPost(req))return error('Same-origin required',403);
       const response=json({ok:true},200,{'Set-Cookie':logoutCookie});
       response.headers.append('Set-Cookie','reader_admin=; Path=/api/; HttpOnly; Secure; SameSite=Strict; Max-Age=0');
+      response.headers.append('Set-Cookie','or_arcade=; Path=/api/arcade/; HttpOnly; Secure; SameSite=Strict; Max-Age=0');
       return response;
     }
     // All public routes, including static assets and image streams, require the
     // same site session. Credentials never enter any public file or JS bundle.
     if(!await validSession(req,env))return unauthenticated(req);
+    const arcade=await arcadeRoute(req,env,{githubFile});
+    if(arcade)return arcade.headers.has('Set-Cookie')?arcade:renewIfNeeded(req,env,arcade);
     const manual=await manualRoute(req,env,{gh,githubFile,shaHex,boundedBody,githubConfigured,browserImportToken,importVolumeInventory,ctx});
     if(manual)return renewIfNeeded(req,env,manual);
     const journey = await journeyRoute(req,env,(r,e)=>validSession(r,e),journeyArchiveRemote);
