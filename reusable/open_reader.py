@@ -1,3 +1,4 @@
+
 """Account-wide, append-only library of archived comics on ONE Cloudflare Worker.
 
 No selector, site URL, chapter-title parser, or per-website hook lives here.
@@ -26,6 +27,10 @@ from . import open_reader_verify_auth
 WORKER_NAME = 'open-reader'
 REGISTRY_DESCRIPTION = 'Universal Comic Archiver shared open-reader registry (metadata only)'
 SCHEMA = 2
+# Workers Static Assets has a per-file limit, not a whole-library size limit.
+WORKER_ASSET_MAX_BYTES = 25 * 1024 * 1024
+REGISTRY_PART_BYTES = 8 * 1024 * 1024
+REGISTRY_INDEX = 'registry-parts/index.json'
 SLUG_RE = re.compile(r'^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$')
 VOLUME_RE = re.compile(r'^([a-z0-9-]+)-vol-(\d{3})$')
 READER_RE = re.compile(r'^([a-z0-9-]+)-reader$')
@@ -255,6 +260,8 @@ def _public_json(url, *, timeout=25):
     if (p.scheme != 'https' or not p.hostname or
             not (p.hostname.endswith('.pages.dev') or p.hostname.endswith('.workers.dev'))):
         raise ValueError('Only trusted Cloudflare project URLs can be queried')
+    if p.path == '/registry.json':
+        timeout = max(timeout, 120)  # The logical library grows independently of static asset limits.
     resp = open_reader_verify_auth.get(url, timeout=timeout, headers={'Cache-Control': 'no-cache'})
     if resp.status_code != 200:
         raise RuntimeError(f'Cloudflare manifest HTTP {resp.status_code} for {url}')
@@ -791,12 +798,71 @@ document.querySelector('#search').addEventListener('input',render);fetch('/libra
 </script></body></html>'''
 
 
+def _stage_registry(stage, payload):
+    """Keep the public registry JSON schema and exact bytes; shard only storage.
+
+    The Worker serves /registry.json by streaming the pieces in sequence, after
+    its normal site authentication. No comic data or checksum is discarded.
+    Local and private GitHub registries retain their existing representation.
+    """
+    stage = Path(stage)
+    data = canonical(payload)
+    direct = stage / 'registry.json'
+    parts_dir = stage / 'registry-parts'
+    if parts_dir.exists():
+        shutil.rmtree(parts_dir)
+    if len(data) <= WORKER_ASSET_MAX_BYTES:
+        direct.write_bytes(data)
+        return
+    direct.unlink(missing_ok=True)
+    parts_dir.mkdir(parents=True)
+    parts = []
+    for i, start in enumerate(range(0, len(data), REGISTRY_PART_BYTES)):
+        raw = data[start:start + REGISTRY_PART_BYTES]
+        name = f'part-{i:06d}.bin'
+        (parts_dir / name).write_bytes(raw)
+        parts.append({'name': name, 'bytes': len(raw), 'sha256': sha(raw)})
+    index = {'schema': 'open-reader-registry-parts-v1', 'bytes': len(data),
+             'sha256': sha(data), 'parts': parts}
+    (stage / REGISTRY_INDEX).write_bytes(canonical(index))
+    print(f'open-reader: registry {len(data)/1048576:.1f} MiB split into {len(parts)} '
+          f'assets (max {REGISTRY_PART_BYTES/1048576:g} MiB each); /registry.json preserved.', flush=True)
+
+
+def _verification_assets(stage):
+    """Include the logical route even when its bytes are stored in pieces.
+
+    A byte-for-byte verification of the assembled registry covers every part;
+    do not download those same bytes again solely to verify individual shards.
+    """
+    index_path = stage / REGISTRY_INDEX
+    if index_path.is_file():
+        index = json.loads(index_path.read_text(encoding='utf-8'))
+        yield 'registry.json', index['sha256']
+    for source in sorted(p for p in stage.rglob('*') if p.is_file()):
+        relative = source.relative_to(stage).as_posix()
+        if index_path.is_file() and relative.startswith('registry-parts/') and relative != REGISTRY_INDEX:
+            continue
+        yield relative, sha(source.read_bytes())
+
+
+def _validate_worker_asset_sizes(stage):
+    files = [p for p in Path(stage).rglob('*') if p.is_file()]
+    oversized = [(p.relative_to(stage).as_posix(), p.stat().st_size) for p in files
+                 if p.stat().st_size > WORKER_ASSET_MAX_BYTES]
+    if oversized:
+        raise RuntimeError('Cloudflare static asset size preflight failed: ' + '; '.join(
+            f'{name} ({size/1048576:.2f} MiB)' for name, size in oversized))
+    print(f'open-reader: static asset size preflight passed ({len(files)} files; '
+          f'max allowed {WORKER_ASSET_MAX_BYTES/1048576:g} MiB per file).', flush=True)
+
+
 def stage_worker_assets(root, registry, stage, *, partial_records=None):
     stage = Path(stage)
     stage.mkdir(parents=True, exist_ok=True)
     payload = _registry_payload(registry, _reader_hash(root))
     (stage / 'index.html').write_bytes(_index_html().encode('utf-8'))
-    (stage / 'registry.json').write_bytes(canonical(payload))
+    _stage_registry(stage, payload)
     summary = {'comics': [{'slug': slug, 'title': comic['title'],
                            'chapters': len(comic['chapters']),
                            'route': f'/comics/{slug}/overview/'}
@@ -1202,6 +1268,7 @@ def _assert_no_unowned_existing_worker(engine, registry):
 
 
 def _deploy(engine, stage, registry):
+    _validate_worker_asset_sizes(stage)
     with tempfile.TemporaryDirectory(prefix='open-reader-config-') as tmp:
         cfg = _worker_config(stage, tmp, root=engine.ROOT)
         p = engine.npx_wrangler(['deploy', '--config', str(cfg)], cwd=Path(tmp),
@@ -1364,9 +1431,8 @@ def _verify_published(worker_url, staged, registry, *, verify_slugs=None,
                         image[missing_flag] = previous[missing_flag]
         return canonical(normalized) == canonical(expected)
 
-    for source in sorted(p for p in stage.rglob('*') if p.is_file()):
-        relative = source.relative_to(stage).as_posix()
-        if verify_paths is not None and relative not in verify_paths:
+    for relative, expected_hash in _verification_assets(stage):
+        if verify_paths is not None and relative not in verify_paths and relative != 'registry.json':
             continue
         # For a focused update, verify only the chosen comic and common routes.
         # Skipped files remain in the complete deployment asset manifest.
@@ -1375,7 +1441,6 @@ def _verify_published(worker_url, staged, registry, *, verify_slugs=None,
             if len(parts) < 3 or parts[1] not in verify_slugs:
                 continue
         public_path = relative[:-len('index.html')] if relative.endswith('index.html') else relative
-        expected_hash = sha(source.read_bytes())
         url = worker_url.rstrip('/') + '/' + public_path
         problem = 'no response'
         stale_observations = 0
@@ -1387,7 +1452,8 @@ def _verify_published(worker_url, staged, registry, *, verify_slugs=None,
         static = not (is_feed or is_manifest)
         for attempt in range(5):
             try:
-                response = open_reader_verify_auth.get(url, headers={'Cache-Control': 'no-cache'}, timeout=40)
+                response = open_reader_verify_auth.get(url, headers={'Cache-Control': 'no-cache'},
+                                                       timeout=120 if relative == 'registry.json' else 40)
 
                 # Cloudflare canonicalizes standalone HTML assets.
                 # Follow only the exact same-origin extensionless URL.
@@ -1909,3 +1975,4 @@ def publish(engine, db, *, dry_run=False):
         print(f'OPEN-READER URL: {url}', flush=True)
         print(f'COMPLETED: {len(registry["comics"])} comics are verified in one Worker.', flush=True)
         return url
+

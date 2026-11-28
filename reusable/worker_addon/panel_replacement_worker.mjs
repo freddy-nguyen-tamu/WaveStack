@@ -1,3 +1,4 @@
+
 import { manualRoute } from './manual_import_worker.mjs';
 import { arcadeRoute } from './arcade_worker.mjs';
 import { journeyRoute, journeyConfigured, archiveJourneyEvents } from './journey_worker.mjs';
@@ -619,6 +620,61 @@ async function overlayGithubManifest(req,env){
   return changed?json(manifest,200,{'Cache-Control':'no-store'}):original;
 }
 
+// Large registries are split into static assets below the provider's per-file
+// cap. Stream their exact canonical JSON bytes; do not parse or buffer the full
+// library in Worker memory. This route is called only AFTER site authentication.
+async function registryResponse(req,env){
+  const asset=path=>env.ASSETS.fetch(new Request(new URL(path,req.url)));
+  const index=await asset('/registry-parts/index.json');
+  if(index.status===404)return env.ASSETS.fetch(req); // older/small deployments
+  if(!index.ok)return error('Registry index unavailable',503);
+  let manifest;
+  try{manifest=await index.json();}catch{return error('Registry index invalid',503);}
+  const parts=manifest?.parts;
+  if(manifest?.schema!=='open-reader-registry-parts-v1'||!Array.isArray(parts)||!parts.length||
+     !Number.isSafeInteger(manifest.bytes)||manifest.bytes<=0||
+     !/^[a-f0-9]{64}$/.test(manifest.sha256||'')||
+     !parts.every((part,i)=>part?.name===`part-${String(i).padStart(6,'0')}.bin`&&
+       Number.isSafeInteger(part.bytes)&&part.bytes>0&&part.bytes<=8*1024*1024&&
+       /^[a-f0-9]{64}$/.test(part.sha256||''))||
+     parts.reduce((n,p)=>n+p.bytes,0)!==manifest.bytes)
+    return error('Registry index invalid',503);
+  const headers={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store',
+                 'X-Content-Type-Options':'nosniff'};
+  if(req.method==='HEAD')return new Response(null,{headers});
+  let i=0,reader=null,count=0,cancelled=false;
+  const stream=new ReadableStream({
+    async pull(controller){
+      try{
+        while(!cancelled){
+          if(!reader){
+            if(i===parts.length){controller.close();return;}
+            const response=await asset('/registry-parts/'+parts[i].name);
+            if(cancelled){await response.body?.cancel();return;}
+            if(response.status!==200||!response.body)throw Error('Registry part unavailable');
+            reader=response.body.getReader();count=0;
+          }
+          const {done,value}=await reader.read();
+          if(cancelled)return;
+          if(done){
+            reader.releaseLock();reader=null;
+            if(count!==parts[i].bytes)throw Error('Registry part length mismatch');
+            i++;continue;
+          }
+          count+=value.byteLength;
+          if(count>parts[i].bytes)throw Error('Registry part length mismatch');
+          controller.enqueue(value);return;
+        }
+      }catch(e){
+        if(reader){try{await reader.cancel();}catch{}reader=null;}
+        if(!cancelled)controller.error(e);
+      }
+    },
+    async cancel(reason){cancelled=true;if(reader){try{await reader.cancel(reason);}catch{}reader=null;}}
+  });
+  return new Response(stream,{headers});
+}
+
 export default {
   async fetch(req,env,ctx) {
     if(!env.ASSETS)return error('Static assets binding missing',503);
@@ -639,6 +695,7 @@ export default {
     // All public routes, including static assets and image streams, require the
     // same site session. Credentials never enter any public file or JS bundle.
     if(!await validSession(req,env))return unauthenticated(req);
+    if(path==='/registry.json' && (req.method==='GET'||req.method==='HEAD'))return registryResponse(req,env);
     const arcade=await arcadeRoute(req,env,{githubFile});
     if(arcade)return arcade.headers.has('Set-Cookie')?arcade:renewIfNeeded(req,env,arcade);
     const manual=await manualRoute(req,env,{gh,githubFile,shaHex,boundedBody,githubConfigured,browserImportToken,importVolumeInventory,ctx});
@@ -671,3 +728,4 @@ export default {
   },
   async scheduled(event,env,_ctx){try{const out=await archiveJourneyEvents(env,journeyArchiveRemote,event?.scheduledTime??Date.now());console.log("JOURNEY_ARCHIVE",out.archived,out.reason);}catch(e){const detail=String(e?.message||e);const safe=/^(?:Journey (?:history|archive)|GitHub App installation rejected credential:)/.test(detail)?detail.slice(0,180):"database or network error";console.error("JOURNEY_ARCHIVE_PAUSED",safe);throw Error("Journey archive paused; unverified events remain in D1");}}
 };
+

@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """Authorized comic archive -> isolated GitHub Git repositories -> Cloudflare Pages.
 
@@ -2336,6 +2337,13 @@ def cloudflare_account_env():
     return env
 
 
+def _background_console_options(*, windows=None):
+    """No new Windows console for captured, noninteractive provider commands."""
+    if windows is None:
+        windows = os.name == 'nt'
+    return {'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)} if windows else {}
+
+
 def _run_monitored_command_once(cmd, *, cwd, env, label, show_provider_lines=False, provider_name="Wrangler"):
     """Read both output streams while printing a heartbeat even if Wrangler is silent.
 
@@ -2344,7 +2352,8 @@ def _run_monitored_command_once(cmd, *, cwd, env, label, show_provider_lines=Fal
     Threaded readers avoid stderr/stdout pipe deadlocks and work on Windows.
     """
     p = subprocess.Popen(cmd, cwd=cwd, env=env,
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         **(_background_console_options() if provider_name == 'Wrangler' else {}))
     incoming = queue.Queue()
     captures = {'stdout': bytearray(), 'stderr': bytearray()}
     MAX_CAPTURE = 16 * 1024 * 1024
@@ -2459,7 +2468,8 @@ def npx_wrangler(args, cwd=ROOT, check=True, progress_label=None):
             # Short metadata queries retain the original capture path, including
             # backwards-compatible test hooks. They don't create upload stalls.
             raw = subprocess.run([str(local), *args], cwd=cwd, env=env,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False,
+                                 **({} if args[:1] == ['login'] else _background_console_options()))
             stdout = (raw.stdout or b'').decode('utf-8-sig', errors='replace')
             stderr = (raw.stderr or b'').decode('utf-8-sig', errors='replace')
             p = subprocess.CompletedProcess(raw.args, raw.returncode, stdout, stderr)
@@ -3992,3 +4002,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

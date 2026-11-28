@@ -408,6 +408,19 @@ def _run_preflight(*, run_tests=True) -> None:
             for asset in ('background.js', 'content.js', 'popup.html', 'popup.js'):
                 if (src / asset).read_bytes() != (installed / asset).read_bytes():
                     fail(f'{browser}/{asset} is stale or out of sync with reusable source')
+        # The registry writer, final deploy gate, verification inventory and
+        # Worker reader must ship together. Reject older overlays before remote work.
+        registry_writer = (ROOT / 'reusable' / 'open_reader.py').read_text(encoding='utf-8')
+        focused_writer = (ROOT / 'reusable' / 'open_reader_focused.py').read_text(encoding='utf-8')
+        registry_worker = (ROOT / 'reusable' / 'worker_addon' / 'panel_replacement_worker.mjs').read_text(encoding='utf-8')
+        for code, marker in ((registry_writer, '_stage_registry(stage, payload)'),
+                             (registry_writer, 'def _deploy(engine, stage, registry):\n    _validate_worker_asset_sizes(stage)'),
+                             (focused_writer, 'reader._verification_assets(stage)'),
+                             (registry_worker, 'open-reader-registry-parts-v1'),
+                             (registry_worker, 'return registryResponse(req,env)')):
+            if marker not in code:
+                fail('large registry deployment files are inconsistent; install the cumulative patch: ' + marker)
+        print('  PASS large registry deployment contract', flush=True)
         print('  PASS release contracts and generated extension parity', flush=True)
     except (OSError, ValueError, KeyError, SyntaxError) as exc:
         fail('missing, broken, or incompatible source file: ' + str(exc))
@@ -562,6 +575,23 @@ def _archive_retry_enabled(args, scope):
             and not flags.intersection(maintenance | {'--max-chapters', '--open-reader-url'}))
 
 
+def _close_empty_browser_windows_before_retry():
+    # Use the already-installed browser extension; do not launch a browser just
+    # to clean one up. This also works on deployment-only retries with no reader.
+    if os.name != 'nt':
+        return
+    try:
+        from reusable.browser_bridge import request_retry_window_cleanup
+        from site_specific import site_adapter
+        receipt = request_retry_window_cleanup(site_adapter.DEFAULT_START_URL)
+        if receipt is None:
+            print('BROWSER_EMPTY_WINDOW_CLEANUP_UNCONFIRMED: no extension receipt; retry continues.', flush=True)
+        else:
+            print('BROWSER_EMPTY_WINDOW_CLEANUP: ' + str(receipt), flush=True)
+    except Exception as exc:
+        print('BROWSER_EMPTY_WINDOW_CLEANUP_DEFERRED: ' + str(exc), flush=True)
+
+
 def _run_archive_retry_loop(args, *, call=None, sleep=None):
     call = subprocess.call if call is None else call
     sleep = time.sleep if sleep is None else sleep
@@ -604,6 +634,7 @@ def _run_archive_retry_loop(args, *, call=None, sleep=None):
         # Preserve explicit refresh requests; ordinary resume already uses the
         # cached catalog. Do not implicitly authorize any additional work.
         try:
+            _close_empty_browser_windows_before_retry()
             sleep(delay)
         except KeyboardInterrupt:
             print('ARCHIVE_RETRY_STOPPED: Ctrl+C; saved checkpoints retained.', flush=True)

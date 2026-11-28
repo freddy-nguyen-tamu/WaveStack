@@ -1,0 +1,27 @@
+import assert from 'node:assert/strict';
+import {createHash,webcrypto} from 'node:crypto';
+import worker from '../reusable/worker_addon/panel_replacement_worker.mjs';
+if(!globalThis.crypto)globalThis.crypto=webcrypto;
+const origin='https://open-reader.example.test';
+const files=new Map();
+const calls=[];
+const env={ASSETS:{fetch:async req=>{const path=new URL(req.url).pathname;calls.push(path);return files.has(path)?new Response(files.get(path)):new Response('not found',{status:404});}},READER_ADMIN_PASSWORD:'test-password-for-registry-123456',READER_SESSION_HMAC_KEY:'0123456789abcdef0123456789abcdef01234567'};
+const sha=b=>createHash('sha256').update(b).digest('hex');
+const req=(path,opts={})=>worker.fetch(new Request(origin+path,opts),env);
+const login=await req('/api/admin/login',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({password:env.READER_ADMIN_PASSWORD})});
+assert.equal(login.status,200);
+const headers={Cookie:login.headers.get('Set-Cookie').split(';')[0]};
+const raw=Buffer.from(JSON.stringify({comics:{old:{title:'漢字',data:'漢字'.repeat(5662310)},new:{chapter:131}}}));
+assert(raw.length>25*1024*1024);
+const parts=[];
+for(let i=0,at=0;at<raw.length;i++,at+=8*1024*1024){const name=`part-${String(i).padStart(6,'0')}.bin`,part=raw.subarray(at,at+8*1024*1024);files.set('/registry-parts/'+name,part);parts.push({name,bytes:part.length,sha256:sha(part)});}
+const index={schema:'open-reader-registry-parts-v1',bytes:raw.length,sha256:sha(raw),parts};
+files.set('/registry-parts/index.json',JSON.stringify(index));
+assert.equal((await req('/registry.json')).status,401);
+assert.equal((await req('/registry-parts/'+parts[0].name)).status,401);
+const response=await req('/registry.json',{headers});assert.equal(response.status,200);assert.equal(response.headers.get('Content-Type'),'application/json; charset=utf-8');assert.equal(sha(Buffer.from(await response.arrayBuffer())),sha(raw));
+const head=await req('/registry.json',{headers,method:'HEAD'});assert.equal(head.status,200);assert.equal(await head.text(),'');
+files.delete('/registry-parts/'+parts[1].name);const broken=await req('/registry.json',{headers});await assert.rejects(broken.arrayBuffer(),/Registry part unavailable/);
+files.set('/registry-parts/index.json',JSON.stringify({...index,bytes:1}));assert.equal((await req('/registry.json',{headers})).status,503);
+files.delete('/registry-parts/index.json');files.set('/registry.json','{"comics":{}}');assert.deepEqual(await (await req('/registry.json',{headers})).json(),{comics:{}});
+console.log('PASS authenticated 32.4 MiB logical registry byte identity, HEAD, missing/corrupt index rejection, legacy static fallback');

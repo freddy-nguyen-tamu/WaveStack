@@ -5,7 +5,7 @@ const site='reader.example.test',url=`https://${site}/chapter/21/`,old='a'.repea
 function setup(initial,stored){
  const tabs=initial.map(x=>({...x})), storage={...stored}, events=[];
  const chrome={runtime:{id:'test',lastError:null,getManifest:()=>({host_permissions:[`https://${site}/*`],content_scripts:[{matches:[`https://${site}/*`]}]}),onStartup:{addListener(){}},onInstalled:{addListener(){}},onMessage:{addListener(){}}},tabs:{get(id,cb){cb(tabs.find(t=>t.id===id));},query(q,cb){cb([...tabs]);},remove(id,cb){events.push(['remove',id]);const i=tabs.findIndex(t=>t.id===id);if(i>=0)tabs.splice(i,1);cb();},update(id,v,cb){events.push(['update',id]);const t=tabs.find(t=>t.id===id);Object.assign(t,v);cb(t);},create(v,cb){events.push(['create',100]);const t={id:100,...v};tabs.push(t);cb(t);}},storage:{local:{get(k,cb){cb({...storage});},set(v,cb){Object.assign(storage,v);cb();}}},alarms:{create(){},onAlarm:{addListener(){}}},debugger:{detach(t,cb){events.push(['detach',t.tabId]);cb();}}};
- const box={chrome,URL,Map,Set,Promise,Date,JSON,Number,Math,Error,String,console,setTimeout,clearTimeout,Uint8Array,Blob};vm.createContext(box);vm.runInContext(src.replace('setTimeout(()=>autoConnect(),200);','// unit test')+`\nglobalThis.pick=pickComicTab;globalThis.release=releaseOwnedReader;globalThis.exec=execute;globalThis.setSession=s=>{state=s;inspectedTabId=s.tabId;inspectedReady=true};`,box);
+ const box={chrome,URL,Map,Set,Promise,Date,JSON,Number,Math,Error,String,console,setTimeout,clearTimeout,Uint8Array,Blob};vm.createContext(box);vm.runInContext(src.replace('setTimeout(()=>autoConnect(),200);','// unit test')+`\nglobalThis.orphan=cleanupDisconnectedWakeTabs;globalThis.ageOrphans=()=>{for(const entry of orphanWakeTabs.values())entry.since-=3000};globalThis.pick=pickComicTab;globalThis.release=releaseOwnedReader;globalThis.exec=execute;globalThis.setSession=s=>{state=s;inspectedTabId=s.tabId;inspectedReady=true};`,box);
  return {box,tabs,storage,events};
 }
 const owner={comicBridgeManagedTabId:7,comicBridgeManagedSite:site,comicBridgeManagedNonce:old};
@@ -27,5 +27,10 @@ const session={tabId:7,managedSite:site,managedNonce:old};
  g.box.chrome.tabs.remove=(id,cb)=>{g.events.push(['refused-remove',id]);cb();};
  await assert.rejects(g.box.release(session,true),/Owned auxiliary tabs still open/);
  assert.equal(g.storage.comicBridgeManagedTabId,7,'retain ownership if cleanup fails');
+ const h=setup([{id:8,url:'about:blank#comicarchiver-'+old},{id:9,url:'about:blank'},{id:10,url:'chrome://newtab/'},{id:11,url}],{});
+ await h.box.orphan();assert.equal(h.events.length,0);h.box.ageOrphans();
+ h.tabs.push({id:12,url:wake});await h.box.orphan();assert.deepEqual(h.events,[['remove',8]]);assert.deepEqual(h.tabs.map(t=>t.id),[9,10,11,12]);
+ const j=setup([{id:8,url:'about:blank#comicarchiver-'+old},{id:9,url:'about:blank',openerTabId:7},{id:10,url:wake},{id:11,url}],owner);
+ const gone=await j.box.release(session,false);assert.equal(gone.closed,true);assert.deepEqual(j.tabs.map(t=>t.id),[10,11]);
  console.log('PASS fresh retry tab, wake-tab reuse, graceful/hard crash cleanup, stale session isolation, personal tabs preserved');
 })().catch(e=>{console.error(e);process.exitCode=1});

@@ -1,3 +1,4 @@
+
 """Targeted, non-destructive shared Open Reader publication.
 
 Uses the verified *live* registry as its baseline. Unlike the account-wide
@@ -137,8 +138,7 @@ def repair_verified_readmes(engine, db):
 
 
 def _asset_inventory(stage):
-    return {p.relative_to(stage).as_posix(): reader.sha(p.read_bytes())
-            for p in sorted(stage.rglob('*')) if p.is_file()}
+    return dict(reader._verification_assets(stage))
 
 
 def _receipt_path(root):
@@ -345,3 +345,4 @@ def publish(engine, db, *, scope):
             _target_readmes(engine,owner,token,registry,current_slug)
         print('open-reader: '+scope+' update verified; unchanged routes not audited.',flush=True)
         return deployed
+

@@ -142,6 +142,8 @@ class LocalBridge:
         self.tab_title = ''  # Extension-owned Chrome tab title for native dialog isolation.
         self.server = None
         self.thread = None
+        self.cleanup_only = False
+        self.cleanup_receipt = None
         # Bound only after a protocol-valid /hello, never on an unauthenticated
         # bootstrap request. This prevents an outdated/abandoned extension from
         # monopolizing a newly started Python bridge.
@@ -273,6 +275,11 @@ class LocalBridge:
                             return
                     # Do not claim ownership here: only /hello with the current
                     # protocol and permitted chapter URL may claim ownership.
+                    if bridge.cleanup_only:
+                        self._send(200, {'token': bridge.secret, 'port': bridge.port,
+                                         'protocol': 'cleanup-empty-windows-1',
+                                         'cleanup_source_url': bridge.initial_chapter_url})
+                        return
                     self._send(200, {'token': bridge.secret, 'port': bridge.port,
                                      'site': bridge.allowed_site,
                                      'startup_url': bridge.initial_chapter_url,
@@ -280,6 +287,9 @@ class LocalBridge:
                                      'protocol': BRIDGE_PROTOCOL})
                     return
                 if not self._auth():
+                    return
+                if bridge.cleanup_only:
+                    self._send(409, {'error': 'Retry cleanup only; no reader session'})
                     return
                 if self.path == '/next':
                     bridge.last_heartbeat = time.monotonic()
@@ -303,6 +313,14 @@ class LocalBridge:
                     return
                 try:
                     obj = json.loads(self.rfile.read(length))
+                    if bridge.cleanup_only:
+                        if self.path != '/retry-window-cleanup' or not isinstance(obj, dict) or not isinstance(obj.get('closed'), int) or not isinstance(obj.get('remaining'), int):
+                            self._send(400, {'error': 'Expected retry window cleanup receipt'})
+                            return
+                        bridge.cleanup_receipt = obj
+                        self._send(200, {'ok': True})
+                        bridge.ready.set()
+                        return
                     if self.path == '/hello':
                         # Do NOT accept the /hello request from an older installed
                         # extension: it has no probe/image-byte protocol, and would
@@ -530,6 +548,25 @@ class LocalBridge:
             self.server.server_close()
             self.thread.join(timeout=3)
             self.server = None
+
+
+def request_retry_window_cleanup(source_url, *, timeout=38, port=None):
+    """Ask the already-running extension to close blank-only windows on retry.
+
+    No browser is launched. The existing extension's periodic bootstrap sees a
+    separate cleanup-only protocol, even during a deployment-only failure.
+    A missing browser or expired/unresponsive extension cannot block a restart.
+    """
+    bridge = LocalBridge(source_url, port=port if port is not None else
+                         int(os.environ.get('COMIC_ARCHIVER_BRIDGE_PORT') or BRIDGE_PORT))
+    bridge.cleanup_only = True
+    try:
+        bridge.start()
+        if bridge.ready.wait(timeout):
+            return bridge.cleanup_receipt
+        return None
+    finally:
+        bridge.close()
 
 
 class BridgePage:

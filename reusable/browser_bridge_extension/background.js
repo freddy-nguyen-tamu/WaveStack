@@ -1441,6 +1441,9 @@ async function execute(job) {
 // serves a per-run token only to browser-extension origins (never web pages).
 const AUTO_PORT=18765;
 let autoConnecting=false;
+// A failed startup can leave a marked wake tab without a paired reader.
+// Require two unavailable bootstrap observations before deleting that exact tab.
+let orphanWakeTabs = new Map();
 function trustedStartupUrl(site, startupUrl) {
   try {
     const u=new URL(startupUrl);
@@ -1495,7 +1498,17 @@ async function releaseOwnedReader(session, includeWakeTabs=false) {
       (sourceMatches(t.pendingUrl) && new URL(t.pendingUrl).hostname===session.managedSite));}catch{return false;}};
   if(!owns(await checkedIO(storageGet(keys),'verify reader ownership',3000))) return {closed:false,reason:'ownership changed'};
   let tab;
-  try {tab=await checkedIO(tabsGet(id),'inspect reader before release',3000);} catch(e) {return {closed:false,reason:String(e)};}
+  try {tab=await checkedIO(tabsGet(id),'inspect reader before release',3000);} catch(e) {
+    // A tab may have already disappeared. Verify absence independently rather
+    // than mistaking a browser API timeout for a successful close.
+    const all=await checkedIO(call(chrome.tabs,'query',{}),'verify reader absent',5000);
+    if(all.some(t=>t.id===id)) throw e;
+  }
+  if(!tab) {
+    const auxiliaryClosed=await cleanupArchiverTabs(id,'',false,session.managedNonce,true);
+    if(owns(await storageGet(keys))) await storageSet({comicBridgeManagedTabId:null,comicBridgeManagedSite:null,comicBridgeManagedNonce:null});
+    return {closed:true,tab_id:id,auxiliary_closed:auxiliaryClosed};
+  }
   if(!safe(tab) && !isArchiverWakeTab(tab)) return {closed:false,reason:'reader no longer owned'};
   // Close children before their opener, which Chrome may otherwise forget.
   const auxiliaryClosed=await cleanupArchiverTabs(id,tab.url,includeWakeTabs,session.managedNonce,true);
@@ -1560,6 +1573,52 @@ async function pickComicTab(site, startupUrl='', nonce='') {
   return candidates.find(t=>t.id===preferred.selectedTabId) ||
          candidates.find(t=>t.active) || candidates[0];
 }
+async function cleanupDisconnectedWakeTabs() {
+  if(state || polling || !chrome.tabs?.query || !chrome.tabs?.remove) return;
+  const all=await checkedIO(call(chrome.tabs,'query',{}),'list disconnected wake tabs',5000);
+  const now=Date.now(), next=new Map();
+  for(const t of all.filter(isArchiverWakeTab)) {
+    const old=orphanWakeTabs.get(t.id);
+    if(old?.url===t.url && now-old.since>=2500) {
+      const current=await tabsGet(t.id);
+      if(isArchiverWakeTab(current) && current.url===t.url) {
+        // Removing an owned last tab also closes its empty Chrome window.
+        // Never close an ordinary blank, new-tab page, or personal window.
+        await checkedIO(call(chrome.tabs,'remove',t.id),'close disconnected wake tab',5000);
+        console.info('COMIC_BRIDGE_ORPHAN_WAKE_CLOSED tab_id='+t.id);
+        continue;
+      }
+    }
+    next.set(t.id,old?.url===t.url?old:{url:t.url,since:now});
+  }
+  orphanWakeTabs=next;
+}
+// Explicit user-authorized retry cleanup, separate from reader ownership.
+// Never run this on ordinary idle Chrome or close a blank tab in a mixed window.
+function blankOnlyWindow(w) {
+  const blank=t=>!t.pinned && t.status==='complete' && !t.pendingUrl &&
+    /^(?:about:blank(?:#comicarchiver-[a-f0-9]{32})?|about:newtab|chrome:\/\/newtab\/?|chrome:\/\/new-tab-page\/?|edge:\/\/newtab\/?)$/.test(t.url||'');
+  return !!w && !w.incognito && ['normal','popup'].includes(w.type) &&
+    Array.isArray(w.tabs) && w.tabs.length>0 && w.tabs.every(blank);
+}
+async function closeEmptyBrowserWindows() {
+  if(!chrome.windows?.getAll || !chrome.windows?.get || !chrome.windows?.remove)
+    throw Error('Browser window cleanup API unavailable');
+  const list=()=>checkedIO(call(chrome.windows,'getAll',{populate:true,windowTypes:['normal','popup']}),'list browser windows',5000);
+  const initial=await list();
+  let closed=0;
+  for(const w of initial.filter(blankOnlyWindow)) {
+    try {
+      const now=await checkedIO(call(chrome.windows,'get',w.id,{populate:true}),'recheck blank browser window',3000);
+      if(!blankOnlyWindow(now) || now.tabs.length!==w.tabs.length ||
+          now.tabs.some(t=>!w.tabs.some(old=>old.id===t.id && old.url===t.url))) continue;
+      await checkedIO(call(chrome.windows,'remove',w.id),'close blank browser window',5000);
+      closed++;
+    } catch(e) {console.warn('COMIC_BRIDGE_EMPTY_WINDOW_CLEANUP:',String(e));}
+  }
+  const remaining=(await list()).filter(blankOnlyWindow).length;
+  return {closed,remaining};
+}
 async function autoConnect() {
   if(autoConnecting || polling || state) return;
   autoConnecting=true;
@@ -1567,14 +1626,35 @@ async function autoConnect() {
     const saved=await storageGet(['lastPort']).catch(()=>({}));
     const port=Number(saved.lastPort)||AUTO_PORT;
     if(!Number.isInteger(port)||port<1024||port>65535) return;
-    const resp=await fetch('http://127.0.0.1:'+port+'/bootstrap',
-      {cache:'no-store',headers:{Accept:'application/json',
-        'X-Comic-Bridge-Bootstrap':'1',
-        'X-Comic-Bridge-Client':chrome.runtime.id}});
+    let resp;
+    try {
+      resp=await fetch('http://127.0.0.1:'+port+'/bootstrap',
+        {cache:'no-store',headers:{Accept:'application/json',
+          'X-Comic-Bridge-Bootstrap':'1',
+          'X-Comic-Bridge-Client':chrome.runtime.id}});
+    } catch(error) {
+      // Only transport failure (not HTTP rejection) is evidence of no listener.
+      await cleanupDisconnectedWakeTabs().catch(e=>console.warn('COMIC_BRIDGE_ORPHAN_WAKE:',String(e)));
+      if(orphanWakeTabs.size) setTimeout(()=>autoConnect(),3000);
+      throw error;
+    }
+    orphanWakeTabs.clear();
     const config=await resp.json().catch(()=>({}));
     if(!resp.ok) throw Error('Local bridge bootstrap HTTP '+resp.status+
       ': '+String(config.error||'unknown server rejection'));
 
+    if(config.protocol==='cleanup-empty-windows-1') {
+      // Cleanup-only bootstraps never create a tab or enter the reader work loop.
+      if(config.port!==port || !/^[A-Za-z0-9_-]{20,100}$/.test(config.token) ||
+          !sourceMatches(config.cleanup_source_url)) throw Error('Unexpected retry cleanup configuration');
+      const receipt=await closeEmptyBrowserWindows();
+      const ack=await fetch('http://127.0.0.1:'+port+'/retry-window-cleanup',{
+        method:'POST',cache:'no-store',headers:{'Content-Type':'application/json',
+          'X-Comic-Bridge-Token':config.token,'X-Comic-Bridge-Client':chrome.runtime.id},
+        body:JSON.stringify(receipt)});
+      if(!ack.ok) throw Error('Retry window cleanup receipt rejected');
+      return;
+    }
     if(config.protocol!=='visual-transfer-2'||!Number.isInteger(config.port)||
        !/^[A-Za-z0-9_-]{20,100}$/.test(config.token)) throw Error('Unexpected local bridge protocol');
     // Run-scoped reload once BEFORE tab matching and pairing. This reloads

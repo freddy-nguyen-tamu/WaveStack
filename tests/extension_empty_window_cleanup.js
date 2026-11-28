@@ -1,0 +1,12 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
+const source=fs.readFileSync(path.join(__dirname,'../reusable/browser_bridge_extension/background.js'),'utf8');
+const tab=(id,url='about:blank',extra={})=>({id,url,status:'complete',...extra});
+const win=(id,tabs,extra={})=>({id,type:'normal',tabs,...extra});
+const windows=[win(1,[tab(1)]),win(2,[tab(2,'chrome://newtab/'),tab(3,'about:blank')]),win(3,[tab(4),tab(5,'https://example.com/')]),win(4,[tab(6,'about:blank',{pendingUrl:'https://example.com/'})]),win(5,[tab(7,'about:blank',{pinned:true})]),win(6,[tab(8,'about:blank',{status:'loading'})]),win(7,[tab(9,'about:blank#comicarchiver-'+'a'.repeat(32))],{type:'popup'}),win(8,[tab(10,'chrome://settings/')]),win(9,[tab(11)],{incognito:true}),win(10,[tab(12)]),win(11,[tab(13,'https://reader.example.test/chapter/1/')])];
+const removed=[];
+const chrome={runtime:{id:'test-extension',lastError:null,getManifest:()=>({content_scripts:[{matches:['https://reader.example.test/*']}]}),onMessage:{addListener(){}}},windows:{getAll(q,cb){cb(structuredClone(windows));},get(id,q,cb){const w=windows.find(w=>w.id===id);if(id===10)w.tabs[0].url='https://example.com/';cb(structuredClone(w));},remove(id,cb){removed.push(id);windows.splice(windows.findIndex(w=>w.id===id),1);cb();}},tabs:{},storage:{local:{get(k,cb){cb({});}}}};
+const requests=[];
+const box={chrome,URL,Map,Set,Promise,Date,JSON,Number,Math,Error,String,console,setTimeout,clearTimeout,Uint8Array,Blob,fetch:async(url,opts)=>{requests.push({url,opts});return url.endsWith('/bootstrap')?{ok:true,json:async()=>({protocol:'cleanup-empty-windows-1',port:18765,token:'a'.repeat(30),cleanup_source_url:'https://reader.example.test/chapter/1/'})}:{ok:true};}};
+vm.createContext(box);vm.runInContext(source.replace('setTimeout(()=>autoConnect(),200);','// test')+'\nglobalThis.connect=autoConnect;',box);
+(async()=>{await box.connect();assert.deepEqual(removed,[1,2,7]);assert.deepEqual(windows.map(w=>w.id),[3,4,5,6,8,9,10,11]);assert.equal(requests.length,2);assert.equal(requests[1].url,'http://127.0.0.1:18765/retry-window-cleanup');assert.deepEqual(JSON.parse(requests[1].opts.body),{closed:3,remaining:0});console.log('PASS retry-only empty-window cleanup, mixed/pending/loading/pinned/private/raced windows preserved, authenticated receipt');})().catch(e=>{console.error(e);process.exitCode=1;});
